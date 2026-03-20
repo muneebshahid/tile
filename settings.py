@@ -8,4 +8,4 @@ class Settings(BaseSettings):
     model_config = {"env_file": ".env"}
 
 
-settings = Settings()  # type: ignore[call-arg]
+settings = Settings()

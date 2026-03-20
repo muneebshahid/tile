@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from typing import Callable
 
 from ai.contracts import AsyncEventStream, Reasoning
@@ -22,7 +22,7 @@ from ai.types import (
 class AgentState:
     model: str
     reasoning: Reasoning | None = None
-    messages: list[object] = field(default_factory=list)
+    messages: list[AssistantMessage] = field(default_factory=list)
     stream_message: AssistantMessage | None = None
     is_streaming: bool = False
 
@@ -36,7 +36,7 @@ class Agent:
         stream_fn: StreamFn,
         model: str,
         reasoning: Reasoning | None = None,
-        messages: list[object] | None = None,
+        messages: Sequence[AssistantMessage] | None = None,
     ) -> None:
         self._stream_fn = stream_fn
         self._state = AgentState(
@@ -55,10 +55,10 @@ class Agent:
     def update_reasoning(self, reasoning: Reasoning | None) -> None:
         self._state.reasoning = reasoning
 
-    def replace_messages(self, messages: list[object]) -> None:
+    def replace_messages(self, messages: Sequence[AssistantMessage]) -> None:
         self._state.messages = list(messages)
 
-    def add_message(self, message: object) -> None:
+    def add_message(self, message: AssistantMessage) -> None:
         self._state.messages.append(message)
 
     async def run(self, prompt: str) -> None:

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, TypeVar, cast
 from unittest.mock import AsyncMock
@@ -46,6 +46,8 @@ from openai.types.responses.response_refusal_delta_event import (
 )
 from openai.types.responses.response_text_delta_event import ResponseTextDeltaEvent
 
+from tests.conftest import JsonObject
+
 
 RawResponseEvent: TypeAlias = (
     ResponseCompletedEvent
@@ -74,7 +76,9 @@ class FakeOpenAIClient:
     responses: FakeResponsesEndpoint
 
 
-def _raw_stream(events: list[RawResponseEvent]) -> AsyncIterator[RawResponseEvent]:
+def _raw_stream(
+    events: Sequence[RawResponseEvent],
+) -> AsyncIterator[RawResponseEvent]:
     async def _iterate() -> AsyncIterator[RawResponseEvent]:
         for event in events:
             yield event
@@ -82,7 +86,7 @@ def _raw_stream(events: list[RawResponseEvent]) -> AsyncIterator[RawResponseEven
     return _iterate()
 
 
-def _build_client(events: list[RawResponseEvent]) -> FakeOpenAIClient:
+def _build_client(events: Sequence[RawResponseEvent]) -> FakeOpenAIClient:
     return FakeOpenAIClient(
         responses=FakeResponsesEndpoint(
             create=AsyncMock(return_value=_raw_stream(events))
@@ -95,7 +99,7 @@ def _response_payload(
     status: str,
     *,
     error: dict[str, str] | None = None,
-) -> dict[str, object]:
+) -> JsonObject:
     return {
         "id": response_id,
         "created_at": 0.0,
@@ -286,7 +290,7 @@ def _content_part_added_event(
     content_index: int = 0,
 ) -> ResponseContentPartAddedEvent:
     if part_type == "output_text":
-        part: dict[str, object] = {
+        part: JsonObject = {
             "type": "output_text",
             "text": "",
             "annotations": [],
@@ -350,7 +354,7 @@ def _refusal_delta_event(
 def _message_done_event(
     sequence_number: int,
     item_id: str,
-    content: list[dict[str, object]],
+    content: Sequence[JsonObject],
     *,
     output_index: int = 1,
 ) -> ResponseOutputItemDoneEvent:
@@ -398,7 +402,7 @@ def _collect_events(client: FakeOpenAIClient) -> list[StreamEvent]:
     return asyncio.run(_collect())
 
 
-def test_stream_maps_raw_events_into_reasoning_and_text_events() -> None:
+def test_stream_maps_raw_events_with_shared_partial_state() -> None:
     raw_events = [
         _created_event(1, "resp_success"),
         _reasoning_added_event(2, "rs_123", output_index=0),
@@ -466,6 +470,7 @@ def test_stream_maps_raw_events_into_reasoning_and_text_events() -> None:
 
     client = _build_client(raw_events)
     events = _collect_events(client)
+
     start = _expect_event_type(events[0], StreamStartEvent)
     reasoning_start = _expect_event_type(events[1], ReasoningStartEvent)
     reasoning_delta_one = _expect_event_type(events[2], ReasoningDeltaEvent)
@@ -476,11 +481,9 @@ def test_stream_maps_raw_events_into_reasoning_and_text_events() -> None:
     text_delta = _expect_event_type(events[7], TextDeltaEvent)
     text_end = _expect_event_type(events[8], TextEndEvent)
     done = _expect_event_type(events[9], StreamDoneEvent)
-    reasoning_start_block = _expect_reasoning_block(reasoning_start.partial.content[0])
-    reasoning_end_block = _expect_reasoning_block(reasoning_end.partial.content[0])
-    text_start_block = _expect_text_block(text_start.partial.content[1])
-    text_delta_block = _expect_text_block(text_delta.partial.content[1])
-    text_end_block = _expect_text_block(text_end.partial.content[1])
+    shared_partial = reasoning_start.partial
+    final_reasoning_block = _expect_reasoning_block(shared_partial.content[0])
+    final_text_block = _expect_text_block(shared_partial.content[1])
     done_reasoning_block = _expect_reasoning_block(done.message.content[0])
     done_text_block = _expect_text_block(done.message.content[1])
 
@@ -498,21 +501,27 @@ def test_stream_maps_raw_events_into_reasoning_and_text_events() -> None:
     ]
     assert start.partial.response_id == "resp_success"
     assert reasoning_start.partial.response_id == "resp_success"
-    assert reasoning_start_block.reasoning == (
-        "Exploring reasoning traces\n\nFormulating reasoning traces"
-    )
+
+    assert start.partial is shared_partial
+    assert reasoning_delta_one.partial is shared_partial
+    assert reasoning_delta_separator.partial is shared_partial
+    assert reasoning_delta_two.partial is shared_partial
+    assert reasoning_end.partial is shared_partial
+    assert text_start.partial is shared_partial
+    assert text_delta.partial is shared_partial
+    assert text_end.partial is shared_partial
+
     assert reasoning_delta_one.delta == "Exploring reasoning traces"
     assert reasoning_delta_separator.delta == "\n\n"
     assert reasoning_delta_two.delta == "Formulating reasoning traces"
     assert (
-        reasoning_end_block.reasoning
+        final_reasoning_block.reasoning
         == "Exploring reasoning traces\n\nFormulating reasoning traces"
     )
-    assert text_start_block.text == "Hello world"
     assert text_delta.delta == "Hello"
-    assert text_delta_block.text == "Hello world"
-    assert text_end_block.text == "Hello world"
+    assert final_text_block.text == "Hello world"
     assert done.message.response_id == "resp_success"
+    assert done.message is not shared_partial
     assert (
         done_reasoning_block.reasoning
         == "Exploring reasoning traces\n\nFormulating reasoning traces"
@@ -526,7 +535,7 @@ def test_stream_maps_raw_events_into_reasoning_and_text_events() -> None:
     )
 
 
-def test_stream_maps_refusal_deltas_into_text_events() -> None:
+def test_stream_maps_refusal_deltas_with_shared_partial_state() -> None:
     raw_events = [
         _created_event(1, "resp_refusal"),
         _message_added_event(2, "msg_refusal", output_index=0),
@@ -555,11 +564,12 @@ def test_stream_maps_refusal_deltas_into_text_events() -> None:
 
     client = _build_client(raw_events)
     events = _collect_events(client)
+    text_start = _expect_event_type(events[1], TextStartEvent)
     text_delta = _expect_event_type(events[2], TextDeltaEvent)
     text_end = _expect_event_type(events[3], TextEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
-    text_delta_block = _expect_text_block(text_delta.partial.content[0])
-    text_end_block = _expect_text_block(text_end.partial.content[0])
+    shared_partial = text_start.partial
+    text_block = _expect_text_block(shared_partial.content[0])
     done_text_block = _expect_text_block(done.message.content[0])
 
     assert [event.type for event in events] == [
@@ -569,9 +579,12 @@ def test_stream_maps_refusal_deltas_into_text_events() -> None:
         "text_end",
         "done",
     ]
+    assert text_start.partial is shared_partial
+    assert text_delta.partial is shared_partial
+    assert text_end.partial is shared_partial
     assert text_delta.delta == "No"
-    assert text_delta_block.text == "No thanks"
-    assert text_end_block.text == "No thanks"
+    assert text_block.text == "No thanks"
+    assert done.message is not shared_partial
     assert done_text_block.text == "No thanks"
 
 

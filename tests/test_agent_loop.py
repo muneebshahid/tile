@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 
-from agent.agent import Agent
+from agent.agent import Agent, StreamFn
 from ai.contracts import Reasoning
 from ai.types import (
     AssistantMessage,
@@ -9,6 +9,7 @@ from ai.types import (
     ReasoningEndEvent,
     ReasoningStartEvent,
     StreamDoneEvent,
+    StreamEvent,
     StreamStartEvent,
     TextBlock,
     TextDeltaEvent,
@@ -18,16 +19,16 @@ from ai.types import (
 
 
 class FakeResponseStream:
-    def __init__(self, events: list[object]) -> None:
+    def __init__(self, events: list[StreamEvent]) -> None:
         self._events = events
 
-    async def __aiter__(self) -> AsyncIterator[object]:
+    async def __aiter__(self) -> AsyncIterator[StreamEvent]:
         for event in self._events:
             yield event
 
 
 class FakeResponsesClient:
-    def __init__(self, events: list[object]) -> None:
+    def __init__(self, events: list[StreamEvent]) -> None:
         self._events = events
 
     async def create(
@@ -58,7 +59,7 @@ def test_agent_run_tracks_streaming_message_and_final_message() -> None:
             ),
         ],
     )
-    stream_fn = FakeResponsesClient(
+    client = FakeResponsesClient(
         [
             StreamStartEvent(type="start", partial=partial),
             ReasoningStartEvent(type="reasoning_start", partial=partial),
@@ -77,7 +78,8 @@ def test_agent_run_tracks_streaming_message_and_final_message() -> None:
             TextEndEvent(type="text_end", partial=partial),
             StreamDoneEvent(type="done", message=final_message),
         ]
-    ).create
+    )
+    stream_fn: StreamFn = client.create
     agent = Agent(
         stream_fn=stream_fn,
         model="gpt-5.4",

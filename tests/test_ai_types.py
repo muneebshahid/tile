@@ -1,8 +1,13 @@
-from ai.types import (
-    ResponseCreatedEvent,
-    ResponseInProgressEvent,
+from openai.types.responses.response_created_event import ResponseCreatedEvent
+from openai.types.responses.response_function_tool_call import (
+    ResponseFunctionToolCall,
+)
+from openai.types.responses.response_in_progress_event import ResponseInProgressEvent
+from openai.types.responses.response_output_item_added_event import (
     ResponseOutputItemAddedEvent,
 )
+
+from tests.conftest import JsonObject
 
 
 def test_response_created_event_model() -> None:
@@ -10,11 +15,7 @@ def test_response_created_event_model() -> None:
         {
             "type": "response.created",
             "sequence_number": 1,
-            "response": {
-                "id": "resp_123",
-                "model": "gpt-5.4",
-                "status": "in_progress",
-            },
+            "response": _response_payload("resp_123", "in_progress"),
         }
     )
 
@@ -28,11 +29,7 @@ def test_response_in_progress_event_model() -> None:
         {
             "type": "response.in_progress",
             "sequence_number": 2,
-            "response": {
-                "id": "resp_123",
-                "model": "gpt-5.4",
-                "status": "in_progress",
-            },
+            "response": _response_payload("resp_123", "in_progress"),
         }
     )
 
@@ -50,6 +47,8 @@ def test_response_output_item_added_event_message_item() -> None:
                 "id": "msg_123",
                 "type": "message",
                 "status": "in_progress",
+                "role": "assistant",
+                "content": [],
             },
         }
     )
@@ -67,6 +66,7 @@ def test_response_output_item_added_event_reasoning_item() -> None:
             "item": {
                 "id": "rs_123",
                 "type": "reasoning",
+                "summary": [],
                 "status": "in_progress",
             },
         }
@@ -87,10 +87,29 @@ def test_response_output_item_added_event_function_call_item() -> None:
                 "status": "in_progress",
                 "call_id": "call_123",
                 "name": "lookup_customer",
+                "arguments": "{}",
             },
         }
     )
 
-    assert event.item.type == "function_call"
+    assert isinstance(event.item, ResponseFunctionToolCall)
     assert event.item.call_id == "call_123"
     assert event.item.name == "lookup_customer"
+
+
+def _response_payload(
+    response_id: str,
+    status: str,
+) -> JsonObject:
+    return {
+        "id": response_id,
+        "created_at": 0.0,
+        "error": None,
+        "model": "gpt-5.4",
+        "object": "response",
+        "output": [],
+        "parallel_tool_calls": False,
+        "tool_choice": "auto",
+        "tools": [],
+        "status": status,
+    }

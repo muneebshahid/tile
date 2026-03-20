@@ -16,4 +16,11 @@ dev = [
     "jupyter>=1.1.1",
     "pytest>=8.4.2",
     "ruff>=0.15.6",
+    "ty>=0.0.24",
 ]
+
+[tool.ty.terminal]
+error-on-warning = true
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
