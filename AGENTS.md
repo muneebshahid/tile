@@ -12,3 +12,7 @@ Any violations must be flagged and fixed
 - Avoid using `Any` or `object` as a type hint if possible.
 - Avoid hacks, workarounds, and temporary fixes. If you find yourself writing one, stop take a step back and instead propose a more architecturally sound solution. Refactoring is to be considered a normal part of the development process.
 - The general development approach must be to get to an end to end mvp with absolutely minimal features and as simple as possible.
+- After changes run
+  - `make format` to format the code
+  - `make type_check` to check for type errors
+  - `make test` to run tests
