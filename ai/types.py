@@ -18,6 +18,20 @@ class ReasoningBlock(BaseModel):
     reasoning_id: str | None = None
 
 
+class SystemMessage(BaseModel):
+    """The system prompt guiding the assistant's behavior."""
+
+    role: Literal["system"] = "system"
+    content: str
+
+
+class UserMessage(BaseModel):
+    """A user message containing a prompt or command."""
+
+    role: Literal["user"] = "user"
+    content: str
+
+
 class AssistantMessage(BaseModel):
     """The partial or final assistant message assembled during streaming."""
 
