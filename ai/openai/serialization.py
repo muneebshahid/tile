@@ -97,9 +97,7 @@ def _serialize_assistant_turn(
                 items.append(
                     _serialize_assistant_reasoning_block(
                         block,
-                        reasoning_id=reasoning_id,
-                        assistant_turn_index=assistant_turn_index,
-                        block_index=block_index,
+                        reasoning_id,
                     )
                 )
             case AssistantTextBlock():
@@ -116,10 +114,7 @@ def _serialize_assistant_turn(
 
 def _serialize_assistant_reasoning_block(
     block: AssistantReasoningBlock,
-    *,
     reasoning_id: str,
-    assistant_turn_index: int,
-    block_index: int,
 ) -> ResponseReasoningItemParam:
     summary: ResponseReasoningSummaryParam = {
         "type": "summary_text",
