@@ -189,7 +189,6 @@ def _update_text_content_part(
     state: StreamAssemblyState,
     event: ResponseContentPartAddedEvent,
 ) -> None:
-    assert state.current_text_block is not None
     if event.part.type == "output_text":
         state.current_text_content_part = "output_text"
     elif event.part.type == "refusal":
