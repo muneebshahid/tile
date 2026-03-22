@@ -417,26 +417,40 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
             4,
             "rs_123",
             0,
-            "Exploring reasoning traces",
+            "Exploring ",
+            output_index=0,
+        ),
+        _reasoning_summary_delta_event(
+            5,
+            "rs_123",
+            0,
+            "reasoning traces",
             output_index=0,
         ),
         _reasoning_summary_part_done_event(
-            5,
+            6,
             "rs_123",
             0,
             "Exploring reasoning traces",
             output_index=0,
         ),
-        _reasoning_summary_part_added_event(6, "rs_123", 1, output_index=0),
+        _reasoning_summary_part_added_event(7, "rs_123", 1, output_index=0),
         _reasoning_summary_delta_event(
-            7,
+            8,
             "rs_123",
             1,
-            "Formulating reasoning traces",
+            "Formulating ",
+            output_index=0,
+        ),
+        _reasoning_summary_delta_event(
+            9,
+            "rs_123",
+            1,
+            "reasoning traces",
             output_index=0,
         ),
         _reasoning_done_event(
-            8,
+            10,
             "rs_123",
             [
                 "Exploring reasoning traces",
@@ -444,23 +458,30 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
             ],
             output_index=0,
         ),
-        _message_added_event(9, "msg_123", output_index=1),
+        _message_added_event(11, "msg_123", output_index=1),
         _content_part_added_event(
-            10,
+            12,
             "msg_123",
             "output_text",
             output_index=1,
             content_index=0,
         ),
         _text_delta_event(
-            11,
+            13,
             "msg_123",
             "Hello",
             output_index=1,
             content_index=0,
         ),
+        _text_delta_event(
+            14,
+            "msg_123",
+            " world",
+            output_index=1,
+            content_index=0,
+        ),
         _message_done_event(
-            12,
+            15,
             "msg_123",
             [
                 {
@@ -471,7 +492,7 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
             ],
             output_index=1,
         ),
-        _completed_event(13, "resp_success"),
+        _completed_event(16, "resp_success"),
     ]
 
     client = _build_client(raw_events)
@@ -480,13 +501,16 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
     start = _expect_event_type(events[0], StreamStartEvent)
     reasoning_start = _expect_event_type(events[1], ReasoningStartEvent)
     reasoning_delta_one = _expect_event_type(events[2], ReasoningDeltaEvent)
-    reasoning_delta_separator = _expect_event_type(events[3], ReasoningDeltaEvent)
-    reasoning_delta_two = _expect_event_type(events[4], ReasoningDeltaEvent)
-    reasoning_end = _expect_event_type(events[5], ReasoningEndEvent)
-    text_start = _expect_event_type(events[6], TextStartEvent)
-    text_delta = _expect_event_type(events[7], TextDeltaEvent)
-    text_end = _expect_event_type(events[8], TextEndEvent)
-    done = _expect_event_type(events[9], StreamDoneEvent)
+    reasoning_delta_two = _expect_event_type(events[3], ReasoningDeltaEvent)
+    reasoning_delta_separator = _expect_event_type(events[4], ReasoningDeltaEvent)
+    reasoning_delta_three = _expect_event_type(events[5], ReasoningDeltaEvent)
+    reasoning_delta_four = _expect_event_type(events[6], ReasoningDeltaEvent)
+    reasoning_end = _expect_event_type(events[7], ReasoningEndEvent)
+    text_start = _expect_event_type(events[8], TextStartEvent)
+    text_delta_one = _expect_event_type(events[9], TextDeltaEvent)
+    text_delta_two = _expect_event_type(events[10], TextDeltaEvent)
+    text_end = _expect_event_type(events[11], TextEndEvent)
+    done = _expect_event_type(events[12], StreamDoneEvent)
     shared_partial = reasoning_start.partial
     final_reasoning_block = _expect_reasoning_block(shared_partial.content[0])
     final_text_block = _expect_text_block(shared_partial.content[1])
@@ -499,8 +523,11 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
         "reasoning_delta",
         "reasoning_delta",
         "reasoning_delta",
+        "reasoning_delta",
+        "reasoning_delta",
         "reasoning_end",
         "text_start",
+        "text_delta",
         "text_delta",
         "text_end",
         "done",
@@ -510,22 +537,28 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
 
     assert start.partial is shared_partial
     assert reasoning_delta_one.partial is shared_partial
-    assert reasoning_delta_separator.partial is shared_partial
     assert reasoning_delta_two.partial is shared_partial
+    assert reasoning_delta_separator.partial is shared_partial
+    assert reasoning_delta_three.partial is shared_partial
+    assert reasoning_delta_four.partial is shared_partial
     assert reasoning_end.partial is shared_partial
     assert text_start.partial is shared_partial
-    assert text_delta.partial is shared_partial
+    assert text_delta_one.partial is shared_partial
+    assert text_delta_two.partial is shared_partial
     assert text_end.partial is shared_partial
     assert done.message is shared_partial
 
-    assert reasoning_delta_one.delta == "Exploring reasoning traces"
+    assert reasoning_delta_one.delta == "Exploring "
+    assert reasoning_delta_two.delta == "reasoning traces"
     assert reasoning_delta_separator.delta == "\n\n"
-    assert reasoning_delta_two.delta == "Formulating reasoning traces"
+    assert reasoning_delta_three.delta == "Formulating "
+    assert reasoning_delta_four.delta == "reasoning traces"
     assert (
         final_reasoning_block.summary_text
         == "Exploring reasoning traces\n\nFormulating reasoning traces"
     )
-    assert text_delta.delta == "Hello"
+    assert text_delta_one.delta == "Hello"
+    assert text_delta_two.delta == " world"
     assert final_text_block.text == "Hello world"
     assert done.message.response_id == "resp_success"
 
