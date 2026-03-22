@@ -22,6 +22,7 @@ from ai.types.stream import (
     TextStartEvent,
     ToolCallBlock,
 )
+from ai.types.tools import JsonObject
 from openai import AsyncOpenAI
 from openai.types.responses.response_completed_event import ResponseCompletedEvent
 from openai.types.responses.response_content_part_added_event import (
@@ -48,9 +49,6 @@ from openai.types.responses.response_refusal_delta_event import (
     ResponseRefusalDeltaEvent,
 )
 from openai.types.responses.response_text_delta_event import ResponseTextDeltaEvent
-
-from tests.conftest import JsonObject
-
 
 RawResponseEvent: TypeAlias = (
     ResponseCompletedEvent
