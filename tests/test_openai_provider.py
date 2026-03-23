@@ -21,6 +21,9 @@ from ai.types.stream import (
     TextEndEvent,
     TextStartEvent,
     ToolCallBlock,
+    ToolCallDeltaEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
 )
 from ai.types.tools import JsonObject
 from openai import AsyncOpenAI
@@ -30,6 +33,12 @@ from openai.types.responses.response_content_part_added_event import (
 )
 from openai.types.responses.response_created_event import ResponseCreatedEvent
 from openai.types.responses.response_failed_event import ResponseFailedEvent
+from openai.types.responses.response_function_call_arguments_delta_event import (
+    ResponseFunctionCallArgumentsDeltaEvent,
+)
+from openai.types.responses.response_function_call_arguments_done_event import (
+    ResponseFunctionCallArgumentsDoneEvent,
+)
 from openai.types.responses.response_output_item_added_event import (
     ResponseOutputItemAddedEvent,
 )
@@ -55,6 +64,8 @@ RawResponseEvent: TypeAlias = (
     | ResponseContentPartAddedEvent
     | ResponseCreatedEvent
     | ResponseFailedEvent
+    | ResponseFunctionCallArgumentsDeltaEvent
+    | ResponseFunctionCallArgumentsDoneEvent
     | ResponseOutputItemAddedEvent
     | ResponseOutputItemDoneEvent
     | ResponseReasoningSummaryPartAddedEvent
@@ -375,6 +386,96 @@ def _message_done_event(
     )
 
 
+def _function_tool_call_added_event(
+    sequence_number: int,
+    item_id: str,
+    call_id: str,
+    name: str,
+    *,
+    arguments: str = "",
+    output_index: int = 1,
+) -> ResponseOutputItemAddedEvent:
+    return ResponseOutputItemAddedEvent.model_validate(
+        {
+            "type": "response.output_item.added",
+            "sequence_number": sequence_number,
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "function_call",
+                "status": "in_progress",
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments,
+            },
+        }
+    )
+
+
+def _function_tool_call_arguments_delta_event(
+    sequence_number: int,
+    item_id: str,
+    delta: str,
+    *,
+    output_index: int = 1,
+) -> ResponseFunctionCallArgumentsDeltaEvent:
+    return ResponseFunctionCallArgumentsDeltaEvent.model_validate(
+        {
+            "type": "response.function_call_arguments.delta",
+            "sequence_number": sequence_number,
+            "output_index": output_index,
+            "item_id": item_id,
+            "delta": delta,
+        }
+    )
+
+
+def _function_tool_call_arguments_done_event(
+    sequence_number: int,
+    item_id: str,
+    arguments: str,
+    *,
+    name: str = "get_weather",
+    output_index: int = 1,
+) -> ResponseFunctionCallArgumentsDoneEvent:
+    return ResponseFunctionCallArgumentsDoneEvent.model_validate(
+        {
+            "type": "response.function_call_arguments.done",
+            "sequence_number": sequence_number,
+            "output_index": output_index,
+            "item_id": item_id,
+            "name": name,
+            "arguments": arguments,
+        }
+    )
+
+
+def _function_tool_call_done_event(
+    sequence_number: int,
+    item_id: str,
+    call_id: str,
+    name: str,
+    arguments: str,
+    *,
+    output_index: int = 1,
+) -> ResponseOutputItemDoneEvent:
+    return ResponseOutputItemDoneEvent.model_validate(
+        {
+            "type": "response.output_item.done",
+            "sequence_number": sequence_number,
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "function_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments,
+            },
+        }
+    )
+
+
 def _expect_event_type(event: StreamEvent, event_type: type[TEvent]) -> TEvent:
     assert isinstance(event, event_type)
     return cast(TEvent, event)
@@ -391,6 +492,13 @@ def _expect_text_block(
     block: TextBlock | ReasoningBlock | ToolCallBlock,
 ) -> TextBlock:
     assert isinstance(block, TextBlock)
+    return block
+
+
+def _expect_tool_call_block(
+    block: TextBlock | ReasoningBlock | ToolCallBlock,
+) -> ToolCallBlock:
+    assert isinstance(block, ToolCallBlock)
     return block
 
 
@@ -627,6 +735,78 @@ def test_stream_maps_refusal_deltas_with_shared_partial_state() -> None:
     assert text_block.text == "No thanks"
     assert done.message is shared_partial
     assert done_text_block.text == "No thanks"
+
+
+def test_stream_maps_function_tool_call_events_with_shared_partial_state() -> None:
+    raw_events = [
+        _created_event(1, "resp_tool_call"),
+        _function_tool_call_added_event(
+            2,
+            "fc_123",
+            "call_123",
+            "get_weather",
+            output_index=0,
+        ),
+        _function_tool_call_arguments_delta_event(
+            3,
+            "fc_123",
+            '{"',
+            output_index=0,
+        ),
+        _function_tool_call_arguments_delta_event(
+            4,
+            "fc_123",
+            'city":"Munich"}',
+            output_index=0,
+        ),
+        _function_tool_call_arguments_done_event(
+            5,
+            "fc_123",
+            '{"city":"Munich"}',
+            output_index=0,
+        ),
+        _function_tool_call_done_event(
+            6,
+            "fc_123",
+            "call_123",
+            "get_weather",
+            '{"city":"Munich"}',
+            output_index=0,
+        ),
+        _completed_event(7, "resp_tool_call"),
+    ]
+
+    client = _build_client(raw_events)
+    events = _collect_events(client)
+    tool_call_start = _expect_event_type(events[1], ToolCallStartEvent)
+    tool_call_delta_one = _expect_event_type(events[2], ToolCallDeltaEvent)
+    tool_call_delta_two = _expect_event_type(events[3], ToolCallDeltaEvent)
+    tool_call_end = _expect_event_type(events[4], ToolCallEndEvent)
+    done = _expect_event_type(events[5], StreamDoneEvent)
+    shared_partial = tool_call_start.partial
+    tool_call_block = _expect_tool_call_block(shared_partial.content[0])
+    done_tool_call_block = _expect_tool_call_block(done.message.content[0])
+
+    assert [event.type for event in events] == [
+        "start",
+        "tool_call_start",
+        "tool_call_delta",
+        "tool_call_delta",
+        "tool_call_end",
+        "done",
+    ]
+    assert tool_call_start.partial is shared_partial
+    assert tool_call_delta_one.partial is shared_partial
+    assert tool_call_delta_two.partial is shared_partial
+    assert tool_call_end.partial is shared_partial
+    assert tool_call_delta_one.delta == '{"'
+    assert tool_call_delta_two.delta == 'city":"Munich"}'
+    assert tool_call_block.call_id == "call_123"
+    assert tool_call_block.name == "get_weather"
+    assert tool_call_block.provider_item_id == "fc_123"
+    assert tool_call_block.arguments == {"city": "Munich"}
+    assert done.message is shared_partial
+    assert done_tool_call_block.arguments == {"city": "Munich"}
 
 
 def test_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:

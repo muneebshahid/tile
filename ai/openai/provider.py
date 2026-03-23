@@ -1,3 +1,4 @@
+import json
 from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias, cast
@@ -48,7 +49,12 @@ from ai.types.stream import (
     TextBlock,
     TextEndEvent,
     TextStartEvent,
+    ToolCallBlock,
+    ToolCallDeltaEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
 )
+from ai.types.tools import JsonObject
 
 if TYPE_CHECKING:
     from openai.types.shared_params.reasoning import Reasoning as OpenAIReasoning
@@ -63,6 +69,7 @@ class StreamAssemblyState:
     current_reasoning_block: ReasoningBlock | None = None
     current_text_block: TextBlock | None = None
     active_text_part_type: SupportedTextPartType | None = None
+    current_tool_call_block: ToolCallBlock | None = None
 
 
 async def stream(
@@ -119,7 +126,7 @@ def _adapt_raw_event(
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            _handle_function_tool_call_added(state, event.item)
+            yield _start_tool_call_block(state, event.item)
         case ResponseReasoningSummaryTextDeltaEvent() if (
             state.current_reasoning_block is not None
         ):
@@ -128,9 +135,13 @@ def _adapt_raw_event(
             state.current_reasoning_block is not None
         ):
             yield _append_reasoning_delta(state, "\n\n")
-        case ResponseFunctionCallArgumentsDeltaEvent():
-            _handle_function_tool_call_arguments_delta(state, event)
-        case ResponseFunctionCallArgumentsDoneEvent():
+        case ResponseFunctionCallArgumentsDeltaEvent() if (
+            state.current_tool_call_block is not None
+        ):
+            yield _append_tool_call_arguments_delta(state, event)
+        case ResponseFunctionCallArgumentsDoneEvent() if (
+            state.current_tool_call_block is not None
+        ):
             _handle_function_tool_call_arguments_done(state, event)
         case ResponseContentPartAddedEvent() if state.current_text_block is not None:
             _track_active_text_part(state, event)
@@ -151,7 +162,7 @@ def _adapt_raw_event(
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            _handle_function_tool_call_done(state, event.item)
+            yield _finalize_tool_call_block(state, event.item)
         case ResponseCompletedEvent():
             yield StreamDoneEvent(type="done", message=state.partial)
         case ResponseFailedEvent():
@@ -172,6 +183,7 @@ def _start_reasoning_block(
     )
     state.current_text_block = None
     state.active_text_part_type = None
+    state.current_tool_call_block = None
     state.partial.content.append(state.current_reasoning_block)
     return ReasoningStartEvent(type="reasoning_start", partial=state.partial)
 
@@ -187,6 +199,7 @@ def _start_text_block(
     )
     state.current_reasoning_block = None
     state.active_text_part_type = None
+    state.current_tool_call_block = None
     state.partial.content.append(state.current_text_block)
     return TextStartEvent(type="text_start", partial=state.partial)
 
@@ -202,27 +215,46 @@ def _append_reasoning_delta(
     )
 
 
-def _handle_function_tool_call_added(
+def _start_tool_call_block(
     state: StreamAssemblyState,
     item: ResponseFunctionToolCall,
-) -> None:
-    del state, item
-    return None
+) -> ToolCallStartEvent:
+    state.current_reasoning_block = None
+    state.current_text_block = None
+    state.active_text_part_type = None
+    state.current_tool_call_block = ToolCallBlock(
+        call_id=item.call_id,
+        name=item.name,
+        arguments=_parse_tool_call_arguments(item.arguments or ""),
+        provider_item_id=item.id,
+        namespace=item.namespace,
+    )
+    state.partial.content.append(state.current_tool_call_block)
+    return ToolCallStartEvent(type="tool_call_start", partial=state.partial)
 
 
-def _handle_function_tool_call_arguments_delta(
+def _append_tool_call_arguments_delta(
     state: StreamAssemblyState,
     event: ResponseFunctionCallArgumentsDeltaEvent,
-) -> None:
-    del state, event
-    return None
+) -> ToolCallDeltaEvent:
+    assert state.current_tool_call_block is not None
+    return ToolCallDeltaEvent(
+        type="tool_call_delta",
+        delta=event.delta,
+        partial=state.partial,
+    )
 
 
 def _handle_function_tool_call_arguments_done(
     state: StreamAssemblyState,
     event: ResponseFunctionCallArgumentsDoneEvent,
 ) -> None:
-    del state, event
+    if state.current_tool_call_block is None:
+        return None
+
+    state.current_tool_call_block.arguments = _parse_tool_call_arguments(
+        event.arguments
+    )
     return None
 
 
@@ -280,12 +312,20 @@ def _finalize_text_block(
     return TextEndEvent(type="text_end", partial=state.partial)
 
 
-def _handle_function_tool_call_done(
+def _finalize_tool_call_block(
     state: StreamAssemblyState,
     item: ResponseFunctionToolCall,
-) -> None:
-    del state, item
-    return None
+) -> ToolCallEndEvent:
+    assert state.current_tool_call_block is not None
+    state.current_tool_call_block.call_id = item.call_id
+    state.current_tool_call_block.name = item.name
+    state.current_tool_call_block.arguments = _parse_tool_call_arguments(
+        item.arguments or ""
+    )
+    state.current_tool_call_block.provider_item_id = item.id
+    state.current_tool_call_block.namespace = item.namespace
+    state.current_tool_call_block = None
+    return ToolCallEndEvent(type="tool_call_end", partial=state.partial)
 
 
 def _extract_supported_text_part_type(
@@ -296,6 +336,20 @@ def _extract_supported_text_part_type(
     if event.part.type == "refusal":
         return "refusal"
     return None
+
+
+def _parse_tool_call_arguments(arguments: str) -> JsonObject:
+    if not arguments.strip():
+        return {}
+
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError:
+        return {}
+
+    if isinstance(parsed, dict):
+        return cast("JsonObject", parsed)
+    return {}
 
 
 def _extract_error_message(event: ResponseFailedEvent) -> str:
