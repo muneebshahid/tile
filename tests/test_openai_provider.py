@@ -629,6 +629,68 @@ def test_stream_maps_refusal_deltas_with_shared_partial_state() -> None:
     assert done_text_block.text == "No thanks"
 
 
+def test_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:
+    raw_events = [
+        _created_event(1, "resp_refusal"),
+        _message_added_event(2, "msg_refusal", output_index=0),
+        _content_part_added_event(
+            3,
+            "msg_refusal",
+            "refusal",
+            output_index=0,
+            content_index=0,
+        ),
+        _text_delta_event(
+            4,
+            "msg_refusal",
+            "Wrong",
+            output_index=0,
+            content_index=0,
+        ),
+        _refusal_delta_event(
+            5,
+            "msg_refusal",
+            "No",
+            output_index=0,
+            content_index=0,
+        ),
+        _refusal_delta_event(
+            6,
+            "msg_refusal",
+            " thanks",
+            output_index=0,
+            content_index=0,
+        ),
+        _message_done_event(
+            7,
+            "msg_refusal",
+            [{"type": "refusal", "refusal": "No thanks"}],
+            output_index=0,
+        ),
+        _completed_event(8, "resp_refusal"),
+    ]
+
+    client = _build_client(raw_events)
+    events = _collect_events(client)
+    text_delta_one = _expect_event_type(events[2], TextDeltaEvent)
+    text_delta_two = _expect_event_type(events[3], TextDeltaEvent)
+    text_end = _expect_event_type(events[4], TextEndEvent)
+    done = _expect_event_type(events[5], StreamDoneEvent)
+
+    assert [event.type for event in events] == [
+        "start",
+        "text_start",
+        "text_delta",
+        "text_delta",
+        "text_end",
+        "done",
+    ]
+    assert text_delta_one.delta == "No"
+    assert text_delta_two.delta == " thanks"
+    assert _expect_text_block(text_end.partial.content[0]).text == "No thanks"
+    assert _expect_text_block(done.message.content[0]).text == "No thanks"
+
+
 def test_stream_maps_failed_response_into_error_event() -> None:
     raw_events = [
         _created_event(1, "resp_failed"),

@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Iterator, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
 from openai import AsyncOpenAI
 from openai.types.responses import (
@@ -54,12 +54,15 @@ if TYPE_CHECKING:
     from openai.types.shared_params.reasoning import Reasoning as OpenAIReasoning
 
 
+SupportedTextPartType: TypeAlias = Literal["output_text", "refusal"]
+
+
 @dataclass
 class StreamAssemblyState:
     partial: AssistantMessage = field(default_factory=AssistantMessage)
     current_reasoning_block: ReasoningBlock | None = None
     current_text_block: TextBlock | None = None
-    current_text_content_part: Literal["output_text", "refusal"] | None = None
+    active_text_part_type: SupportedTextPartType | None = None
 
 
 async def stream(
@@ -130,11 +133,10 @@ def _adapt_raw_event(
         case ResponseFunctionCallArgumentsDoneEvent():
             _handle_function_tool_call_arguments_done(state, event)
         case ResponseContentPartAddedEvent() if state.current_text_block is not None:
-            _update_text_content_part(state, event)
-        case ResponseTextDeltaEvent() | ResponseRefusalDeltaEvent() if (
-            state.current_text_block is not None
-            and state.current_text_content_part in {"output_text", "refusal"}
-        ):
+            _track_active_text_part(state, event)
+        case ResponseTextDeltaEvent() if _can_append_output_text_delta(state):
+            yield _append_text_delta(state, event.delta)
+        case ResponseRefusalDeltaEvent() if _can_append_refusal_delta(state):
             yield _append_text_delta(state, event.delta)
         case ResponseOutputItemDoneEvent() if (
             isinstance(event.item, ResponseReasoningItem)
@@ -169,7 +171,7 @@ def _start_reasoning_block(
         reasoning_id=item.id,
     )
     state.current_text_block = None
-    state.current_text_content_part = None
+    state.active_text_part_type = None
     state.partial.content.append(state.current_reasoning_block)
     return ReasoningStartEvent(type="reasoning_start", partial=state.partial)
 
@@ -184,7 +186,7 @@ def _start_text_block(
         phase=_extract_message_phase(item),
     )
     state.current_reasoning_block = None
-    state.current_text_content_part = None
+    state.active_text_part_type = None
     state.partial.content.append(state.current_text_block)
     return TextStartEvent(type="text_start", partial=state.partial)
 
@@ -224,16 +226,25 @@ def _handle_function_tool_call_arguments_done(
     return None
 
 
-def _update_text_content_part(
+def _track_active_text_part(
     state: StreamAssemblyState,
     event: ResponseContentPartAddedEvent,
 ) -> None:
-    if event.part.type == "output_text":
-        state.current_text_content_part = "output_text"
-    elif event.part.type == "refusal":
-        state.current_text_content_part = "refusal"
-    else:
-        state.current_text_content_part = None
+    state.active_text_part_type = _extract_supported_text_part_type(event)
+
+
+def _can_append_output_text_delta(state: StreamAssemblyState) -> bool:
+    return (
+        state.current_text_block is not None
+        and state.active_text_part_type == "output_text"
+    )
+
+
+def _can_append_refusal_delta(state: StreamAssemblyState) -> bool:
+    return (
+        state.current_text_block is not None
+        and state.active_text_part_type == "refusal"
+    )
 
 
 def _append_text_delta(
@@ -265,7 +276,7 @@ def _finalize_text_block(
     state.current_text_block.message_id = item.id
     state.current_text_block.phase = _extract_message_phase(item)
     state.current_text_block = None
-    state.current_text_content_part = None
+    state.active_text_part_type = None
     return TextEndEvent(type="text_end", partial=state.partial)
 
 
@@ -274,6 +285,16 @@ def _handle_function_tool_call_done(
     item: ResponseFunctionToolCall,
 ) -> None:
     del state, item
+    return None
+
+
+def _extract_supported_text_part_type(
+    event: ResponseContentPartAddedEvent,
+) -> SupportedTextPartType | None:
+    if event.part.type == "output_text":
+        return "output_text"
+    if event.part.type == "refusal":
+        return "refusal"
     return None
 
 
