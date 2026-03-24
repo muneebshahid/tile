@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypeAlias, cast
 
@@ -133,7 +133,7 @@ async def _adapt_stream(
     yield StreamStartEvent(type="start", partial=state.partial)
 
     async for event in raw_stream:
-        for adapted_event in _adapt_raw_event(state, event):
+        if adapted_event := _adapt_raw_event(state, event):
             yield adapted_event
 
         if isinstance(event, ResponseCompletedEvent | ResponseFailedEvent):
@@ -143,57 +143,59 @@ async def _adapt_stream(
 def _adapt_raw_event(
     state: StreamAssemblyState,
     event: object,
-) -> Iterator[StreamEvent]:
+) -> StreamEvent | None:
     match event:
         case ResponseCreatedEvent():
             state.partial.response_id = event.response.id
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
-            yield _start_reasoning_block(state, event.item)
+            return _start_reasoning_block(state, event.item)
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseOutputMessage
         ):
-            yield _start_text_block(state, event.item)
+            return _start_text_block(state, event.item)
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            yield _start_tool_call_block(state, event.item)
+            return _start_tool_call_block(state, event.item)
         case ResponseReasoningSummaryTextDeltaEvent() if state.is_reasoning:
-            yield _append_reasoning_delta(state, event.delta)
+            return _append_reasoning_delta(state, event.delta)
         case ResponseReasoningSummaryPartDoneEvent() if state.is_reasoning:
-            yield _append_reasoning_delta(state, "\n\n")
+            return _append_reasoning_delta(state, "\n\n")
         case ResponseFunctionCallArgumentsDeltaEvent() if state.is_tool_call:
-            yield _append_tool_call_arguments_delta(state, event)
+            return _append_tool_call_arguments_delta(state, event)
         case ResponseFunctionCallArgumentsDoneEvent() if state.is_tool_call:
             _handle_function_tool_call_arguments_done(state, event)
         case ResponseContentPartAddedEvent() if state.is_text:
             _track_active_text_part(state, event)
         case ResponseTextDeltaEvent() if _can_append_output_text_delta(state):
-            yield _append_text_delta(state, event.delta)
+            return _append_text_delta(state, event.delta)
         case ResponseRefusalDeltaEvent() if _can_append_refusal_delta(state):
-            yield _append_text_delta(state, event.delta)
+            return _append_text_delta(state, event.delta)
         case ResponseOutputItemDoneEvent() if (
             isinstance(event.item, ResponseReasoningItem) and state.is_reasoning
         ):
-            yield _finalize_reasoning_block(state, event.item)
+            return _finalize_reasoning_block(state, event.item)
         case ResponseOutputItemDoneEvent() if (
             isinstance(event.item, ResponseOutputMessage) and state.is_text
         ):
-            yield _finalize_text_block(state, event.item)
+            return _finalize_text_block(state, event.item)
         case ResponseOutputItemDoneEvent() if (
             isinstance(event.item, ResponseFunctionToolCall) and state.is_tool_call
         ):
-            yield _finalize_tool_call_block(state, event.item)
+            return _finalize_tool_call_block(state, event.item)
         case ResponseCompletedEvent():
             state.partial.stop_reason = _extract_stop_reason(event)
-            yield StreamDoneEvent(type="done", message=state.partial)
+            return StreamDoneEvent(type="done", message=state.partial)
         case ResponseFailedEvent():
-            yield StreamErrorEvent(
+            return StreamErrorEvent(
                 type="error",
                 message=_extract_error_message(event),
                 partial=state.partial,
             )
+
+    return None
 
 
 def _start_reasoning_block(
