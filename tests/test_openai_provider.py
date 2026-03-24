@@ -110,6 +110,7 @@ def _response_payload(
     response_id: str,
     status: str,
     *,
+    output: Sequence[JsonObject] | None = None,
     error: dict[str, str] | None = None,
 ) -> JsonObject:
     return {
@@ -118,7 +119,7 @@ def _response_payload(
         "error": error,
         "model": "gpt-5.4",
         "object": "response",
-        "output": [],
+        "output": list(output or []),
         "parallel_tool_calls": False,
         "tool_choice": "auto",
         "tools": [],
@@ -139,12 +140,14 @@ def _created_event(sequence_number: int, response_id: str) -> ResponseCreatedEve
 def _completed_event(
     sequence_number: int,
     response_id: str,
+    *,
+    output: Sequence[JsonObject] | None = None,
 ) -> ResponseCompletedEvent:
     return ResponseCompletedEvent.model_validate(
         {
             "type": "response.completed",
             "sequence_number": sequence_number,
-            "response": _response_payload(response_id, "completed"),
+            "response": _response_payload(response_id, "completed", output=output),
         }
     )
 
@@ -831,7 +834,20 @@ def test_stream_maps_function_tool_call_events_with_shared_partial_state() -> No
             '{"city":"Munich"}',
             output_index=0,
         ),
-        _completed_event(7, "resp_tool_call"),
+        _completed_event(
+            7,
+            "resp_tool_call",
+            output=[
+                {
+                    "id": "fc_123",
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": "call_123",
+                    "name": "get_weather",
+                    "arguments": '{"city":"Munich"}',
+                }
+            ],
+        ),
     ]
 
     client = _build_client(raw_events)
@@ -863,6 +879,7 @@ def test_stream_maps_function_tool_call_events_with_shared_partial_state() -> No
     assert tool_call_block.name == "get_weather"
     assert tool_call_block.provider_item_id == "fc_123"
     assert tool_call_block.arguments == {"city": "Munich"}
+    assert done.message.stop_reason == "tool_use"
     assert done.message is shared_partial
     assert done_tool_call_block.arguments == {"city": "Munich"}
 

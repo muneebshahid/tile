@@ -46,6 +46,7 @@ from ai.types.stream import (
     StreamErrorEvent,
     StreamEvent,
     StreamStartEvent,
+    StopReason,
     TextDeltaEvent,
     TextBlock,
     TextEndEvent,
@@ -170,6 +171,7 @@ def _adapt_raw_event(
         ):
             yield _finalize_tool_call_block(state, event.item)
         case ResponseCompletedEvent():
+            state.partial.stop_reason = _extract_stop_reason(event)
             yield StreamDoneEvent(type="done", message=state.partial)
         case ResponseFailedEvent():
             yield StreamErrorEvent(
@@ -368,6 +370,14 @@ def _extract_error_message(event: ResponseFailedEvent) -> str:
         return message
 
     return "OpenAI response failed."
+
+
+def _extract_stop_reason(event: ResponseCompletedEvent) -> StopReason:
+    if any(
+        isinstance(item, ResponseFunctionToolCall) for item in event.response.output
+    ):
+        return "tool_use"
+    return "stop"
 
 
 def _join_reasoning_summary_text(
