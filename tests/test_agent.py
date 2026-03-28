@@ -12,6 +12,7 @@ from agent.types import (
     AgentStartEvent,
     MessageEndEvent,
     MessageStartEvent,
+    MessageUpdateEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     TurnEndEvent,
@@ -26,16 +27,27 @@ from ai.types.conversation import (
 )
 from ai.types.stream import (
     AssistantMessage,
+    ReasoningBlock,
+    ReasoningDeltaEvent,
+    ReasoningEndEvent,
+    ReasoningStartEvent,
     StreamDoneEvent,
     StreamErrorEvent,
     StreamEvent,
     StreamStartEvent,
     TextBlock,
+    TextDeltaEvent,
+    TextEndEvent,
+    TextStartEvent,
     ToolCallBlock,
+    ToolCallDeltaEvent,
+    ToolCallEndEvent,
+    ToolCallStartEvent,
 )
 from ai.types.tools import ToolDefinition
 
 TEvent = TypeVar("TEvent", bound=AgentEvent)
+TStreamEvent = TypeVar("TStreamEvent", bound=StreamEvent)
 
 
 @dataclass
@@ -95,6 +107,13 @@ def _expect_event_type(event: AgentEvent, event_type: type[TEvent]) -> TEvent:
     return cast(TEvent, event)
 
 
+def _expect_stream_event_type(
+    event: StreamEvent, event_type: type[TStreamEvent]
+) -> TStreamEvent:
+    assert isinstance(event, event_type)
+    return cast(TStreamEvent, event)
+
+
 def _expect_user_message(item: ConversationItem) -> UserMessage:
     assert isinstance(item, UserMessage)
     return item
@@ -142,12 +161,58 @@ def _sample_tools() -> list[ToolDefinition]:
 def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     tools = _sample_tools()
     invocations: list[StreamInvocation] = []
+    tool_call_start_partial = AssistantMessage(
+        response_id="resp_tool_call",
+        content=[
+            ReasoningBlock(summary_text="Thinking about weather"),
+            ToolCallBlock(
+                call_id="call_123",
+                name="get_weather",
+                arguments={"city": "Munich"},
+                provider_item_id="fc_123",
+            ),
+        ],
+    )
+    reasoning_partial = AssistantMessage(
+        response_id="resp_tool_call",
+        content=[ReasoningBlock(summary_text="Thinking about weather")],
+    )
+    text_partial = AssistantMessage(
+        response_id="resp_follow_up",
+        content=[TextBlock(text="It is sunny in Munich.")],
+    )
     stream_fn = _build_stream_fn(
         streams=[
             [
                 StreamStartEvent(
                     type="start",
                     partial=AssistantMessage(response_id="resp_tool_call"),
+                ),
+                ReasoningStartEvent(
+                    type="reasoning_start",
+                    partial=reasoning_partial,
+                ),
+                ReasoningDeltaEvent(
+                    type="reasoning_delta",
+                    delta="Thinking about weather",
+                    partial=reasoning_partial,
+                ),
+                ReasoningEndEvent(
+                    type="reasoning_end",
+                    partial=reasoning_partial,
+                ),
+                ToolCallStartEvent(
+                    type="tool_call_start",
+                    partial=tool_call_start_partial,
+                ),
+                ToolCallDeltaEvent(
+                    type="tool_call_delta",
+                    delta='{"city":"Munich"}',
+                    partial=tool_call_start_partial,
+                ),
+                ToolCallEndEvent(
+                    type="tool_call_end",
+                    partial=tool_call_start_partial,
                 ),
                 StreamDoneEvent(
                     type="done",
@@ -169,6 +234,19 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
                 StreamStartEvent(
                     type="start",
                     partial=AssistantMessage(response_id="resp_follow_up"),
+                ),
+                TextStartEvent(
+                    type="text_start",
+                    partial=text_partial,
+                ),
+                TextDeltaEvent(
+                    type="text_delta",
+                    delta="It is sunny in Munich.",
+                    partial=text_partial,
+                ),
+                TextEndEvent(
+                    type="text_end",
+                    partial=text_partial,
                 ),
                 StreamDoneEvent(
                     type="done",
@@ -193,12 +271,21 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         "agent_start",
         "turn_start",
         "message_start",
+        "message_update",
+        "message_update",
+        "message_update",
+        "message_update",
+        "message_update",
+        "message_update",
         "message_end",
         "tool_execution_start",
         "tool_execution_end",
         "turn_end",
         "turn_start",
         "message_start",
+        "message_update",
+        "message_update",
+        "message_update",
         "message_end",
         "turn_end",
         "agent_end",
@@ -206,15 +293,24 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
 
     first_turn_start = _expect_event_type(events[1], TurnStartEvent)
     first_message_start = _expect_event_type(events[2], MessageStartEvent)
-    first_message_end = _expect_event_type(events[3], MessageEndEvent)
-    tool_execution_start = _expect_event_type(events[4], ToolExecutionStartEvent)
-    tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    first_turn_end = _expect_event_type(events[6], TurnEndEvent)
-    second_turn_start = _expect_event_type(events[7], TurnStartEvent)
-    second_message_start = _expect_event_type(events[8], MessageStartEvent)
-    second_message_end = _expect_event_type(events[9], MessageEndEvent)
-    second_turn_end = _expect_event_type(events[10], TurnEndEvent)
-    agent_end = _expect_event_type(events[11], AgentEndEvent)
+    first_reasoning_start = _expect_event_type(events[3], MessageUpdateEvent)
+    first_reasoning_delta = _expect_event_type(events[4], MessageUpdateEvent)
+    first_reasoning_end = _expect_event_type(events[5], MessageUpdateEvent)
+    first_tool_call_start = _expect_event_type(events[6], MessageUpdateEvent)
+    first_tool_call_delta = _expect_event_type(events[7], MessageUpdateEvent)
+    first_tool_call_end = _expect_event_type(events[8], MessageUpdateEvent)
+    first_message_end = _expect_event_type(events[9], MessageEndEvent)
+    tool_execution_start = _expect_event_type(events[10], ToolExecutionStartEvent)
+    tool_execution_end = _expect_event_type(events[11], ToolExecutionEndEvent)
+    first_turn_end = _expect_event_type(events[12], TurnEndEvent)
+    second_turn_start = _expect_event_type(events[13], TurnStartEvent)
+    second_message_start = _expect_event_type(events[14], MessageStartEvent)
+    second_text_start = _expect_event_type(events[15], MessageUpdateEvent)
+    second_text_delta = _expect_event_type(events[16], MessageUpdateEvent)
+    second_text_end = _expect_event_type(events[17], MessageUpdateEvent)
+    second_message_end = _expect_event_type(events[18], MessageEndEvent)
+    second_turn_end = _expect_event_type(events[19], TurnEndEvent)
+    agent_end = _expect_event_type(events[20], AgentEndEvent)
     first_partial_message = _expect_assistant_message(first_message_start.message)
     second_partial_message = _expect_assistant_message(second_message_start.message)
     first_final_message = _expect_agent_assistant_turn(first_message_end.message)
@@ -224,6 +320,30 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_turn_start.type == "turn_start"
     assert first_partial_message.response_id == "resp_tool_call"
     assert first_partial_message.content == []
+    assert first_reasoning_start.stream_event.type == "reasoning_start"
+    assert first_reasoning_start.message is reasoning_partial
+    assert first_reasoning_delta.stream_event.type == "reasoning_delta"
+    assert (
+        _expect_stream_event_type(
+            first_reasoning_delta.stream_event, ReasoningDeltaEvent
+        ).delta
+        == "Thinking about weather"
+    )
+    assert first_reasoning_delta.message is reasoning_partial
+    assert first_reasoning_end.stream_event.type == "reasoning_end"
+    assert first_reasoning_end.message is reasoning_partial
+    assert first_tool_call_start.stream_event.type == "tool_call_start"
+    assert first_tool_call_start.message is tool_call_start_partial
+    assert first_tool_call_delta.stream_event.type == "tool_call_delta"
+    assert (
+        _expect_stream_event_type(
+            first_tool_call_delta.stream_event, ToolCallDeltaEvent
+        ).delta
+        == '{"city":"Munich"}'
+    )
+    assert first_tool_call_delta.message is tool_call_start_partial
+    assert first_tool_call_end.stream_event.type == "tool_call_end"
+    assert first_tool_call_end.message is tool_call_start_partial
     assert first_final_message.response_id == "resp_tool_call"
     assert first_final_message.stop_reason == "tool_use"
     assert tool_execution_start.call_id == "call_123"
@@ -256,6 +376,15 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert second_turn_start.type == "turn_start"
     assert second_partial_message.response_id == "resp_follow_up"
     assert second_partial_message.content == []
+    assert second_text_start.stream_event.type == "text_start"
+    assert second_text_start.message is text_partial
+    assert second_text_delta.stream_event.type == "text_delta"
+    assert _expect_stream_event_type(
+        second_text_delta.stream_event, TextDeltaEvent
+    ).delta == ("It is sunny in Munich.")
+    assert second_text_delta.message is text_partial
+    assert second_text_end.stream_event.type == "text_end"
+    assert second_text_end.message is text_partial
     assert second_final_message.response_id == "resp_follow_up"
     assert second_final_message.stop_reason == "stop"
     assert second_turn_end.message.response_id == "resp_follow_up"

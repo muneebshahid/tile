@@ -21,6 +21,7 @@ from ai.types.stream import (
     StreamEvent,
     StreamStartEvent,
     ToolCallBlock,
+    ToolCallStartEvent,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
@@ -35,6 +36,7 @@ from agent.types import (
     AgentStartEvent,
     MessageEndEvent,
     MessageStartEvent,
+    MessageUpdateEvent,
     StreamFn,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -42,13 +44,14 @@ from agent.types import (
     TurnStartEvent,
 )
 
-IGNORED_STREAM_EVENT_TYPES = (
+ASSISTANT_MESSAGE_UPDATE_EVENT_TYPES = (
     ReasoningStartEvent,
     ReasoningDeltaEvent,
     ReasoningEndEvent,
     TextStartEvent,
     TextDeltaEvent,
     TextEndEvent,
+    ToolCallStartEvent,
     ToolCallDeltaEvent,
     ToolCallEndEvent,
 )
@@ -136,8 +139,8 @@ class Agent:
                 return self._handle_stream_done_event(event)
             case StreamErrorEvent():
                 return self._handle_stream_error_event(event)
-            case _ if isinstance(event, IGNORED_STREAM_EVENT_TYPES):
-                return None
+            case _ if isinstance(event, ASSISTANT_MESSAGE_UPDATE_EVENT_TYPES):
+                return self._handle_message_update_event(event)
 
         return None
 
@@ -184,6 +187,22 @@ class Agent:
         self._history.append(message)
         yield MessageEndEvent(message=message)
         yield TurnEndEvent(message=message, tool_results=[])
+
+    async def _handle_message_update_event(
+        self,
+        event: (
+            ReasoningStartEvent
+            | ReasoningDeltaEvent
+            | ReasoningEndEvent
+            | TextStartEvent
+            | TextDeltaEvent
+            | TextEndEvent
+            | ToolCallStartEvent
+            | ToolCallDeltaEvent
+            | ToolCallEndEvent
+        ),
+    ) -> AsyncIterator[AgentEvent]:
+        yield MessageUpdateEvent(message=event.partial, stream_event=event)
 
     async def _execute_tool(
         self,
