@@ -110,16 +110,6 @@ class ToolExecutionStartEvent(BaseModel):
     arguments: JsonObject
 
 
-class ToolExecutionUpdateEvent(BaseModel):
-    """Carries incremental tool execution output."""
-
-    type: Literal["tool_execution_update"] = "tool_execution_update"
-    call_id: str
-    tool_name: str
-    arguments: JsonObject
-    partial_result: JsonValue
-
-
 class ToolExecutionEndEvent(BaseModel):
     """Marks the end of a tool execution."""
 
@@ -139,6 +129,5 @@ AgentEvent: TypeAlias = (
     | MessageUpdateEvent
     | MessageEndEvent
     | ToolExecutionStartEvent
-    | ToolExecutionUpdateEvent
     | ToolExecutionEndEvent
 )
