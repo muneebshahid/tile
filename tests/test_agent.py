@@ -10,6 +10,7 @@ from agent.types import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
+    MessageStartEvent,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
     TurnEndEvent,
@@ -103,6 +104,11 @@ def _expect_assistant_turn(item: ConversationItem) -> AssistantTurn:
     return item
 
 
+def _expect_assistant_message(item: object) -> AssistantMessage:
+    assert isinstance(item, AssistantMessage)
+    return item
+
+
 def _expect_tool_result_turn(item: ConversationItem) -> ToolResultTurn:
     assert isinstance(item, ToolResultTurn)
     return item
@@ -180,24 +186,32 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert [event.type for event in events] == [
         "agent_start",
         "turn_start",
+        "message_start",
         "tool_execution_start",
         "tool_execution_end",
         "turn_end",
         "turn_start",
+        "message_start",
         "turn_end",
         "agent_end",
     ]
 
     first_turn_start = _expect_event_type(events[1], TurnStartEvent)
-    tool_execution_start = _expect_event_type(events[2], ToolExecutionStartEvent)
-    tool_execution_end = _expect_event_type(events[3], ToolExecutionEndEvent)
-    first_turn_end = _expect_event_type(events[4], TurnEndEvent)
-    second_turn_start = _expect_event_type(events[5], TurnStartEvent)
-    second_turn_end = _expect_event_type(events[6], TurnEndEvent)
-    agent_end = _expect_event_type(events[7], AgentEndEvent)
+    first_message_start = _expect_event_type(events[2], MessageStartEvent)
+    tool_execution_start = _expect_event_type(events[3], ToolExecutionStartEvent)
+    tool_execution_end = _expect_event_type(events[4], ToolExecutionEndEvent)
+    first_turn_end = _expect_event_type(events[5], TurnEndEvent)
+    second_turn_start = _expect_event_type(events[6], TurnStartEvent)
+    second_message_start = _expect_event_type(events[7], MessageStartEvent)
+    second_turn_end = _expect_event_type(events[8], TurnEndEvent)
+    agent_end = _expect_event_type(events[9], AgentEndEvent)
+    first_partial_message = _expect_assistant_message(first_message_start.message)
+    second_partial_message = _expect_assistant_message(second_message_start.message)
 
     assert isinstance(events[0], AgentStartEvent)
     assert first_turn_start.type == "turn_start"
+    assert first_partial_message.response_id == "resp_tool_call"
+    assert first_partial_message.content == []
     assert tool_execution_start.call_id == "call_123"
     assert tool_execution_start.tool_name == "get_weather"
     assert tool_execution_start.arguments == {"city": "Munich"}
@@ -226,6 +240,8 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     )
     assert first_turn_end.tool_results[0].is_error is False
     assert second_turn_start.type == "turn_start"
+    assert second_partial_message.response_id == "resp_follow_up"
+    assert second_partial_message.content == []
     assert second_turn_end.message.response_id == "resp_follow_up"
     assert second_turn_end.message.stop_reason == "stop"
     assert second_turn_end.message.content == [TextBlock(text="It is sunny in Munich.")]
@@ -282,15 +298,20 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     assert [event.type for event in events] == [
         "agent_start",
         "turn_start",
+        "message_start",
         "turn_end",
         "agent_end",
     ]
 
-    turn_end = _expect_event_type(events[2], TurnEndEvent)
-    agent_end = _expect_event_type(events[3], AgentEndEvent)
+    message_start = _expect_event_type(events[2], MessageStartEvent)
+    turn_end = _expect_event_type(events[3], TurnEndEvent)
+    agent_end = _expect_event_type(events[4], AgentEndEvent)
+    partial_message = _expect_assistant_message(message_start.message)
 
     assert isinstance(events[0], AgentStartEvent)
     assert isinstance(events[1], TurnStartEvent)
+    assert partial_message.response_id == "resp_error"
+    assert partial_message.content == []
     assert turn_end.message.response_id == "resp_error"
     assert turn_end.message.stop_reason == "error"
     assert turn_end.message.status == "error"

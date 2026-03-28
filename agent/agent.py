@@ -33,6 +33,7 @@ from agent.types import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
+    MessageStartEvent,
     StreamFn,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -143,8 +144,8 @@ class Agent:
         self,
         event: StreamStartEvent,
     ) -> AsyncIterator[AgentEvent]:
-        del event
         yield TurnStartEvent()
+        yield MessageStartEvent(message=event.partial)
 
     async def _handle_stream_done_event(
         self,
