@@ -1,0 +1,23 @@
+Screen {
+    layout: vertical;
+}
+
+TextArea {
+    border: none;
+}
+
+TextArea:focus {
+    border: none;
+}
+
+#output {
+    height: 5fr;
+    min-height: 12;
+}
+
+#input {
+    height: 1fr;
+    min-height: 4;
+    max-height: 6;
+    border-top: solid $panel;
+}
