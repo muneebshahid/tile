@@ -25,7 +25,7 @@ TextArea:focus {
     height: auto;
     min-height: 1;
     max-height: 6;
-    border-top: solid #7dfaff;
-    border-bottom: solid #7dfaff;
+    border-top: solid #887dff;
+    border-bottom: solid #887dff;
     background: #141820;
 }
