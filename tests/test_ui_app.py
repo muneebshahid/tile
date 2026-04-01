@@ -1,9 +1,20 @@
 import asyncio
+from collections.abc import AsyncIterator, Sequence
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 from agent.agent import Agent
 from ai.types.conversation import UserMessage
+from ai.types.stream import (
+    AssistantMessage,
+    StreamDoneEvent,
+    StreamEvent,
+    StreamStartEvent,
+    TextBlock,
+    TextDeltaEvent,
+    TextEndEvent,
+    TextStartEvent,
+)
 from main import main
 from ui import PiyApp
 from ui.widgets import (
@@ -27,6 +38,7 @@ def test_piy_app_can_be_constructed() -> None:
     assert output_widget.id == "output"
     assert len(output_widget._messages) == 1
     assert isinstance(output_widget._messages[0], AgentMessageWidget)
+    assert output_widget._messages[0].text == "Welcome to piy."
     assert isinstance(composed_widgets[1], InputSection)
     assert composed_widgets[1].id == "input"
     assert composed_widgets[1].read_only is False
@@ -37,6 +49,13 @@ def test_piy_app_uses_injected_agent() -> None:
     app = PiyApp(agent=agent)
 
     assert app._agent is agent
+
+
+def test_create_agent_uses_default_openai_dependencies() -> None:
+    app = PiyApp()
+
+    assert app._agent._stream_fn is not None
+    assert app._agent._model == "gpt-5.4"
 
 
 def test_main_uses_piy_app() -> None:
@@ -74,7 +93,8 @@ def test_clicking_output_does_not_move_focus_from_input() -> None:
 
 def test_pressing_enter_moves_input_text_into_output_history() -> None:
     async def _run() -> None:
-        app = PiyApp()
+        agent = _build_agent([])
+        app = PiyApp(agent=agent)
 
         async with app.run_test() as pilot:
             input_area = app.query_one(InputSection)
@@ -84,7 +104,7 @@ def test_pressing_enter_moves_input_text_into_output_history() -> None:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert len(output_area.children) == 2
+            assert len(output_area.children) == 1
             message = output_area.children[-1]
             assert isinstance(message, UserMessageWidget)
             assert message.text == "Hello, piy!"
@@ -113,6 +133,54 @@ def test_pressing_enter_appends_user_message_to_agent_history() -> None:
     asyncio.run(_run())
 
 
+def test_pressing_enter_streams_agent_text_into_output() -> None:
+    async def _run() -> None:
+        partial_message = AssistantMessage(
+            response_id="resp_123",
+            content=[TextBlock(text="Hello from agent")],
+        )
+        final_message = AssistantMessage(
+            response_id="resp_123",
+            content=[TextBlock(text="Hello from agent")],
+        )
+        agent = _build_agent(
+            [
+                StreamStartEvent(
+                    type="start",
+                    partial=AssistantMessage(response_id="resp_123"),
+                ),
+                TextStartEvent(type="text_start", partial=partial_message),
+                TextDeltaEvent(
+                    type="text_delta",
+                    delta="Hello from agent",
+                    partial=partial_message,
+                ),
+                TextEndEvent(type="text_end", partial=partial_message),
+                StreamDoneEvent(type="done", message=final_message),
+            ]
+        )
+        app = PiyApp(agent=agent)
+
+        async with app.run_test() as pilot:
+            input_area = app.query_one(InputSection)
+            output_area = app.query_one(OutputSection)
+
+            input_area.load_text("Hello, piy!")
+            await pilot.press("enter")
+            await pilot.pause()
+            await pilot.pause()
+
+            assert len(output_area.children) == 2
+            user_message = output_area.children[0]
+            agent_message = output_area.children[1]
+            assert isinstance(user_message, UserMessageWidget)
+            assert user_message.text == "Hello, piy!"
+            assert isinstance(agent_message, AgentMessageWidget)
+            assert agent_message.text == "Hello from agent"
+
+    asyncio.run(_run())
+
+
 def test_input_area_expands_for_wrapped_content() -> None:
     async def _run() -> None:
         app = PiyApp()
@@ -132,3 +200,20 @@ def test_input_area_expands_for_wrapped_content() -> None:
             assert input_area.size.height > initial_height
 
     asyncio.run(_run())
+
+
+def _build_agent(stream_events: Sequence[StreamEvent]) -> Agent:
+    async def _stream_fn(*_: object, **__: object) -> AsyncIterator[StreamEvent]:
+        return _iter_stream_events(stream_events)
+
+    return Agent(stream_fn=_stream_fn, model="gpt-5.4")
+
+
+def _iter_stream_events(
+    stream_events: Sequence[StreamEvent],
+) -> AsyncIterator[StreamEvent]:
+    async def _iterate() -> AsyncIterator[StreamEvent]:
+        for event in stream_events:
+            yield event
+
+    return _iterate()

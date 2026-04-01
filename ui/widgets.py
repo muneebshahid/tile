@@ -49,6 +49,20 @@ class OutputSection(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield from self._messages
 
+    async def set_messages(
+        self,
+        messages: Sequence[TranscriptMessageWidget],
+    ) -> None:
+        """Replace the transcript with a new message projection."""
+
+        self._messages = list(messages)
+        await self.remove_children()
+
+        if self._messages:
+            await self.mount_all(self._messages)
+
+        self.scroll_end(animate=False)
+
     async def append_message(self, message: TranscriptMessageWidget) -> None:
         """Append a new message to the transcript."""
 
