@@ -2,7 +2,7 @@ import asyncio
 
 from textual.app import App, ComposeResult
 
-from ui.widgets import InputTextArea
+from ui.widgets import InputSection
 
 
 class InputHarnessApp(App[None]):
@@ -13,12 +13,12 @@ class InputHarnessApp(App[None]):
         self.submissions: list[str] = []
 
     def compose(self) -> ComposeResult:
-        yield InputTextArea()
+        yield InputSection()
 
     def on_mount(self) -> None:
-        self.query_one(InputTextArea).focus()
+        self.query_one(InputSection).focus()
 
-    def on_input_text_area_submitted(self, event: InputTextArea.Submitted) -> None:
+    def on_input_section_submitted(self, event: InputSection.Submitted) -> None:
         self.submissions.append(event.text)
 
 
@@ -27,7 +27,7 @@ def test_input_text_area_posts_submitted_message_on_enter() -> None:
         app = InputHarnessApp()
 
         async with app.run_test() as pilot:
-            input_area = app.query_one(InputTextArea)
+            input_area = app.query_one(InputSection)
 
             input_area.load_text("Hello from widget")
             await pilot.press("enter")

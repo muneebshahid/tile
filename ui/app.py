@@ -1,6 +1,11 @@
 from textual.app import App, ComposeResult
 
-from ui.widgets import InputTextArea, OutputTextArea
+from ui.widgets import (
+    AgentMessageWidget,
+    InputSection,
+    OutputSection,
+    UserMessageWidget,
+)
 
 
 class PiyApp(App[None]):
@@ -11,36 +16,33 @@ class PiyApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
-        self._output_history = ""
+        self._output_messages = [
+            AgentMessageWidget("Welcome to piy."),
+        ]
 
     def on_mount(self) -> None:
         """Focus the input area when the app starts."""
 
-        self.query_one(InputTextArea).focus()
+        self.query_one(InputSection).focus()
 
-    def on_input_text_area_submitted(self, event: InputTextArea.Submitted) -> None:
+    async def on_input_section_submitted(
+        self,
+        event: InputSection.Submitted,
+    ) -> None:
         """Handle prompt submission from the input widget."""
 
-        self._append_prompt_to_history(event.text)
+        await self._append_prompt_to_history(event.text)
         self._clear_input()
 
     def compose(self) -> ComposeResult:
         """Compose the MVP UI shell."""
 
-        yield OutputTextArea()
-        yield InputTextArea()
+        yield OutputSection(messages=self._output_messages)
+        yield InputSection()
 
-    def _append_prompt_to_history(self, prompt: str) -> None:
-        if self._output_history:
-            self._output_history += "\n\n"
-
-        self._output_history += prompt
-        self._sync_output()
-
-    def _sync_output(self) -> None:
-        output = self.query_one(OutputTextArea)
-        output.load_text(self._output_history)
-        output.refresh()
+    async def _append_prompt_to_history(self, prompt: str) -> None:
+        output = self.query_one(OutputSection)
+        await output.append_message(UserMessageWidget(prompt))
 
     def _clear_input(self) -> None:
-        self.query_one(InputTextArea).clear()
+        self.query_one(InputSection).clear()
