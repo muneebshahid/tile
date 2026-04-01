@@ -50,6 +50,7 @@ class PiyApp(App[None]):
         yield InputSection()
 
     async def _append_prompt_to_history(self, prompt: str) -> None:
+        self._agent.add_user_message(prompt)
         output = self.query_one(OutputSection)
         await output.append_message(UserMessageWidget(prompt))
 
