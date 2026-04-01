@@ -1,5 +1,8 @@
 from textual.app import App, ComposeResult
 
+from agent.agent import Agent
+from ai.openai.provider import stream
+from settings import settings
 from ui.widgets import (
     AgentMessageWidget,
     InputSection,
@@ -8,14 +11,22 @@ from ui.widgets import (
 )
 
 
+def create_agent() -> Agent:
+    return Agent(
+        stream_fn=stream,
+        model=settings.openai_model,
+    )
+
+
 class PiyApp(App[None]):
     """Root Textual application for piy."""
 
     TITLE = "piy"
     CSS_PATH = "app.tcss"
 
-    def __init__(self) -> None:
+    def __init__(self, agent: Agent | None = None) -> None:
         super().__init__()
+        self._agent = agent or create_agent()
         self._output_messages = [
             AgentMessageWidget("Welcome to piy."),
         ]

@@ -1,6 +1,8 @@
 import asyncio
+from unittest.mock import AsyncMock
 from unittest.mock import patch
 
+from agent.agent import Agent
 from main import main
 from ui import PiyApp
 from ui.widgets import (
@@ -15,6 +17,7 @@ def test_piy_app_can_be_constructed() -> None:
     app = PiyApp()
 
     assert app.title == "piy"
+    assert isinstance(app._agent, Agent)
     composed_widgets = list(app.compose())
     output_widget = composed_widgets[0]
 
@@ -26,6 +29,13 @@ def test_piy_app_can_be_constructed() -> None:
     assert isinstance(composed_widgets[1], InputSection)
     assert composed_widgets[1].id == "input"
     assert composed_widgets[1].read_only is False
+
+
+def test_piy_app_uses_injected_agent() -> None:
+    agent = Agent(stream_fn=AsyncMock(), model="gpt-5.4")
+    app = PiyApp(agent=agent)
+
+    assert app._agent is agent
 
 
 def test_main_uses_piy_app() -> None:
