@@ -42,15 +42,15 @@ class PiyApp(App[None]):
     ) -> None:
         """Handle prompt submission from the input widget."""
 
-        await self._append_prompt_to_history(event.text)
+        self._agent.add_user_message(event.text)
+        await self._append_prompt_to_output(event.text)
         self._clear_input()
 
     def compose(self) -> ComposeResult:
         yield OutputSection(messages=self._output_messages)
         yield InputSection()
 
-    async def _append_prompt_to_history(self, prompt: str) -> None:
-        self._agent.add_user_message(prompt)
+    async def _append_prompt_to_output(self, prompt: str) -> None:
         output = self.query_one(OutputSection)
         await output.append_message(UserMessageWidget(prompt))
 
