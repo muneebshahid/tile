@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 from agent.agent import Agent
+from ai.types.conversation import UserMessage
 from main import main
 from ui import PiyApp
 from ui.widgets import (
@@ -88,6 +89,26 @@ def test_pressing_enter_moves_input_text_into_output_history() -> None:
             assert isinstance(message, UserMessageWidget)
             assert message.text == "Hello, piy!"
             assert input_area.text == ""
+
+    asyncio.run(_run())
+
+
+def test_pressing_enter_appends_user_message_to_agent_history() -> None:
+    async def _run() -> None:
+        agent = Agent(stream_fn=AsyncMock(), model="gpt-5.4")
+        app = PiyApp(agent=agent)
+
+        async with app.run_test() as pilot:
+            input_area = app.query_one(InputSection)
+
+            input_area.load_text("Hello from agent history")
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert len(agent.history) == 1
+            user_message = agent.history[0]
+            assert isinstance(user_message, UserMessage)
+            assert user_message.content == "Hello from agent history"
 
     asyncio.run(_run())
 
