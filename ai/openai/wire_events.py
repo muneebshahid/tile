@@ -71,7 +71,7 @@ class ResponseMessageDoneWireEvent(TypedDict):
 
 class ResponseToolCallAddedWireEvent(TypedDict):
     type: Literal["response.tool_call.added"]
-    item_id: str
+    provider_item_id: str | None
     call_id: str
     name: str
     arguments: JsonObject
@@ -90,7 +90,7 @@ class ResponseToolCallArgumentsDoneWireEvent(TypedDict):
 
 class ResponseToolCallDoneWireEvent(TypedDict):
     type: Literal["response.tool_call.done"]
-    item_id: str
+    provider_item_id: str | None
     call_id: str
     name: str
     arguments: JsonObject
