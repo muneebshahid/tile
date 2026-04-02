@@ -84,8 +84,10 @@ class Agent:
     def history(self) -> Sequence[ConversationItem]:
         return tuple(self._history)
 
-    def add_user_message(self, text: str) -> None:
-        self._history.append(UserMessage(content=text))
+    def add_user_message(self, text: str) -> UserMessage:
+        message = UserMessage(content=text)
+        self._history.append(message)
+        return message
 
     def replace_history(self, history: Sequence[ConversationItem]) -> None:
         self._history = list(history)
