@@ -86,12 +86,9 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
                 "phase": _extract_message_phase(event.item),
             }
         case ResponseContentPartAddedEvent():
-            part_type = _extract_supported_text_part_type(event)
-            if part_type is None:
-                return None
             return {
                 "type": "response.message.text_part",
-                "part_type": part_type,
+                "part_type": _extract_supported_text_part_type(event),
             }
         case ResponseTextDeltaEvent():
             return {

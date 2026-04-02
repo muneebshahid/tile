@@ -370,6 +370,28 @@ def _content_part_added_event(
     )
 
 
+def _unsupported_content_part_added_event(
+    sequence_number: int,
+    item_id: str,
+    *,
+    output_index: int = 1,
+    content_index: int = 0,
+) -> ResponseContentPartAddedEvent:
+    return ResponseContentPartAddedEvent.model_validate(
+        {
+            "type": "response.content_part.added",
+            "sequence_number": sequence_number,
+            "output_index": output_index,
+            "item_id": item_id,
+            "content_index": content_index,
+            "part": {
+                "type": "reasoning_text",
+                "text": "internal",
+            },
+        }
+    )
+
+
 def _text_delta_event(
     sequence_number: int,
     item_id: str,
@@ -1001,6 +1023,54 @@ def test_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:
     assert text_delta_one.delta == "No"
     assert text_delta_two.delta == " thanks"
     assert _expect_text_block(done.message.content[0]).text == "No thanks"
+
+
+def test_stream_clears_active_text_mode_for_unsupported_content_parts() -> None:
+    raw_events = [
+        _created_event(1, "resp_unsupported_part"),
+        _message_added_event(2, "msg_unsupported_part", output_index=0),
+        _content_part_added_event(
+            3,
+            "msg_unsupported_part",
+            "output_text",
+            output_index=0,
+            content_index=0,
+        ),
+        _unsupported_content_part_added_event(
+            4,
+            "msg_unsupported_part",
+            output_index=0,
+            content_index=1,
+        ),
+        _text_delta_event(
+            5,
+            "msg_unsupported_part",
+            "Should be ignored",
+            output_index=0,
+            content_index=1,
+        ),
+        _message_done_event(
+            6,
+            "msg_unsupported_part",
+            [{"type": "output_text", "text": "", "annotations": []}],
+            output_index=0,
+        ),
+        _completed_event(7, "resp_unsupported_part"),
+    ]
+
+    client = _build_client(raw_events)
+    events = _collect_events(client)
+    text_end = _expect_event_type(events[2], TextEndEvent)
+    done = _expect_event_type(events[3], StreamDoneEvent)
+
+    assert [event.type for event in events] == [
+        "start",
+        "text_start",
+        "text_end",
+        "done",
+    ]
+    assert _expect_text_block(text_end.partial.content[0]).text == ""
+    assert _expect_text_block(done.message.content[0]).text == ""
 
 
 def test_stream_maps_failed_response_into_error_event() -> None:

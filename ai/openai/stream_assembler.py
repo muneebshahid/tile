@@ -1,7 +1,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
-from ai.openai.wire_events import WireEvent
+from ai.openai.wire_events import TextPartType, WireEvent
 from ai.types.stream import (
     AssistantMessage,
     ReasoningBlock,
@@ -28,7 +28,7 @@ from ai.types.stream import (
 class StreamAssemblyState:
     partial: AssistantMessage = field(default_factory=AssistantMessage)
     current_block: ReasoningBlock | TextBlock | ToolCallBlock | None = None
-    active_text_part_type: str | None = None
+    active_text_part_type: TextPartType | None = None
 
     @property
     def is_reasoning(self) -> bool:
@@ -85,34 +85,28 @@ def _apply_wire_event(
             state.partial.response_id = event["response_id"]
         case "response.reasoning.added":
             return _start_reasoning_block(state)
-        case "response.reasoning.delta":
-            if state.is_reasoning:
-                return _append_reasoning_delta(state, event["delta"])
-        case "response.reasoning.done":
-            if state.is_reasoning:
-                return _finalize_reasoning_block(state, event)
+        case "response.reasoning.delta" if state.is_reasoning:
+            return _append_reasoning_delta(state, event["delta"])
+        case "response.reasoning.done" if state.is_reasoning:
+            return _finalize_reasoning_block(state, event)
         case "response.message.added":
             return _start_text_block(state, event)
-        case "response.message.text_part":
-            if state.is_text:
-                state.active_text_part_type = event["part_type"]
-        case "response.message.text.delta":
-            if _can_append_text_delta(state, event["part_type"]):
-                return _append_text_delta(state, event["delta"])
-        case "response.message.done":
-            if state.is_text:
-                return _finalize_text_block(state, event)
+        case "response.message.text_part" if state.is_text:
+            state.active_text_part_type = event["part_type"]
+        case "response.message.text.delta" if _can_append_text_delta(
+            state, event["part_type"]
+        ):
+            return _append_text_delta(state, event["delta"])
+        case "response.message.done" if state.is_text:
+            return _finalize_text_block(state, event)
         case "response.tool_call.added":
             return _start_tool_call_block(state, event)
-        case "response.tool_call.arguments.delta":
-            if state.is_tool_call:
-                return _append_tool_call_arguments_delta(state, event["delta"])
-        case "response.tool_call.arguments.done":
-            if state.is_tool_call:
-                state.tool_call_block.arguments = event["arguments"]
-        case "response.tool_call.done":
-            if state.is_tool_call:
-                return _finalize_tool_call_block(state, event)
+        case "response.tool_call.arguments.delta" if state.is_tool_call:
+            return _append_tool_call_arguments_delta(state, event["delta"])
+        case "response.tool_call.arguments.done" if state.is_tool_call:
+            state.tool_call_block.arguments = event["arguments"]
+        case "response.tool_call.done" if state.is_tool_call:
+            return _finalize_tool_call_block(state, event)
         case "response.completed":
             return _build_stream_done_event(state, event["stop_reason"])
         case "response.incomplete":
@@ -175,7 +169,7 @@ def _start_text_block(
 
 def _can_append_text_delta(
     state: StreamAssemblyState,
-    part_type: str,
+    part_type: TextPartType,
 ) -> bool:
     return state.is_text and state.active_text_part_type == part_type
 

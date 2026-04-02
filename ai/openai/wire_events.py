@@ -53,7 +53,7 @@ class ResponseMessageAddedWireEvent(TypedDict):
 
 class ResponseMessageTextPartWireEvent(TypedDict):
     type: Literal["response.message.text_part"]
-    part_type: TextPartType
+    part_type: TextPartType | None
 
 
 class ResponseMessageTextDeltaWireEvent(TypedDict):
