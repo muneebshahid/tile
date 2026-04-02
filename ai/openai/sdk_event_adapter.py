@@ -30,7 +30,7 @@ from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
 )
 
-from ai.openai.wire_events import WireEvent
+from ai.openai.wire_events import TextPartType, WireEvent
 from ai.types.stream import Phase, StopReason
 from ai.types.tools import JsonObject
 
@@ -89,31 +89,22 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             part_type = _extract_supported_text_part_type(event)
             if part_type is None:
                 return None
-            return cast(
-                "WireEvent",
-                {
-                    "type": "response.message.text_part",
-                    "part_type": part_type,
-                },
-            )
+            return {
+                "type": "response.message.text_part",
+                "part_type": part_type,
+            }
         case ResponseTextDeltaEvent():
-            return cast(
-                "WireEvent",
-                {
-                    "type": "response.message.text.delta",
-                    "part_type": "output_text",
-                    "delta": event.delta,
-                },
-            )
+            return {
+                "type": "response.message.text.delta",
+                "part_type": "output_text",
+                "delta": event.delta,
+            }
         case ResponseRefusalDeltaEvent():
-            return cast(
-                "WireEvent",
-                {
-                    "type": "response.message.text.delta",
-                    "part_type": "refusal",
-                    "delta": event.delta,
-                },
-            )
+            return {
+                "type": "response.message.text.delta",
+                "part_type": "refusal",
+                "delta": event.delta,
+            }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseOutputMessage
         ):
@@ -127,7 +118,7 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             event.item, ResponseFunctionToolCall
         ):
             return cast(
-                "WireEvent",
+                WireEvent,
                 {
                     "type": "response.tool_call.added",
                     "item_id": event.item.id,
@@ -151,7 +142,7 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             event.item, ResponseFunctionToolCall
         ):
             return cast(
-                "WireEvent",
+                WireEvent,
                 {
                     "type": "response.tool_call.done",
                     "item_id": event.item.id,
@@ -188,7 +179,7 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
 
 def _extract_supported_text_part_type(
     event: ResponseContentPartAddedEvent,
-) -> str | None:
+) -> TextPartType | None:
     if event.part.type == "output_text":
         return "output_text"
     if event.part.type == "refusal":
