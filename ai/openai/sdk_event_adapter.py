@@ -117,17 +117,14 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            return cast(
-                WireEvent,
-                {
-                    "type": "response.tool_call.added",
-                    "item_id": event.item.id,
-                    "call_id": event.item.call_id,
-                    "name": event.item.name,
-                    "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
-                    "namespace": event.item.namespace,
-                },
-            )
+            return {
+                "type": "response.tool_call.added",
+                "provider_item_id": event.item.id,
+                "call_id": event.item.call_id,
+                "name": event.item.name,
+                "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
+                "namespace": event.item.namespace,
+            }
         case ResponseFunctionCallArgumentsDeltaEvent():
             return {
                 "type": "response.tool_call.arguments.delta",
@@ -141,17 +138,14 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            return cast(
-                WireEvent,
-                {
-                    "type": "response.tool_call.done",
-                    "item_id": event.item.id,
-                    "call_id": event.item.call_id,
-                    "name": event.item.name,
-                    "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
-                    "namespace": event.item.namespace,
-                },
-            )
+            return {
+                "type": "response.tool_call.done",
+                "provider_item_id": event.item.id,
+                "call_id": event.item.call_id,
+                "name": event.item.name,
+                "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
+                "namespace": event.item.namespace,
+            }
         case ResponseCompletedEvent():
             return {
                 "type": "response.completed",

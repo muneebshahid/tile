@@ -211,7 +211,7 @@ def _start_tool_call_block(
         call_id=event["call_id"],
         name=event["name"],
         arguments=event["arguments"],
-        provider_item_id=event["item_id"],
+        provider_item_id=event["provider_item_id"],
         namespace=event["namespace"],
     )
     state.partial.content.append(state.current_block)
@@ -237,7 +237,7 @@ def _finalize_tool_call_block(
     state.tool_call_block.call_id = event["call_id"]
     state.tool_call_block.name = event["name"]
     state.tool_call_block.arguments = event["arguments"]
-    state.tool_call_block.provider_item_id = event["item_id"]
+    state.tool_call_block.provider_item_id = event["provider_item_id"]
     state.tool_call_block.namespace = event["namespace"]
     state.current_block = None
     return ToolCallEndEvent(type="tool_call_end", partial=state.partial)
