@@ -1,7 +1,26 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import cast
 
-from ai.openai.wire_events import TextPartType, WireEvent
+from ai.openai.wire_events import (
+    ResponseCompletedWireEvent,
+    ResponseCreatedWireEvent,
+    ResponseFailedWireEvent,
+    ResponseIncompleteWireEvent,
+    ResponseMessageAddedWireEvent,
+    ResponseMessageDoneWireEvent,
+    ResponseMessageTextDeltaWireEvent,
+    ResponseMessageTextPartWireEvent,
+    ResponseReasoningDeltaWireEvent,
+    ResponseReasoningDoneWireEvent,
+    ResponseToolCallAddedWireEvent,
+    ResponseToolCallArgumentsDeltaWireEvent,
+    ResponseToolCallArgumentsDoneWireEvent,
+    ResponseToolCallDoneWireEvent,
+    TextPartType,
+    WireEvent,
+    WireEventType,
+)
 from ai.types.stream import (
     AssistantMessage,
     ReasoningBlock,
@@ -21,6 +40,14 @@ from ai.types.stream import (
     ToolCallDeltaEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
+)
+
+TERMINAL_WIRE_EVENT_TYPES: frozenset[WireEventType] = frozenset(
+    {
+        WireEventType.RESPONSE_COMPLETED,
+        WireEventType.RESPONSE_INCOMPLETE,
+        WireEventType.RESPONSE_FAILED,
+    }
 )
 
 
@@ -65,59 +92,84 @@ async def assemble_stream(
     yield StreamStartEvent(type="start", partial=state.partial)
 
     async for event in raw_stream:
-        if adapted_event := _apply_wire_event(state, event):
+        if adapted_event := _yield_stream_event(state, event):
             yield adapted_event
 
-        if event["type"] in {
-            "response.completed",
-            "response.incomplete",
-            "response.failed",
-        }:
+        if event["type"] in TERMINAL_WIRE_EVENT_TYPES:
             return
 
 
-def _apply_wire_event(
+def _yield_stream_event(
     state: StreamAssemblyState,
     event: WireEvent,
 ) -> StreamEvent | None:
     match event["type"]:
-        case "response.created":
-            state.partial.response_id = event["response_id"]
-        case "response.reasoning.added":
+        case WireEventType.RESPONSE_CREATED:
+            created_event = cast(ResponseCreatedWireEvent, event)
+            state.partial.response_id = created_event["response_id"]
+
+        case WireEventType.RESPONSE_REASONING_ADDED:
             return _start_reasoning_block(state)
-        case "response.reasoning.delta" if state.is_reasoning:
-            return _append_reasoning_delta(state, event["delta"])
-        case "response.reasoning.done" if state.is_reasoning:
-            return _finalize_reasoning_block(state, event)
-        case "response.message.added":
-            return _start_text_block(state, event)
-        case "response.message.text_part" if state.is_text:
-            state.active_text_part_type = event["part_type"]
-        case "response.message.text.delta" if _can_append_text_delta(
-            state, event["part_type"]
-        ):
-            return _append_text_delta(state, event["delta"])
-        case "response.message.done" if state.is_text:
-            return _finalize_text_block(state, event)
-        case "response.tool_call.added":
-            return _start_tool_call_block(state, event)
-        case "response.tool_call.arguments.delta" if state.is_tool_call:
-            return _append_tool_call_arguments_delta(state, event["delta"])
-        case "response.tool_call.arguments.done" if state.is_tool_call:
-            state.tool_call_block.arguments = event["arguments"]
-        case "response.tool_call.done" if state.is_tool_call:
-            return _finalize_tool_call_block(state, event)
-        case "response.completed":
-            return _build_stream_done_event(state, event["stop_reason"])
-        case "response.incomplete":
-            if event["stop_reason"] == "error":
+
+        case WireEventType.RESPONSE_REASONING_DELTA if state.is_reasoning:
+            reasoning_delta_event = cast(ResponseReasoningDeltaWireEvent, event)
+            return _append_reasoning_delta(state, reasoning_delta_event["delta"])
+
+        case WireEventType.RESPONSE_REASONING_DONE if state.is_reasoning:
+            reasoning_done_event = cast(ResponseReasoningDoneWireEvent, event)
+            return _finalize_reasoning_block(state, reasoning_done_event)
+
+        case WireEventType.RESPONSE_MESSAGE_ADDED:
+            message_added_event = cast(ResponseMessageAddedWireEvent, event)
+            return _start_text_block(state, message_added_event)
+
+        case WireEventType.RESPONSE_MESSAGE_TEXT_PART if state.is_text:
+            text_part_event = cast(ResponseMessageTextPartWireEvent, event)
+            state.active_text_part_type = text_part_event["part_type"]
+
+        case WireEventType.RESPONSE_MESSAGE_TEXT_DELTA:
+            text_delta_event = cast(ResponseMessageTextDeltaWireEvent, event)
+            if _can_append_text_delta(state, text_delta_event["part_type"]):
+                return _append_text_delta(state, text_delta_event["delta"])
+
+        case WireEventType.RESPONSE_MESSAGE_DONE if state.is_text:
+            message_done_event = cast(ResponseMessageDoneWireEvent, event)
+            return _finalize_text_block(state, message_done_event)
+
+        case WireEventType.RESPONSE_TOOL_CALL_ADDED:
+            tool_call_added_event = cast(ResponseToolCallAddedWireEvent, event)
+            return _start_tool_call_block(state, tool_call_added_event)
+
+        case WireEventType.RESPONSE_TOOL_CALL_ARGUMENTS_DELTA if state.is_tool_call:
+            arguments_delta_event = cast(ResponseToolCallArgumentsDeltaWireEvent, event)
+            return _append_tool_call_arguments_delta(
+                state, arguments_delta_event["delta"]
+            )
+
+        case WireEventType.RESPONSE_TOOL_CALL_ARGUMENTS_DONE if state.is_tool_call:
+            arguments_done_event = cast(ResponseToolCallArgumentsDoneWireEvent, event)
+            state.tool_call_block.arguments = arguments_done_event["arguments"]
+
+        case WireEventType.RESPONSE_TOOL_CALL_DONE if state.is_tool_call:
+            tool_call_done_event = cast(ResponseToolCallDoneWireEvent, event)
+            return _finalize_tool_call_block(state, tool_call_done_event)
+
+        case WireEventType.RESPONSE_COMPLETED:
+            completed_event = cast(ResponseCompletedWireEvent, event)
+            return _build_stream_done_event(state, completed_event["stop_reason"])
+
+        case WireEventType.RESPONSE_INCOMPLETE:
+            incomplete_event = cast(ResponseIncompleteWireEvent, event)
+            if incomplete_event["stop_reason"] == "error":
                 return _build_stream_error_event(
                     state,
-                    event["error_message"] or "OpenAI response incomplete.",
+                    incomplete_event["error_message"] or "OpenAI response incomplete.",
                 )
-            return _build_stream_done_event(state, event["stop_reason"])
-        case "response.failed":
-            return _build_stream_error_event(state, event["message"])
+            return _build_stream_done_event(state, incomplete_event["stop_reason"])
+
+        case WireEventType.RESPONSE_FAILED:
+            failed_event = cast(ResponseFailedWireEvent, event)
+            return _build_stream_error_event(state, failed_event["message"])
 
     return None
 
@@ -143,9 +195,8 @@ def _append_reasoning_delta(
 
 def _finalize_reasoning_block(
     state: StreamAssemblyState,
-    event: WireEvent,
+    event: ResponseReasoningDoneWireEvent,
 ) -> ReasoningEndEvent:
-    assert event["type"] == "response.reasoning.done"
     if event["summary_text"]:
         state.reasoning_block.summary_text = event["summary_text"]
     state.reasoning_block.reasoning_signature = event["reasoning_signature"]
@@ -155,9 +206,8 @@ def _finalize_reasoning_block(
 
 def _start_text_block(
     state: StreamAssemblyState,
-    event: WireEvent,
+    event: ResponseMessageAddedWireEvent,
 ) -> TextStartEvent:
-    assert event["type"] == "response.message.added"
     state.current_block = TextBlock(
         text="",
         message_id=event["item_id"],
@@ -185,9 +235,8 @@ def _append_text_delta(
 
 def _finalize_text_block(
     state: StreamAssemblyState,
-    event: WireEvent,
+    event: ResponseMessageDoneWireEvent,
 ) -> TextEndEvent:
-    assert event["type"] == "response.message.done"
     state.text_block.text = event["text"]
     state.text_block.message_id = event["item_id"]
     state.text_block.phase = event["phase"]
@@ -198,9 +247,8 @@ def _finalize_text_block(
 
 def _start_tool_call_block(
     state: StreamAssemblyState,
-    event: WireEvent,
+    event: ResponseToolCallAddedWireEvent,
 ) -> ToolCallStartEvent:
-    assert event["type"] == "response.tool_call.added"
     state.active_text_part_type = None
     state.current_block = ToolCallBlock(
         call_id=event["call_id"],
@@ -226,9 +274,8 @@ def _append_tool_call_arguments_delta(
 
 def _finalize_tool_call_block(
     state: StreamAssemblyState,
-    event: WireEvent,
+    event: ResponseToolCallDoneWireEvent,
 ) -> ToolCallEndEvent:
-    assert event["type"] == "response.tool_call.done"
     state.tool_call_block.call_id = event["call_id"]
     state.tool_call_block.name = event["name"]
     state.tool_call_block.arguments = event["arguments"]

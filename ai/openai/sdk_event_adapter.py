@@ -30,7 +30,7 @@ from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
 )
 
-from ai.openai.wire_events import TextPartType, WireEvent
+from ai.openai.wire_events import TextPartType, WireEvent, WireEventType
 from ai.types.stream import Phase, StopReason
 from ai.types.tools import JsonObject
 
@@ -48,31 +48,31 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
     match event:
         case ResponseCreatedEvent():
             return {
-                "type": "response.created",
+                "type": WireEventType.RESPONSE_CREATED,
                 "response_id": event.response.id,
             }
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
             return {
-                "type": "response.reasoning.added",
+                "type": WireEventType.RESPONSE_REASONING_ADDED,
                 "item_id": event.item.id,
             }
         case ResponseReasoningSummaryTextDeltaEvent():
             return {
-                "type": "response.reasoning.delta",
+                "type": WireEventType.RESPONSE_REASONING_DELTA,
                 "delta": event.delta,
             }
         case ResponseReasoningSummaryPartDoneEvent():
             return {
-                "type": "response.reasoning.delta",
+                "type": WireEventType.RESPONSE_REASONING_DELTA,
                 "delta": "\n\n",
             }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
             return {
-                "type": "response.reasoning.done",
+                "type": WireEventType.RESPONSE_REASONING_DONE,
                 "item_id": event.item.id,
                 "summary_text": _join_reasoning_summary_text(event.item.summary),
                 "reasoning_signature": _serialize_reasoning_item(event.item),
@@ -81,24 +81,24 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             event.item, ResponseOutputMessage
         ):
             return {
-                "type": "response.message.added",
+                "type": WireEventType.RESPONSE_MESSAGE_ADDED,
                 "item_id": event.item.id,
                 "phase": _extract_message_phase(event.item),
             }
         case ResponseContentPartAddedEvent():
             return {
-                "type": "response.message.text_part",
+                "type": WireEventType.RESPONSE_MESSAGE_TEXT_PART,
                 "part_type": _extract_supported_text_part_type(event),
             }
         case ResponseTextDeltaEvent():
             return {
-                "type": "response.message.text.delta",
+                "type": WireEventType.RESPONSE_MESSAGE_TEXT_DELTA,
                 "part_type": "output_text",
                 "delta": event.delta,
             }
         case ResponseRefusalDeltaEvent():
             return {
-                "type": "response.message.text.delta",
+                "type": WireEventType.RESPONSE_MESSAGE_TEXT_DELTA,
                 "part_type": "refusal",
                 "delta": event.delta,
             }
@@ -106,7 +106,7 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             event.item, ResponseOutputMessage
         ):
             return {
-                "type": "response.message.done",
+                "type": WireEventType.RESPONSE_MESSAGE_DONE,
                 "item_id": event.item.id,
                 "text": _join_message_text(event.item.content),
                 "phase": _extract_message_phase(event.item),
@@ -115,7 +115,7 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             event.item, ResponseFunctionToolCall
         ):
             return {
-                "type": "response.tool_call.added",
+                "type": WireEventType.RESPONSE_TOOL_CALL_ADDED,
                 "provider_item_id": event.item.id,
                 "call_id": event.item.call_id,
                 "name": event.item.name,
@@ -124,19 +124,19 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             }
         case ResponseFunctionCallArgumentsDeltaEvent():
             return {
-                "type": "response.tool_call.arguments.delta",
+                "type": WireEventType.RESPONSE_TOOL_CALL_ARGUMENTS_DELTA,
                 "delta": event.delta,
             }
         case ResponseFunctionCallArgumentsDoneEvent():
             return {
-                "type": "response.tool_call.arguments.done",
+                "type": WireEventType.RESPONSE_TOOL_CALL_ARGUMENTS_DONE,
                 "arguments": _parse_tool_call_arguments(event.arguments),
             }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
             return {
-                "type": "response.tool_call.done",
+                "type": WireEventType.RESPONSE_TOOL_CALL_DONE,
                 "provider_item_id": event.item.id,
                 "call_id": event.item.call_id,
                 "name": event.item.name,
@@ -145,23 +145,23 @@ def _normalize_sdk_event(event: object) -> WireEvent | None:
             }
         case ResponseCompletedEvent():
             return {
-                "type": "response.completed",
+                "type": WireEventType.RESPONSE_COMPLETED,
                 "stop_reason": _extract_stop_reason(event),
             }
         case ResponseIncompleteEvent():
             return {
-                "type": "response.incomplete",
+                "type": WireEventType.RESPONSE_INCOMPLETE,
                 "stop_reason": _extract_stop_reason(event),
                 "error_message": _extract_incomplete_error_message(event),
             }
         case ResponseErrorEvent():
             return {
-                "type": "response.failed",
+                "type": WireEventType.RESPONSE_FAILED,
                 "message": _extract_stream_error_message(event),
             }
         case ResponseFailedEvent():
             return {
-                "type": "response.failed",
+                "type": WireEventType.RESPONSE_FAILED,
                 "message": _extract_error_message(event),
             }
 

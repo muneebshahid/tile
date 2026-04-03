@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import TypeAlias, TypeVar, cast
 from unittest.mock import AsyncMock
 
+from ai.openai.wire_events import WireEventType
 from ai.types.conversation import UserMessage
 from ai.openai.provider import stream
 from ai.openai.serialization import serialize_history_items
@@ -139,7 +140,7 @@ def _response_payload(
 def _created_event(sequence_number: int, response_id: str) -> ResponseCreatedEvent:
     return ResponseCreatedEvent.model_validate(
         {
-            "type": "response.created",
+            "type": WireEventType.RESPONSE_CREATED,
             "sequence_number": sequence_number,
             "response": _response_payload(response_id, "in_progress"),
         }
@@ -154,7 +155,7 @@ def _completed_event(
 ) -> ResponseCompletedEvent:
     return ResponseCompletedEvent.model_validate(
         {
-            "type": "response.completed",
+            "type": WireEventType.RESPONSE_COMPLETED,
             "sequence_number": sequence_number,
             "response": _response_payload(response_id, "completed", output=output),
         }
@@ -168,7 +169,7 @@ def _failed_event(
 ) -> ResponseFailedEvent:
     return ResponseFailedEvent.model_validate(
         {
-            "type": "response.failed",
+            "type": WireEventType.RESPONSE_FAILED,
             "sequence_number": sequence_number,
             "response": _response_payload(
                 response_id,
@@ -203,7 +204,7 @@ def _incomplete_event(
 ) -> ResponseIncompleteEvent:
     return ResponseIncompleteEvent.model_validate(
         {
-            "type": "response.incomplete",
+            "type": WireEventType.RESPONSE_INCOMPLETE,
             "sequence_number": sequence_number,
             "response": _response_payload(
                 response_id,
