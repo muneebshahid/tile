@@ -315,9 +315,28 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
             },
         ),
         NormalizationCase(
+            name="response.output_item.added.function_call.blank_arguments",
+            raw_event=_tool_call_added_raw_event(
+                sequence_number=18,
+                item_id="fc_added_blank",
+                call_id="call_added_blank",
+                name="get_weather",
+                arguments="",
+                namespace="weather",
+            ),
+            expected_event={
+                "type": ResponseEventType.TOOL_CALL_ADDED,
+                "provider_item_id": "fc_added_blank",
+                "call_id": "call_added_blank",
+                "name": "get_weather",
+                "arguments": {},
+                "namespace": "weather",
+            },
+        ),
+        NormalizationCase(
             name="response.function_call_arguments.delta",
             raw_event=_tool_call_arguments_delta_raw_event(
-                sequence_number=18,
+                sequence_number=19,
                 item_id="fc_delta",
                 delta='{"city"',
             ),
@@ -329,7 +348,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         NormalizationCase(
             name="response.function_call_arguments.done",
             raw_event=_tool_call_arguments_done_raw_event(
-                sequence_number=19,
+                sequence_number=20,
                 item_id="fc_args_done",
                 name="get_weather",
                 arguments='{"city":"Berlin"}',
@@ -340,9 +359,22 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
             },
         ),
         NormalizationCase(
+            name="response.function_call_arguments.done.malformed_arguments",
+            raw_event=_tool_call_arguments_done_raw_event(
+                sequence_number=21,
+                item_id="fc_args_done_malformed",
+                name="get_weather",
+                arguments='{"city"',
+            ),
+            expected_event={
+                "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DONE,
+                "arguments": {},
+            },
+        ),
+        NormalizationCase(
             name="response.output_item.done.function_call",
             raw_event=_tool_call_done_raw_event(
-                sequence_number=20,
+                sequence_number=22,
                 item_id="fc_done",
                 call_id="call_done",
                 name="get_weather",
@@ -358,6 +390,25 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "namespace": "weather",
             },
         ),
+        NormalizationCase(
+            name="response.output_item.done.function_call.non_object_arguments",
+            raw_event=_tool_call_done_raw_event(
+                sequence_number=23,
+                item_id="fc_done_non_object",
+                call_id="call_done_non_object",
+                name="get_weather",
+                arguments='["Berlin"]',
+                namespace="weather",
+            ),
+            expected_event={
+                "type": ResponseEventType.TOOL_CALL_DONE,
+                "provider_item_id": "fc_done_non_object",
+                "call_id": "call_done_non_object",
+                "name": "get_weather",
+                "arguments": {},
+                "namespace": "weather",
+            },
+        ),
     ]
 
 
@@ -368,7 +419,7 @@ def _build_failure_cases() -> list[NormalizationCase]:
         NormalizationCase(
             name="error",
             raw_event=_stream_error_raw_event(
-                sequence_number=21,
+                sequence_number=24,
                 message="Socket closed",
             ),
             expected_event={
@@ -379,7 +430,7 @@ def _build_failure_cases() -> list[NormalizationCase]:
         NormalizationCase(
             name="response.failed",
             raw_event=_failed_raw_event(
-                sequence_number=22,
+                sequence_number=25,
                 response_id="resp_failed",
                 message="Model overloaded",
             ),
