@@ -146,7 +146,8 @@ def _finalize_reasoning_block(
     event: WireEvent,
 ) -> ReasoningEndEvent:
     assert event["type"] == "response.reasoning.done"
-    state.reasoning_block.summary_text = event["summary_text"]
+    if event["summary_text"]:
+        state.reasoning_block.summary_text = event["summary_text"]
     state.reasoning_block.reasoning_signature = event["reasoning_signature"]
     state.current_block = None
     return ReasoningEndEvent(type="reasoning_end", partial=state.partial)

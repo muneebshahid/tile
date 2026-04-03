@@ -792,6 +792,39 @@ def test_stream_maps_raw_events_with_shared_partial_state() -> None:
     )
 
 
+def test_stream_preserves_reasoning_deltas_when_done_summary_is_empty() -> None:
+    raw_events = [
+        _created_event(1, "resp_reasoning_empty_done"),
+        _reasoning_added_event(2, "rs_123", output_index=0),
+        _reasoning_summary_delta_event(
+            3,
+            "rs_123",
+            0,
+            "Draft summary",
+            output_index=0,
+        ),
+        _reasoning_done_event(4, "rs_123", [], output_index=0),
+        _completed_event(5, "resp_reasoning_empty_done"),
+    ]
+
+    client = _build_client(raw_events)
+    events = _collect_events(client)
+    reasoning_end = _expect_event_type(events[3], ReasoningEndEvent)
+    done = _expect_event_type(events[4], StreamDoneEvent)
+    reasoning_block = _expect_reasoning_block(reasoning_end.partial.content[0])
+    done_reasoning_block = _expect_reasoning_block(done.message.content[0])
+
+    assert [event.type for event in events] == [
+        "start",
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_end",
+        "done",
+    ]
+    assert reasoning_block.summary_text == "Draft summary"
+    assert done_reasoning_block.summary_text == "Draft summary"
+
+
 def test_stream_passes_serialized_tools_when_provided() -> None:
     client = _build_client([_completed_event(1, "resp_tools")])
 
