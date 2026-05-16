@@ -25,11 +25,9 @@ async def stream_api(
     instructions: str,
     reasoning: AppReasoning | None = None,
     tools: Sequence[ToolDefinition] | None = None,
-    client: AsyncOpenAI | None = None,
 ) -> AsyncEventStream:
     """Stream assistant events through the OpenAI SDK transport."""
 
-    active_client = client or create_client()
     request_params = build_stream_request_params(
         history,
         model,
@@ -37,7 +35,7 @@ async def stream_api(
         reasoning=reasoning,
         tools=tools,
     )
-    raw_stream = await _create_api_stream(active_client, request_params)
+    raw_stream = await _create_api_stream(create_client(), request_params)
     return assemble_stream(normalize_sdk_events(raw_stream))
 
 

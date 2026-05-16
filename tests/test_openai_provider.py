@@ -3,7 +3,7 @@ import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from typing import TypeAlias, TypeVar, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -31,7 +31,6 @@ from ai.types.stream import (
     ToolCallStartEvent,
 )
 from ai.types.tools import JsonObject, ToolDefinition
-from openai import AsyncOpenAI
 from openai.types.responses.response_completed_event import ResponseCompletedEvent
 from openai.types.responses.response_content_part_added_event import (
     ResponseContentPartAddedEvent,
@@ -587,11 +586,11 @@ def _collect_events(
             reasoning={"effort": "medium"},
             instructions="Follow the repo conventions.",
             tools=tools,
-            client=cast(AsyncOpenAI, client),
         )
         return [event async for event in event_stream]
 
-    return asyncio.run(_collect())
+    with patch("ai.openai.provider.create_client", return_value=client):
+        return asyncio.run(_collect())
 
 
 def _subscription_raw_stream(
