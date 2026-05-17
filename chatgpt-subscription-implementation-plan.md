@@ -67,8 +67,8 @@ Extract stream assembly into shared logic that does not depend on SDK runtime cl
 
 ### Tasks
 
-1. Add a new module for normalized wire events.
-   - Suggested file: `ai/openai/response_events.py`
+1. Add a new module for normalized provider events.
+   - Suggested file: `ai/openai/normalized_events.py`
    - Use `TypedDict` with a discriminant `type`
    - Define only the event shapes the assembler actually needs
 
@@ -271,7 +271,7 @@ Document how the new mode works.
 - `ai/openai/api_provider.py`
 - `ai/openai/subscription_provider.py`
 - `ai/openai/stream_assembler.py`
-- `ai/openai/response_events.py`
+- `ai/openai/normalized_events.py`
 - `ai/openai/sdk_event_adapter.py`
 - `ai/openai/subscription_event_adapter.py`
 - `ai/openai/subscription_client.py`

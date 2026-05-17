@@ -30,49 +30,53 @@ from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
 )
 
-from ai.openai.response_events import ResponseEvent, ResponseEventType, TextPartType
+from ai.openai.normalized_events import (
+    NormalizedEvent,
+    NormalizedEventType,
+    TextPartType,
+)
 from ai.types.stream import Phase, StopReason
 from ai.types.tools import JsonObject
 
 
 async def normalize_sdk_events(
     raw_stream: AsyncIterator[object],
-) -> AsyncIterator[ResponseEvent]:
+) -> AsyncIterator[NormalizedEvent]:
     async for event in raw_stream:
         normalized_event = _normalize_sdk_event(event)
         if normalized_event is not None:
             yield normalized_event
 
 
-def _normalize_sdk_event(event: object) -> ResponseEvent | None:
+def _normalize_sdk_event(event: object) -> NormalizedEvent | None:
     match event:
         case ResponseCreatedEvent():
             return {
-                "type": ResponseEventType.CREATED,
+                "type": NormalizedEventType.CREATED,
                 "response_id": event.response.id,
             }
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
             return {
-                "type": ResponseEventType.REASONING_ADDED,
+                "type": NormalizedEventType.REASONING_ADDED,
                 "item_id": event.item.id,
             }
         case ResponseReasoningSummaryTextDeltaEvent():
             return {
-                "type": ResponseEventType.REASONING_DELTA,
+                "type": NormalizedEventType.REASONING_DELTA,
                 "delta": event.delta,
             }
         case ResponseReasoningSummaryPartDoneEvent():
             return {
-                "type": ResponseEventType.REASONING_DELTA,
+                "type": NormalizedEventType.REASONING_DELTA,
                 "delta": "\n\n",
             }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
             return {
-                "type": ResponseEventType.REASONING_DONE,
+                "type": NormalizedEventType.REASONING_DONE,
                 "item_id": event.item.id,
                 "summary_text": _join_reasoning_summary_text(event.item.summary),
                 "reasoning_signature": _serialize_reasoning_item(event.item),
@@ -81,24 +85,24 @@ def _normalize_sdk_event(event: object) -> ResponseEvent | None:
             event.item, ResponseOutputMessage
         ):
             return {
-                "type": ResponseEventType.MESSAGE_ADDED,
+                "type": NormalizedEventType.MESSAGE_ADDED,
                 "item_id": event.item.id,
                 "phase": _extract_message_phase(event.item),
             }
         case ResponseContentPartAddedEvent():
             return {
-                "type": ResponseEventType.MESSAGE_TEXT_PART,
+                "type": NormalizedEventType.MESSAGE_TEXT_PART,
                 "part_type": _extract_supported_text_part_type(event),
             }
         case ResponseTextDeltaEvent():
             return {
-                "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+                "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
                 "part_type": "output_text",
                 "delta": event.delta,
             }
         case ResponseRefusalDeltaEvent():
             return {
-                "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+                "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
                 "part_type": "refusal",
                 "delta": event.delta,
             }
@@ -106,7 +110,7 @@ def _normalize_sdk_event(event: object) -> ResponseEvent | None:
             event.item, ResponseOutputMessage
         ):
             return {
-                "type": ResponseEventType.MESSAGE_DONE,
+                "type": NormalizedEventType.MESSAGE_DONE,
                 "item_id": event.item.id,
                 "text": _join_message_text(event.item.content),
                 "phase": _extract_message_phase(event.item),
@@ -115,7 +119,7 @@ def _normalize_sdk_event(event: object) -> ResponseEvent | None:
             event.item, ResponseFunctionToolCall
         ):
             return {
-                "type": ResponseEventType.TOOL_CALL_ADDED,
+                "type": NormalizedEventType.TOOL_CALL_ADDED,
                 "provider_item_id": event.item.id,
                 "call_id": event.item.call_id,
                 "name": event.item.name,
@@ -124,19 +128,19 @@ def _normalize_sdk_event(event: object) -> ResponseEvent | None:
             }
         case ResponseFunctionCallArgumentsDeltaEvent():
             return {
-                "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DELTA,
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA,
                 "delta": event.delta,
             }
         case ResponseFunctionCallArgumentsDoneEvent():
             return {
-                "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DONE,
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
                 "arguments": _parse_tool_call_arguments(event.arguments),
             }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
             return {
-                "type": ResponseEventType.TOOL_CALL_DONE,
+                "type": NormalizedEventType.TOOL_CALL_DONE,
                 "provider_item_id": event.item.id,
                 "call_id": event.item.call_id,
                 "name": event.item.name,
@@ -145,23 +149,23 @@ def _normalize_sdk_event(event: object) -> ResponseEvent | None:
             }
         case ResponseCompletedEvent():
             return {
-                "type": ResponseEventType.COMPLETED,
+                "type": NormalizedEventType.COMPLETED,
                 "stop_reason": _extract_stop_reason(event),
             }
         case ResponseIncompleteEvent():
             return {
-                "type": ResponseEventType.INCOMPLETE,
+                "type": NormalizedEventType.INCOMPLETE,
                 "stop_reason": _extract_stop_reason(event),
                 "error_message": _extract_incomplete_error_message(event),
             }
         case ResponseErrorEvent():
             return {
-                "type": ResponseEventType.FAILED,
+                "type": NormalizedEventType.FAILED,
                 "message": _extract_stream_error_message(event),
             }
         case ResponseFailedEvent():
             return {
-                "type": ResponseEventType.FAILED,
+                "type": NormalizedEventType.FAILED,
                 "message": _extract_error_message(event),
             }
 

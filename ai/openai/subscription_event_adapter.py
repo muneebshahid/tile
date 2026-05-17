@@ -1,4 +1,4 @@
-"""Normalize ChatGPT subscription SSE payloads into canonical response events."""
+"""Normalize ChatGPT subscription SSE payloads into normalized provider events."""
 
 import json
 from collections.abc import AsyncIterator, Sequence
@@ -6,7 +6,11 @@ from typing import TypeAlias, cast
 
 from pydantic import JsonValue
 
-from ai.openai.response_events import ResponseEvent, ResponseEventType, TextPartType
+from ai.openai.normalized_events import (
+    NormalizedEvent,
+    NormalizedEventType,
+    TextPartType,
+)
 from ai.types.stream import Phase, StopReason
 from ai.types.tools import JsonObject
 
@@ -15,8 +19,8 @@ SubscriptionEventPayload: TypeAlias = JsonObject
 
 async def normalize_subscription_events(
     raw_stream: AsyncIterator[SubscriptionEventPayload],
-) -> AsyncIterator[ResponseEvent]:
-    """Map raw subscription SSE payloads into transport-agnostic response events."""
+) -> AsyncIterator[NormalizedEvent]:
+    """Map raw subscription SSE payloads into transport-agnostic normalized events."""
 
     async for event in raw_stream:
         normalized_event = _normalize_subscription_event(event)
@@ -26,8 +30,8 @@ async def normalize_subscription_events(
 
 def _normalize_subscription_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
-    """Convert one raw subscription payload into the shared response-event union."""
+) -> NormalizedEvent | None:
+    """Convert one raw subscription payload into the shared normalized-event union."""
 
     event_type = _read_string(event, "type")
     match event_type:
@@ -67,20 +71,20 @@ def _normalize_subscription_event(
 
 def _normalize_created_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     response = _read_object(event, "response")
     response_id = _read_string(response, "id") if response is not None else None
     if response_id is None:
         return None
     return {
-        "type": ResponseEventType.CREATED,
+        "type": NormalizedEventType.CREATED,
         "response_id": response_id,
     }
 
 
 def _normalize_output_item_added_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     item = _read_object(event, "item")
     item_type = _read_string(item, "type") if item is not None else None
     if item is None or item_type is None:
@@ -92,7 +96,7 @@ def _normalize_output_item_added_event(
             if item_id is None:
                 return None
             return {
-                "type": ResponseEventType.REASONING_ADDED,
+                "type": NormalizedEventType.REASONING_ADDED,
                 "item_id": item_id,
             }
         case "message":
@@ -100,7 +104,7 @@ def _normalize_output_item_added_event(
             if item_id is None:
                 return None
             return {
-                "type": ResponseEventType.MESSAGE_ADDED,
+                "type": NormalizedEventType.MESSAGE_ADDED,
                 "item_id": item_id,
                 "phase": _extract_message_phase(item),
             }
@@ -110,7 +114,7 @@ def _normalize_output_item_added_event(
             if call_id is None or name is None:
                 return None
             return {
-                "type": ResponseEventType.TOOL_CALL_ADDED,
+                "type": NormalizedEventType.TOOL_CALL_ADDED,
                 "provider_item_id": _read_string(item, "id"),
                 "call_id": call_id,
                 "name": name,
@@ -125,41 +129,41 @@ def _normalize_output_item_added_event(
 
 def _normalize_reasoning_summary_delta_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     delta = _read_string(event, "delta")
     if delta is None:
         return None
     return {
-        "type": ResponseEventType.REASONING_DELTA,
+        "type": NormalizedEventType.REASONING_DELTA,
         "delta": delta,
     }
 
 
-def _normalize_reasoning_summary_part_done_event() -> ResponseEvent:
+def _normalize_reasoning_summary_part_done_event() -> NormalizedEvent:
     return {
-        "type": ResponseEventType.REASONING_DELTA,
+        "type": NormalizedEventType.REASONING_DELTA,
         "delta": "\n\n",
     }
 
 
 def _normalize_content_part_added_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     part = _read_object(event, "part")
     return {
-        "type": ResponseEventType.MESSAGE_TEXT_PART,
+        "type": NormalizedEventType.MESSAGE_TEXT_PART,
         "part_type": _extract_supported_text_part_type(part),
     }
 
 
 def _normalize_text_delta_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     delta = _read_string(event, "delta")
     if delta is None:
         return None
     return {
-        "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+        "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
         "part_type": "output_text",
         "delta": delta,
     }
@@ -167,12 +171,12 @@ def _normalize_text_delta_event(
 
 def _normalize_refusal_delta_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     delta = _read_string(event, "delta")
     if delta is None:
         return None
     return {
-        "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+        "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
         "part_type": "refusal",
         "delta": delta,
     }
@@ -180,28 +184,28 @@ def _normalize_refusal_delta_event(
 
 def _normalize_tool_call_arguments_delta_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     delta = _read_string(event, "delta")
     if delta is None:
         return None
     return {
-        "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DELTA,
+        "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA,
         "delta": delta,
     }
 
 
 def _normalize_tool_call_arguments_done_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     return {
-        "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DONE,
+        "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
         "arguments": _parse_tool_call_arguments(_read_string(event, "arguments")),
     }
 
 
 def _normalize_output_item_done_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent | None:
+) -> NormalizedEvent | None:
     item = _read_object(event, "item")
     item_type = _read_string(item, "type") if item is not None else None
     if item is None or item_type is None:
@@ -213,7 +217,7 @@ def _normalize_output_item_done_event(
             if item_id is None:
                 return None
             return {
-                "type": ResponseEventType.REASONING_DONE,
+                "type": NormalizedEventType.REASONING_DONE,
                 "item_id": item_id,
                 "summary_text": _join_reasoning_summary_text(item),
                 "reasoning_signature": _serialize_item(item),
@@ -223,7 +227,7 @@ def _normalize_output_item_done_event(
             if item_id is None:
                 return None
             return {
-                "type": ResponseEventType.MESSAGE_DONE,
+                "type": NormalizedEventType.MESSAGE_DONE,
                 "item_id": item_id,
                 "text": _join_message_text(item),
                 "phase": _extract_message_phase(item),
@@ -234,7 +238,7 @@ def _normalize_output_item_done_event(
             if call_id is None or name is None:
                 return None
             return {
-                "type": ResponseEventType.TOOL_CALL_DONE,
+                "type": NormalizedEventType.TOOL_CALL_DONE,
                 "provider_item_id": _read_string(item, "id"),
                 "call_id": call_id,
                 "name": name,
@@ -249,19 +253,19 @@ def _normalize_output_item_done_event(
 
 def _normalize_completed_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     return {
-        "type": ResponseEventType.COMPLETED,
+        "type": NormalizedEventType.COMPLETED,
         "stop_reason": _extract_stop_reason(event),
     }
 
 
 def _normalize_incomplete_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     stop_reason = _extract_incomplete_stop_reason(event)
     return {
-        "type": ResponseEventType.INCOMPLETE,
+        "type": NormalizedEventType.INCOMPLETE,
         "stop_reason": stop_reason,
         "error_message": _extract_incomplete_error_message(stop_reason),
     }
@@ -269,7 +273,7 @@ def _normalize_incomplete_event(
 
 def _normalize_done_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     response = _read_object(event, "response")
     status = _read_string(response, "status") if response is not None else None
     if status == "incomplete":
@@ -279,21 +283,21 @@ def _normalize_done_event(
 
 def _normalize_failed_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     response = _read_object(event, "response")
     error = _read_object(response, "error") if response is not None else None
     message = _read_string(error, "message") or "OpenAI response failed."
     return {
-        "type": ResponseEventType.FAILED,
+        "type": NormalizedEventType.FAILED,
         "message": message,
     }
 
 
 def _normalize_error_event(
     event: SubscriptionEventPayload,
-) -> ResponseEvent:
+) -> NormalizedEvent:
     return {
-        "type": ResponseEventType.FAILED,
+        "type": NormalizedEventType.FAILED,
         "message": _read_string(event, "message") or "OpenAI stream error.",
     }
 

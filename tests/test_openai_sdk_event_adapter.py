@@ -24,18 +24,18 @@ from openai.types.responses import (
     ResponseTextDeltaEvent,
 )
 
-from ai.openai.response_events import ResponseEvent, ResponseEventType
+from ai.openai.normalized_events import NormalizedEvent, NormalizedEventType
 from ai.openai.sdk_event_adapter import normalize_sdk_events
 from ai.types.tools import JsonObject
 
 
 @dataclass(frozen=True)
 class NormalizationCase:
-    """Defines one raw SDK event and its expected normalized response event."""
+    """Defines one raw SDK event and its expected normalized provider event."""
 
     name: str
     raw_event: object
-    expected_event: ResponseEvent
+    expected_event: NormalizedEvent
 
 
 def _build_normalization_cases() -> list[NormalizationCase]:
@@ -58,7 +58,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
             name="response.created",
             raw_event=_created_raw_event(sequence_number=1, response_id="resp_created"),
             expected_event={
-                "type": ResponseEventType.CREATED,
+                "type": NormalizedEventType.CREATED,
                 "response_id": "resp_created",
             },
         ),
@@ -69,7 +69,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
                 response_id="resp_completed",
             ),
             expected_event={
-                "type": ResponseEventType.COMPLETED,
+                "type": NormalizedEventType.COMPLETED,
                 "stop_reason": "stop",
             },
         ),
@@ -90,7 +90,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
                 ],
             ),
             expected_event={
-                "type": ResponseEventType.COMPLETED,
+                "type": NormalizedEventType.COMPLETED,
                 "stop_reason": "tool_use",
             },
         ),
@@ -102,7 +102,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
                 reason="max_output_tokens",
             ),
             expected_event={
-                "type": ResponseEventType.INCOMPLETE,
+                "type": NormalizedEventType.INCOMPLETE,
                 "stop_reason": "length",
                 "error_message": "OpenAI response incomplete.",
             },
@@ -115,7 +115,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
                 reason="content_filter",
             ),
             expected_event={
-                "type": ResponseEventType.INCOMPLETE,
+                "type": NormalizedEventType.INCOMPLETE,
                 "stop_reason": "error",
                 "error_message": "OpenAI response was truncated by the content filter.",
             },
@@ -134,7 +134,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
                 item_id="rs_added",
             ),
             expected_event={
-                "type": ResponseEventType.REASONING_ADDED,
+                "type": NormalizedEventType.REASONING_ADDED,
                 "item_id": "rs_added",
             },
         ),
@@ -147,7 +147,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
                 delta="Thinking...",
             ),
             expected_event={
-                "type": ResponseEventType.REASONING_DELTA,
+                "type": NormalizedEventType.REASONING_DELTA,
                 "delta": "Thinking...",
             },
         ),
@@ -160,7 +160,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
                 text="A step",
             ),
             expected_event={
-                "type": ResponseEventType.REASONING_DELTA,
+                "type": NormalizedEventType.REASONING_DELTA,
                 "delta": "\n\n",
             },
         ),
@@ -172,7 +172,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
                 summary_texts=["step one", "step two"],
             ),
             expected_event={
-                "type": ResponseEventType.REASONING_DONE,
+                "type": NormalizedEventType.REASONING_DONE,
                 "item_id": "rs_done",
                 "summary_text": "step one\n\nstep two",
                 "reasoning_signature": json.dumps(
@@ -203,7 +203,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 phase="commentary",
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_ADDED,
+                "type": NormalizedEventType.MESSAGE_ADDED,
                 "item_id": "msg_added",
                 "phase": "commentary",
             },
@@ -216,7 +216,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 part_type="output_text",
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_TEXT_PART,
+                "type": NormalizedEventType.MESSAGE_TEXT_PART,
                 "part_type": "output_text",
             },
         ),
@@ -228,7 +228,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 part_type="refusal",
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_TEXT_PART,
+                "type": NormalizedEventType.MESSAGE_TEXT_PART,
                 "part_type": "refusal",
             },
         ),
@@ -240,7 +240,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 part_type="reasoning_text",
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_TEXT_PART,
+                "type": NormalizedEventType.MESSAGE_TEXT_PART,
                 "part_type": None,
             },
         ),
@@ -252,7 +252,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 delta="Hello",
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+                "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
                 "part_type": "output_text",
                 "delta": "Hello",
             },
@@ -265,7 +265,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 delta="No",
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+                "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
                 "part_type": "refusal",
                 "delta": "No",
             },
@@ -282,7 +282,7 @@ def _build_message_cases() -> list[NormalizationCase]:
                 ],
             ),
             expected_event={
-                "type": ResponseEventType.MESSAGE_DONE,
+                "type": NormalizedEventType.MESSAGE_DONE,
                 "item_id": "msg_done",
                 "text": "Hello there",
                 "phase": "final_answer",
@@ -306,7 +306,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 namespace="weather",
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_ADDED,
+                "type": NormalizedEventType.TOOL_CALL_ADDED,
                 "provider_item_id": "fc_added",
                 "call_id": "call_added",
                 "name": "get_weather",
@@ -325,7 +325,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 namespace="weather",
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_ADDED,
+                "type": NormalizedEventType.TOOL_CALL_ADDED,
                 "provider_item_id": "fc_added_blank",
                 "call_id": "call_added_blank",
                 "name": "get_weather",
@@ -341,7 +341,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 delta='{"city"',
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DELTA,
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA,
                 "delta": '{"city"',
             },
         ),
@@ -354,7 +354,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 arguments='{"city":"Berlin"}',
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DONE,
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
                 "arguments": {"city": "Berlin"},
             },
         ),
@@ -367,7 +367,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 arguments='{"city"',
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DONE,
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
                 "arguments": {},
             },
         ),
@@ -382,7 +382,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 namespace="weather",
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_DONE,
+                "type": NormalizedEventType.TOOL_CALL_DONE,
                 "provider_item_id": "fc_done",
                 "call_id": "call_done",
                 "name": "get_weather",
@@ -401,7 +401,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 namespace="weather",
             ),
             expected_event={
-                "type": ResponseEventType.TOOL_CALL_DONE,
+                "type": NormalizedEventType.TOOL_CALL_DONE,
                 "provider_item_id": "fc_done_non_object",
                 "call_id": "call_done_non_object",
                 "name": "get_weather",
@@ -423,7 +423,7 @@ def _build_failure_cases() -> list[NormalizationCase]:
                 message="Socket closed",
             ),
             expected_event={
-                "type": ResponseEventType.FAILED,
+                "type": NormalizedEventType.FAILED,
                 "message": "Socket closed",
             },
         ),
@@ -435,17 +435,17 @@ def _build_failure_cases() -> list[NormalizationCase]:
                 message="Model overloaded",
             ),
             expected_event={
-                "type": ResponseEventType.FAILED,
+                "type": NormalizedEventType.FAILED,
                 "message": "Model overloaded",
             },
         ),
     ]
 
 
-def _collect_normalized_events(raw_events: Sequence[object]) -> list[ResponseEvent]:
-    """Collects normalized response events from the public async adapter."""
+def _collect_normalized_events(raw_events: Sequence[object]) -> list[NormalizedEvent]:
+    """Collects normalized provider events from the public async adapter."""
 
-    async def _collect() -> list[ResponseEvent]:
+    async def _collect() -> list[NormalizedEvent]:
         return [event async for event in normalize_sdk_events(_raw_stream(raw_events))]
 
     return asyncio.run(_collect())
@@ -497,7 +497,7 @@ def _created_raw_event(
 
     return ResponseCreatedEvent.model_validate(
         {
-            "type": ResponseEventType.CREATED,
+            "type": "response.created",
             "sequence_number": sequence_number,
             "response": _response_payload(response_id, "in_progress"),
         }
@@ -514,7 +514,7 @@ def _completed_raw_event(
 
     return ResponseCompletedEvent.model_validate(
         {
-            "type": ResponseEventType.COMPLETED,
+            "type": "response.completed",
             "sequence_number": sequence_number,
             "response": _response_payload(response_id, "completed", output=output),
         }
@@ -531,7 +531,7 @@ def _incomplete_raw_event(
 
     return ResponseIncompleteEvent.model_validate(
         {
-            "type": ResponseEventType.INCOMPLETE,
+            "type": "response.incomplete",
             "sequence_number": sequence_number,
             "response": _response_payload(
                 response_id,
@@ -893,11 +893,11 @@ def _failed_raw_event(
     response_id: str,
     message: str,
 ) -> ResponseFailedEvent:
-    """Builds a raw failed response event."""
+    """Builds a raw failed normalized event."""
 
     return ResponseFailedEvent.model_validate(
         {
-            "type": ResponseEventType.FAILED,
+            "type": "response.failed",
             "sequence_number": sequence_number,
             "response": _response_payload(
                 response_id,
@@ -916,7 +916,7 @@ def _failed_raw_event(
 def test_normalize_sdk_events_maps_each_supported_raw_event(
     case: NormalizationCase,
 ) -> None:
-    """Normalizes every supported raw SDK event into the expected response event."""
+    """Normalizes every supported raw SDK event into the expected provider event."""
 
     assert _collect_normalized_events([case.raw_event]) == [case.expected_event]
 

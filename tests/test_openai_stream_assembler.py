@@ -1,28 +1,28 @@
-"""Tests for assembling canonical response events into stream events."""
+"""Tests for assembling normalized provider events into stream events."""
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 from typing import TypeVar, cast
 
-from ai.openai.response_events import (
-    CompletedResponseEvent,
-    CreatedResponseEvent,
-    FailedResponseEvent,
-    IncompleteResponseEvent,
-    MessageAddedResponseEvent,
-    MessageDoneResponseEvent,
-    MessageTextDeltaResponseEvent,
-    MessageTextPartResponseEvent,
-    ReasoningAddedResponseEvent,
-    ReasoningDeltaResponseEvent,
-    ReasoningDoneResponseEvent,
-    ResponseEvent,
-    ResponseEventType,
+from ai.openai.normalized_events import (
+    CompletedNormalizedEvent,
+    CreatedNormalizedEvent,
+    FailedNormalizedEvent,
+    IncompleteNormalizedEvent,
+    MessageAddedNormalizedEvent,
+    MessageDoneNormalizedEvent,
+    MessageTextDeltaNormalizedEvent,
+    MessageTextPartNormalizedEvent,
+    ReasoningAddedNormalizedEvent,
+    ReasoningDeltaNormalizedEvent,
+    ReasoningDoneNormalizedEvent,
+    NormalizedEvent,
+    NormalizedEventType,
     TextPartType,
-    ToolCallAddedResponseEvent,
-    ToolCallArgumentsDeltaResponseEvent,
-    ToolCallArgumentsDoneResponseEvent,
-    ToolCallDoneResponseEvent,
+    ToolCallAddedNormalizedEvent,
+    ToolCallArgumentsDeltaNormalizedEvent,
+    ToolCallArgumentsDoneNormalizedEvent,
+    ToolCallDoneNormalizedEvent,
 )
 from ai.openai.stream_assembler import assemble_stream
 from ai.types.stream import (
@@ -55,7 +55,7 @@ def test_assemble_stream_accumulates_reasoning_and_text_with_shared_partial_stat
 ):
     """Accumulates reasoning and text blocks onto a shared partial message."""
 
-    response_events = [
+    normalized_events = [
         _created_event("resp_success"),
         _reasoning_added_event("rs_123"),
         _reasoning_delta_event("Exploring "),
@@ -76,7 +76,7 @@ def test_assemble_stream_accumulates_reasoning_and_text_with_shared_partial_stat
         _completed_event("stop"),
     ]
 
-    events = _collect_stream_events(response_events)
+    events = _collect_stream_events(normalized_events)
 
     start = _expect_event_type(events[0], StreamStartEvent)
     reasoning_start = _expect_event_type(events[1], ReasoningStartEvent)
@@ -408,7 +408,7 @@ def test_assemble_stream_maps_incomplete_error_into_error_event() -> None:
 
 
 def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
-    """Stops assembly once a terminal response event has been emitted."""
+    """Stops assembly once a terminal normalized event has been emitted."""
 
     events = _collect_stream_events(
         [
@@ -428,53 +428,54 @@ def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
 
 
 def _collect_stream_events(
-    response_events: Sequence[ResponseEvent],
+    normalized_events: Sequence[NormalizedEvent],
 ) -> list[StreamEvent]:
     """Collects stream events emitted by the assembler."""
 
     async def _collect() -> list[StreamEvent]:
         return [
-            event async for event in assemble_stream(_response_stream(response_events))
+            event
+            async for event in assemble_stream(_normalized_stream(normalized_events))
         ]
 
     return asyncio.run(_collect())
 
 
-def _response_stream(
-    response_events: Sequence[ResponseEvent],
-) -> AsyncIterator[ResponseEvent]:
-    """Yields canonical response events from a static sequence."""
+def _normalized_stream(
+    normalized_events: Sequence[NormalizedEvent],
+) -> AsyncIterator[NormalizedEvent]:
+    """Yield normalized provider events from a static sequence."""
 
-    async def _iterate() -> AsyncIterator[ResponseEvent]:
-        for response_event in response_events:
-            yield response_event
+    async def _iterate() -> AsyncIterator[NormalizedEvent]:
+        for normalized_event in normalized_events:
+            yield normalized_event
 
     return _iterate()
 
 
-def _created_event(response_id: str) -> CreatedResponseEvent:
-    """Builds a created response event."""
+def _created_event(response_id: str) -> CreatedNormalizedEvent:
+    """Builds a created normalized event."""
 
     return {
-        "type": ResponseEventType.CREATED,
+        "type": NormalizedEventType.CREATED,
         "response_id": response_id,
     }
 
 
-def _reasoning_added_event(item_id: str) -> ReasoningAddedResponseEvent:
-    """Builds a reasoning-added response event."""
+def _reasoning_added_event(item_id: str) -> ReasoningAddedNormalizedEvent:
+    """Builds a reasoning-added normalized event."""
 
     return {
-        "type": ResponseEventType.REASONING_ADDED,
+        "type": NormalizedEventType.REASONING_ADDED,
         "item_id": item_id,
     }
 
 
-def _reasoning_delta_event(delta: str) -> ReasoningDeltaResponseEvent:
-    """Builds a reasoning-delta response event."""
+def _reasoning_delta_event(delta: str) -> ReasoningDeltaNormalizedEvent:
+    """Builds a reasoning-delta normalized event."""
 
     return {
-        "type": ResponseEventType.REASONING_DELTA,
+        "type": NormalizedEventType.REASONING_DELTA,
         "delta": delta,
     }
 
@@ -483,11 +484,11 @@ def _reasoning_done_event(
     item_id: str,
     summary_text: str,
     reasoning_signature: str | None,
-) -> ReasoningDoneResponseEvent:
-    """Builds a reasoning-done response event."""
+) -> ReasoningDoneNormalizedEvent:
+    """Builds a reasoning-done normalized event."""
 
     return {
-        "type": ResponseEventType.REASONING_DONE,
+        "type": NormalizedEventType.REASONING_DONE,
         "item_id": item_id,
         "summary_text": summary_text,
         "reasoning_signature": reasoning_signature,
@@ -497,11 +498,11 @@ def _reasoning_done_event(
 def _message_added_event(
     item_id: str,
     phase: Phase | None = None,
-) -> MessageAddedResponseEvent:
-    """Builds a message-added response event."""
+) -> MessageAddedNormalizedEvent:
+    """Builds a message-added normalized event."""
 
     return {
-        "type": ResponseEventType.MESSAGE_ADDED,
+        "type": NormalizedEventType.MESSAGE_ADDED,
         "item_id": item_id,
         "phase": phase,
     }
@@ -509,11 +510,11 @@ def _message_added_event(
 
 def _message_text_part_event(
     part_type: TextPartType | None,
-) -> MessageTextPartResponseEvent:
-    """Builds a message text-part response event."""
+) -> MessageTextPartNormalizedEvent:
+    """Builds a message text-part normalized event."""
 
     return {
-        "type": ResponseEventType.MESSAGE_TEXT_PART,
+        "type": NormalizedEventType.MESSAGE_TEXT_PART,
         "part_type": part_type,
     }
 
@@ -521,11 +522,11 @@ def _message_text_part_event(
 def _message_text_delta_event(
     part_type: TextPartType,
     delta: str,
-) -> MessageTextDeltaResponseEvent:
-    """Builds a message text-delta response event."""
+) -> MessageTextDeltaNormalizedEvent:
+    """Builds a message text-delta normalized event."""
 
     return {
-        "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+        "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
         "part_type": part_type,
         "delta": delta,
     }
@@ -535,11 +536,11 @@ def _message_done_event(
     item_id: str,
     text: str,
     phase: Phase | None = None,
-) -> MessageDoneResponseEvent:
-    """Builds a message-done response event."""
+) -> MessageDoneNormalizedEvent:
+    """Builds a message-done normalized event."""
 
     return {
-        "type": ResponseEventType.MESSAGE_DONE,
+        "type": NormalizedEventType.MESSAGE_DONE,
         "item_id": item_id,
         "text": text,
         "phase": phase,
@@ -552,11 +553,11 @@ def _tool_call_added_event(
     name: str,
     arguments: JsonObject,
     namespace: str | None = None,
-) -> ToolCallAddedResponseEvent:
-    """Builds a tool-call added response event."""
+) -> ToolCallAddedNormalizedEvent:
+    """Builds a tool-call added normalized event."""
 
     return {
-        "type": ResponseEventType.TOOL_CALL_ADDED,
+        "type": NormalizedEventType.TOOL_CALL_ADDED,
         "provider_item_id": provider_item_id,
         "call_id": call_id,
         "name": name,
@@ -567,22 +568,22 @@ def _tool_call_added_event(
 
 def _tool_call_arguments_delta_event(
     delta: str,
-) -> ToolCallArgumentsDeltaResponseEvent:
-    """Builds a tool-call arguments delta response event."""
+) -> ToolCallArgumentsDeltaNormalizedEvent:
+    """Builds a tool-call arguments delta normalized event."""
 
     return {
-        "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DELTA,
+        "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA,
         "delta": delta,
     }
 
 
 def _tool_call_arguments_done_event(
     arguments: JsonObject,
-) -> ToolCallArgumentsDoneResponseEvent:
-    """Builds a tool-call arguments done response event."""
+) -> ToolCallArgumentsDoneNormalizedEvent:
+    """Builds a tool-call arguments done normalized event."""
 
     return {
-        "type": ResponseEventType.TOOL_CALL_ARGUMENTS_DONE,
+        "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
         "arguments": arguments,
     }
 
@@ -593,11 +594,11 @@ def _tool_call_done_event(
     name: str,
     arguments: JsonObject,
     namespace: str | None = None,
-) -> ToolCallDoneResponseEvent:
-    """Builds a tool-call done response event."""
+) -> ToolCallDoneNormalizedEvent:
+    """Builds a tool-call done normalized event."""
 
     return {
-        "type": ResponseEventType.TOOL_CALL_DONE,
+        "type": NormalizedEventType.TOOL_CALL_DONE,
         "provider_item_id": provider_item_id,
         "call_id": call_id,
         "name": name,
@@ -606,11 +607,11 @@ def _tool_call_done_event(
     }
 
 
-def _completed_event(stop_reason: StopReason) -> CompletedResponseEvent:
-    """Builds a completed response event."""
+def _completed_event(stop_reason: StopReason) -> CompletedNormalizedEvent:
+    """Builds a completed normalized event."""
 
     return {
-        "type": ResponseEventType.COMPLETED,
+        "type": NormalizedEventType.COMPLETED,
         "stop_reason": stop_reason,
     }
 
@@ -618,21 +619,21 @@ def _completed_event(stop_reason: StopReason) -> CompletedResponseEvent:
 def _incomplete_event(
     stop_reason: StopReason,
     error_message: str | None,
-) -> IncompleteResponseEvent:
-    """Builds an incomplete response event."""
+) -> IncompleteNormalizedEvent:
+    """Builds an incomplete normalized event."""
 
     return {
-        "type": ResponseEventType.INCOMPLETE,
+        "type": NormalizedEventType.INCOMPLETE,
         "stop_reason": stop_reason,
         "error_message": error_message,
     }
 
 
-def _failed_event(message: str) -> FailedResponseEvent:
-    """Builds a failed response event."""
+def _failed_event(message: str) -> FailedNormalizedEvent:
+    """Builds a failed normalized event."""
 
     return {
-        "type": ResponseEventType.FAILED,
+        "type": NormalizedEventType.FAILED,
         "message": message,
     }
 

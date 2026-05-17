@@ -1,10 +1,10 @@
-"""Tests for normalizing subscription SSE payloads into canonical response events."""
+"""Tests for normalizing subscription SSE payloads into normalized provider events."""
 
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 
-from ai.openai.response_events import ResponseEvent, ResponseEventType
+from ai.openai.normalized_events import NormalizedEvent, NormalizedEventType
 from ai.openai.subscription_event_adapter import (
     SubscriptionEventPayload,
     normalize_subscription_events,
@@ -14,7 +14,7 @@ from ai.openai.subscription_event_adapter import (
 def test_normalize_subscription_events_maps_reasoning_message_and_done_payloads() -> (
     None
 ):
-    """Map subscription SSE payloads into canonical response events."""
+    """Map subscription SSE payloads into normalized provider events."""
 
     events = _collect_events(
         [
@@ -103,19 +103,19 @@ def test_normalize_subscription_events_maps_reasoning_message_and_done_payloads(
 
     assert events == [
         {
-            "type": ResponseEventType.CREATED,
+            "type": NormalizedEventType.CREATED,
             "response_id": "resp_123",
         },
         {
-            "type": ResponseEventType.REASONING_ADDED,
+            "type": NormalizedEventType.REASONING_ADDED,
             "item_id": "rs_123",
         },
         {
-            "type": ResponseEventType.REASONING_DELTA,
+            "type": NormalizedEventType.REASONING_DELTA,
             "delta": "Exploring traces",
         },
         {
-            "type": ResponseEventType.REASONING_DONE,
+            "type": NormalizedEventType.REASONING_DONE,
             "item_id": "rs_123",
             "summary_text": "Exploring traces\n\nSelecting an answer",
             "reasoning_signature": json.dumps(
@@ -131,27 +131,27 @@ def test_normalize_subscription_events_maps_reasoning_message_and_done_payloads(
             ),
         },
         {
-            "type": ResponseEventType.MESSAGE_ADDED,
+            "type": NormalizedEventType.MESSAGE_ADDED,
             "item_id": "msg_123",
             "phase": "final_answer",
         },
         {
-            "type": ResponseEventType.MESSAGE_TEXT_PART,
+            "type": NormalizedEventType.MESSAGE_TEXT_PART,
             "part_type": "output_text",
         },
         {
-            "type": ResponseEventType.MESSAGE_TEXT_DELTA,
+            "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
             "part_type": "output_text",
             "delta": "Hello",
         },
         {
-            "type": ResponseEventType.MESSAGE_DONE,
+            "type": NormalizedEventType.MESSAGE_DONE,
             "item_id": "msg_123",
             "text": "Hello",
             "phase": "final_answer",
         },
         {
-            "type": ResponseEventType.COMPLETED,
+            "type": NormalizedEventType.COMPLETED,
             "stop_reason": "stop",
         },
     ]
@@ -203,20 +203,20 @@ def test_normalize_subscription_events_maps_incomplete_tool_use_and_failures() -
 
     assert events == [
         {
-            "type": ResponseEventType.COMPLETED,
+            "type": NormalizedEventType.COMPLETED,
             "stop_reason": "tool_use",
         },
         {
-            "type": ResponseEventType.INCOMPLETE,
+            "type": NormalizedEventType.INCOMPLETE,
             "stop_reason": "error",
             "error_message": "OpenAI response was truncated by the content filter.",
         },
         {
-            "type": ResponseEventType.FAILED,
+            "type": NormalizedEventType.FAILED,
             "message": "Model overloaded",
         },
         {
-            "type": ResponseEventType.FAILED,
+            "type": NormalizedEventType.FAILED,
             "message": "Socket closed",
         },
     ]
@@ -224,8 +224,8 @@ def test_normalize_subscription_events_maps_incomplete_tool_use_and_failures() -
 
 def _collect_events(
     raw_events: Sequence[SubscriptionEventPayload],
-) -> list[ResponseEvent]:
-    async def _collect() -> list[ResponseEvent]:
+) -> list[NormalizedEvent]:
+    async def _collect() -> list[NormalizedEvent]:
         return [
             event
             async for event in normalize_subscription_events(_raw_stream(raw_events))

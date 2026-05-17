@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from ai.openai.response_events import ResponseEventType
 from ai.types.conversation import UserMessage
 from ai.openai.provider import stream_api, stream_subscription
 from ai.openai.subscription_event_adapter import SubscriptionEventPayload
@@ -142,7 +141,7 @@ def _response_payload(
 def _created_event(sequence_number: int, response_id: str) -> ResponseCreatedEvent:
     return ResponseCreatedEvent.model_validate(
         {
-            "type": ResponseEventType.CREATED,
+            "type": "response.created",
             "sequence_number": sequence_number,
             "response": _response_payload(response_id, "in_progress"),
         }
@@ -157,7 +156,7 @@ def _completed_event(
 ) -> ResponseCompletedEvent:
     return ResponseCompletedEvent.model_validate(
         {
-            "type": ResponseEventType.COMPLETED,
+            "type": "response.completed",
             "sequence_number": sequence_number,
             "response": _response_payload(response_id, "completed", output=output),
         }
@@ -171,7 +170,7 @@ def _failed_event(
 ) -> ResponseFailedEvent:
     return ResponseFailedEvent.model_validate(
         {
-            "type": ResponseEventType.FAILED,
+            "type": "response.failed",
             "sequence_number": sequence_number,
             "response": _response_payload(
                 response_id,
@@ -206,7 +205,7 @@ def _incomplete_event(
 ) -> ResponseIncompleteEvent:
     return ResponseIncompleteEvent.model_validate(
         {
-            "type": ResponseEventType.INCOMPLETE,
+            "type": "response.incomplete",
             "sequence_number": sequence_number,
             "response": _response_payload(
                 response_id,
