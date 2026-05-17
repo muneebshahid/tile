@@ -121,7 +121,6 @@ def _normalize_output_item_added_event(
                 "arguments": _parse_tool_call_arguments(
                     _read_string(item, "arguments")
                 ),
-                "namespace": _read_string(item, "namespace"),
             }
 
     return None
@@ -245,7 +244,6 @@ def _normalize_output_item_done_event(
                 "arguments": _parse_tool_call_arguments(
                     _read_string(item, "arguments")
                 ),
-                "namespace": _read_string(item, "namespace"),
             }
 
     return None

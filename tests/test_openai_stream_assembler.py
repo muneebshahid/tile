@@ -552,7 +552,6 @@ def _tool_call_added_event(
     call_id: str,
     name: str,
     arguments: JsonObject,
-    namespace: str | None = None,
 ) -> ToolCallAddedNormalizedEvent:
     """Builds a tool-call added normalized event."""
 
@@ -562,7 +561,6 @@ def _tool_call_added_event(
         "call_id": call_id,
         "name": name,
         "arguments": arguments,
-        "namespace": namespace,
     }
 
 
@@ -593,7 +591,6 @@ def _tool_call_done_event(
     call_id: str,
     name: str,
     arguments: JsonObject,
-    namespace: str | None = None,
 ) -> ToolCallDoneNormalizedEvent:
     """Builds a tool-call done normalized event."""
 
@@ -603,7 +600,6 @@ def _tool_call_done_event(
         "call_id": call_id,
         "name": name,
         "arguments": arguments,
-        "namespace": namespace,
     }
 
 

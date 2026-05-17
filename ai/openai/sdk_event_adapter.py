@@ -124,7 +124,6 @@ def _normalize_sdk_event(event: object) -> NormalizedEvent | None:
                 "call_id": event.item.call_id,
                 "name": event.item.name,
                 "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
-                "namespace": event.item.namespace,
             }
         case ResponseFunctionCallArgumentsDeltaEvent():
             return {
@@ -145,7 +144,6 @@ def _normalize_sdk_event(event: object) -> NormalizedEvent | None:
                 "call_id": event.item.call_id,
                 "name": event.item.name,
                 "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
-                "namespace": event.item.namespace,
             }
         case ResponseCompletedEvent():
             return {

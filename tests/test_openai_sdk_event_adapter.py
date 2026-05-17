@@ -303,7 +303,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 call_id="call_added",
                 name="get_weather",
                 arguments='{"city":"Berlin"}',
-                namespace="weather",
             ),
             expected_event={
                 "type": NormalizedEventType.TOOL_CALL_ADDED,
@@ -311,7 +310,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "call_id": "call_added",
                 "name": "get_weather",
                 "arguments": {"city": "Berlin"},
-                "namespace": "weather",
             },
         ),
         NormalizationCase(
@@ -322,7 +320,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 call_id="call_added_blank",
                 name="get_weather",
                 arguments="",
-                namespace="weather",
             ),
             expected_event={
                 "type": NormalizedEventType.TOOL_CALL_ADDED,
@@ -330,7 +327,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "call_id": "call_added_blank",
                 "name": "get_weather",
                 "arguments": {},
-                "namespace": "weather",
             },
         ),
         NormalizationCase(
@@ -379,7 +375,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 call_id="call_done",
                 name="get_weather",
                 arguments='{"city":"Berlin"}',
-                namespace="weather",
             ),
             expected_event={
                 "type": NormalizedEventType.TOOL_CALL_DONE,
@@ -387,7 +382,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "call_id": "call_done",
                 "name": "get_weather",
                 "arguments": {"city": "Berlin"},
-                "namespace": "weather",
             },
         ),
         NormalizationCase(
@@ -398,7 +392,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 call_id="call_done_non_object",
                 name="get_weather",
                 arguments='["Berlin"]',
-                namespace="weather",
             ),
             expected_event={
                 "type": NormalizedEventType.TOOL_CALL_DONE,
@@ -406,7 +399,6 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "call_id": "call_done_non_object",
                 "name": "get_weather",
                 "arguments": {},
-                "namespace": "weather",
             },
         ),
     ]
@@ -778,7 +770,6 @@ def _tool_call_added_raw_event(
     call_id: str,
     name: str,
     arguments: str,
-    namespace: str | None,
 ) -> ResponseOutputItemAddedEvent:
     """Builds a raw function-call added event."""
 
@@ -794,7 +785,6 @@ def _tool_call_added_raw_event(
                 "call_id": call_id,
                 "name": name,
                 "arguments": arguments,
-                "namespace": namespace,
             },
         }
     )
@@ -847,7 +837,6 @@ def _tool_call_done_raw_event(
     call_id: str,
     name: str,
     arguments: str,
-    namespace: str | None,
 ) -> ResponseOutputItemDoneEvent:
     """Builds a raw function-call done event."""
 
@@ -863,7 +852,6 @@ def _tool_call_done_raw_event(
                 "call_id": call_id,
                 "name": name,
                 "arguments": arguments,
-                "namespace": namespace,
             },
         }
     )

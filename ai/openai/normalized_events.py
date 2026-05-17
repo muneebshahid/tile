@@ -100,7 +100,6 @@ class ToolCallAddedNormalizedEvent(TypedDict):
     call_id: str
     name: str
     arguments: JsonObject
-    namespace: str | None
 
 
 class ToolCallArgumentsDeltaNormalizedEvent(TypedDict):
@@ -125,7 +124,6 @@ class ToolCallDoneNormalizedEvent(TypedDict):
     call_id: str
     name: str
     arguments: JsonObject
-    namespace: str | None
 
 
 class CompletedNormalizedEvent(TypedDict):

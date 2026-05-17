@@ -33,7 +33,6 @@ class ToolCallBlock(BaseModel):
     name: str
     arguments: JsonObject = Field(default_factory=dict)
     provider_item_id: str | None = None
-    namespace: str | None = None
 
 
 AssistantBlock: TypeAlias = TextBlock | ReasoningBlock | ToolCallBlock
