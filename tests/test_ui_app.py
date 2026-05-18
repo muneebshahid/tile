@@ -155,27 +155,27 @@ def test_pressing_enter_appends_user_message_to_agent_history() -> None:
 
 def test_pressing_enter_streams_agent_text_into_output() -> None:
     async def _run() -> None:
-        partial_message = AssistantMessage(
+        stream_message = AssistantMessage(
             response_id="resp_123",
-            content=[TextBlock(text="Hello from agent")],
+            blocks=[TextBlock(text="Hello from agent")],
         )
         final_message = AssistantMessage(
             response_id="resp_123",
-            content=[TextBlock(text="Hello from agent")],
+            blocks=[TextBlock(text="Hello from agent")],
         )
         agent = _build_agent(
             [
                 StreamStartEvent(
                     type="start",
-                    partial=AssistantMessage(response_id="resp_123"),
+                    message=AssistantMessage(response_id="resp_123"),
                 ),
-                TextStartEvent(type="text_start", partial=partial_message),
+                TextStartEvent(type="text_start", message=stream_message),
                 TextDeltaEvent(
                     type="text_delta",
                     delta="Hello from agent",
-                    partial=partial_message,
+                    message=stream_message,
                 ),
-                TextEndEvent(type="text_end", partial=partial_message),
+                TextEndEvent(type="text_end", message=stream_message),
                 StreamDoneEvent(type="done", message=final_message),
             ]
         )
@@ -206,13 +206,13 @@ def test_message_end_renders_final_text_without_text_deltas() -> None:
     async def _run() -> None:
         final_message = AssistantMessage(
             response_id="resp_456",
-            content=[TextBlock(text="Final text only")],
+            blocks=[TextBlock(text="Final text only")],
         )
         agent = _build_agent(
             [
                 StreamStartEvent(
                     type="start",
-                    partial=AssistantMessage(response_id="resp_456"),
+                    message=AssistantMessage(response_id="resp_456"),
                 ),
                 StreamDoneEvent(type="done", message=final_message),
             ]
@@ -248,7 +248,7 @@ def test_message_end_renders_stream_error_without_text_deltas() -> None:
             [
                 StreamStartEvent(
                     type="start",
-                    partial=AssistantMessage(response_id="resp_error"),
+                    message=AssistantMessage(response_id="resp_error"),
                 ),
                 StreamErrorEvent(type="error", error=error_message),
             ]

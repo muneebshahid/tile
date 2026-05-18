@@ -105,7 +105,7 @@ def _serialize_assistant_turn(
 ) -> ResponseInputParam:
     items: ResponseInputParam = []
 
-    for block_index, block in enumerate(turn.content):
+    for block_index, block in enumerate(turn.blocks):
         match block:
             case ReasoningBlock(reasoning_signature=reasoning_signature) if (
                 reasoning_signature is not None

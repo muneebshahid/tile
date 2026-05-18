@@ -108,7 +108,7 @@ class PiyApp(App[None]):
             case TextStartEvent():
                 active_widget = await self._get_or_activate_active_widget()
                 active_widget.set_text(
-                    _extract_assistant_text(event.message.content, None)
+                    _extract_assistant_text(event.message.blocks, None)
                 )
             case TextDeltaEvent(delta=delta):
                 active_widget = await self._get_or_activate_active_widget()
@@ -119,7 +119,7 @@ class PiyApp(App[None]):
         """Reconcile the active widget with the final assistant message."""
         message = event.message
 
-        if text := _extract_assistant_text(message.content, message.error_message):
+        if text := _extract_assistant_text(message.blocks, message.error_message):
             active_widget = await self._get_or_activate_active_widget()
             active_widget.set_text(text)
             self.query_one(OutputSection).scroll_end(animate=False)

@@ -50,10 +50,10 @@ from ai.types.tools import JsonObject
 TEvent = TypeVar("TEvent", bound=StreamEvent)
 
 
-def test_assemble_stream_accumulates_reasoning_and_text_with_shared_partial_state() -> (
+def test_assemble_stream_accumulates_reasoning_and_text_with_shared_message_state() -> (
     None
 ):
-    """Accumulates reasoning and text blocks onto a shared partial message."""
+    """Accumulates reasoning and text blocks onto a shared message message."""
 
     normalized_events = [
         _created_event("resp_success"),
@@ -91,11 +91,11 @@ def test_assemble_stream_accumulates_reasoning_and_text_with_shared_partial_stat
     text_delta_two = _expect_event_type(events[10], TextDeltaEvent)
     text_end = _expect_event_type(events[11], TextEndEvent)
     done = _expect_event_type(events[12], StreamDoneEvent)
-    shared_partial = reasoning_start.partial
-    final_reasoning_block = _expect_reasoning_block(shared_partial.content[0])
-    final_text_block = _expect_text_block(shared_partial.content[1])
-    done_reasoning_block = _expect_reasoning_block(done.message.content[0])
-    done_text_block = _expect_text_block(done.message.content[1])
+    shared_message = reasoning_start.message
+    final_reasoning_block = _expect_reasoning_block(shared_message.blocks[0])
+    final_text_block = _expect_text_block(shared_message.blocks[1])
+    done_reasoning_block = _expect_reasoning_block(done.message.blocks[0])
+    done_text_block = _expect_text_block(done.message.blocks[1])
 
     assert [event.type for event in events] == [
         "start",
@@ -112,20 +112,20 @@ def test_assemble_stream_accumulates_reasoning_and_text_with_shared_partial_stat
         "text_end",
         "done",
     ]
-    assert start.partial.response_id == "resp_success"
-    assert reasoning_start.partial.response_id == "resp_success"
-    assert start.partial is shared_partial
-    assert reasoning_delta_one.partial is shared_partial
-    assert reasoning_delta_two.partial is shared_partial
-    assert reasoning_delta_separator.partial is shared_partial
-    assert reasoning_delta_three.partial is shared_partial
-    assert reasoning_delta_four.partial is shared_partial
-    assert reasoning_end.partial is shared_partial
-    assert text_start.partial is shared_partial
-    assert text_delta_one.partial is shared_partial
-    assert text_delta_two.partial is shared_partial
-    assert text_end.partial is shared_partial
-    assert done.message is shared_partial
+    assert start.message.response_id == "resp_success"
+    assert reasoning_start.message.response_id == "resp_success"
+    assert start.message is shared_message
+    assert reasoning_delta_one.message is shared_message
+    assert reasoning_delta_two.message is shared_message
+    assert reasoning_delta_separator.message is shared_message
+    assert reasoning_delta_three.message is shared_message
+    assert reasoning_delta_four.message is shared_message
+    assert reasoning_end.message is shared_message
+    assert text_start.message is shared_message
+    assert text_delta_one.message is shared_message
+    assert text_delta_two.message is shared_message
+    assert text_end.message is shared_message
+    assert done.message is shared_message
     assert reasoning_delta_one.delta == "Exploring "
     assert reasoning_delta_two.delta == "reasoning traces"
     assert reasoning_delta_separator.delta == "\n\n"
@@ -169,8 +169,8 @@ def test_assemble_stream_preserves_reasoning_deltas_when_done_summary_is_empty()
 
     reasoning_end = _expect_event_type(events[3], ReasoningEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
-    reasoning_block = _expect_reasoning_block(reasoning_end.partial.content[0])
-    done_reasoning_block = _expect_reasoning_block(done.message.content[0])
+    reasoning_block = _expect_reasoning_block(reasoning_end.message.blocks[0])
+    done_reasoning_block = _expect_reasoning_block(done.message.blocks[0])
 
     assert [event.type for event in events] == [
         "start",
@@ -183,7 +183,7 @@ def test_assemble_stream_preserves_reasoning_deltas_when_done_summary_is_empty()
     assert done_reasoning_block.summary_text == "Draft summary"
 
 
-def test_assemble_stream_maps_refusal_deltas_with_shared_partial_state() -> None:
+def test_assemble_stream_maps_refusal_deltas_with_shared_message_state() -> None:
     """Accumulates refusal deltas onto the active text block."""
 
     events = _collect_stream_events(
@@ -201,9 +201,9 @@ def test_assemble_stream_maps_refusal_deltas_with_shared_partial_state() -> None
     text_delta = _expect_event_type(events[2], TextDeltaEvent)
     text_end = _expect_event_type(events[3], TextEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
-    shared_partial = text_start.partial
-    text_block = _expect_text_block(shared_partial.content[0])
-    done_text_block = _expect_text_block(done.message.content[0])
+    shared_message = text_start.message
+    text_block = _expect_text_block(shared_message.blocks[0])
+    done_text_block = _expect_text_block(done.message.blocks[0])
 
     assert [event.type for event in events] == [
         "start",
@@ -212,17 +212,17 @@ def test_assemble_stream_maps_refusal_deltas_with_shared_partial_state() -> None
         "text_end",
         "done",
     ]
-    assert text_start.partial is shared_partial
-    assert text_delta.partial is shared_partial
-    assert text_end.partial is shared_partial
+    assert text_start.message is shared_message
+    assert text_delta.message is shared_message
+    assert text_end.message is shared_message
     assert text_delta.delta == "No"
     assert text_block.text == "No thanks"
-    assert done.message is shared_partial
+    assert done.message is shared_message
     assert done_text_block.text == "No thanks"
 
 
-def test_assemble_stream_maps_tool_call_events_with_shared_partial_state() -> None:
-    """Accumulates tool-call events onto the shared partial message."""
+def test_assemble_stream_maps_tool_call_events_with_shared_message_state() -> None:
+    """Accumulates tool-call events onto the shared message message."""
 
     events = _collect_stream_events(
         [
@@ -251,9 +251,9 @@ def test_assemble_stream_maps_tool_call_events_with_shared_partial_state() -> No
     tool_call_delta_two = _expect_event_type(events[3], ToolCallDeltaEvent)
     tool_call_end = _expect_event_type(events[4], ToolCallEndEvent)
     done = _expect_event_type(events[5], StreamDoneEvent)
-    shared_partial = tool_call_start.partial
-    tool_call_block = _expect_tool_call_block(shared_partial.content[0])
-    done_tool_call_block = _expect_tool_call_block(done.message.content[0])
+    shared_message = tool_call_start.message
+    tool_call_block = _expect_tool_call_block(shared_message.blocks[0])
+    done_tool_call_block = _expect_tool_call_block(done.message.blocks[0])
 
     assert [event.type for event in events] == [
         "start",
@@ -263,10 +263,10 @@ def test_assemble_stream_maps_tool_call_events_with_shared_partial_state() -> No
         "tool_call_end",
         "done",
     ]
-    assert tool_call_start.partial is shared_partial
-    assert tool_call_delta_one.partial is shared_partial
-    assert tool_call_delta_two.partial is shared_partial
-    assert tool_call_end.partial is shared_partial
+    assert tool_call_start.message is shared_message
+    assert tool_call_delta_one.message is shared_message
+    assert tool_call_delta_two.message is shared_message
+    assert tool_call_end.message is shared_message
     assert tool_call_delta_one.delta == '{"'
     assert tool_call_delta_two.delta == 'city":"Munich"}'
     assert tool_call_block.call_id == "call_123"
@@ -274,7 +274,7 @@ def test_assemble_stream_maps_tool_call_events_with_shared_partial_state() -> No
     assert tool_call_block.provider_item_id == "fc_123"
     assert tool_call_block.arguments == {"city": "Munich"}
     assert done.message.stop_reason == "tool_use"
-    assert done.message is shared_partial
+    assert done.message is shared_message
     assert done_tool_call_block.arguments == {"city": "Munich"}
 
 
@@ -308,7 +308,7 @@ def test_assemble_stream_ignores_text_deltas_when_refusal_part_is_active() -> No
     ]
     assert text_delta_one.delta == "No"
     assert text_delta_two.delta == " thanks"
-    assert _expect_text_block(done.message.content[0]).text == "No thanks"
+    assert _expect_text_block(done.message.blocks[0]).text == "No thanks"
 
 
 def test_assemble_stream_clears_active_text_mode_for_unsupported_parts() -> None:
@@ -335,8 +335,8 @@ def test_assemble_stream_clears_active_text_mode_for_unsupported_parts() -> None
         "text_end",
         "done",
     ]
-    assert _expect_text_block(text_end.partial.content[0]).text == ""
-    assert _expect_text_block(done.message.content[0]).text == ""
+    assert _expect_text_block(text_end.message.blocks[0]).text == ""
+    assert _expect_text_block(done.message.blocks[0]).text == ""
 
 
 def test_assemble_stream_maps_failed_response_into_error_event() -> None:
@@ -381,7 +381,7 @@ def test_assemble_stream_maps_incomplete_length_into_done() -> None:
         "done",
     ]
     assert done.message.stop_reason == "length"
-    assert _expect_text_block(done.message.content[0]).text == "Partial answer"
+    assert _expect_text_block(done.message.blocks[0]).text == "Partial answer"
 
 
 def test_assemble_stream_maps_incomplete_error_into_error_event() -> None:
@@ -424,7 +424,7 @@ def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
 
     assert [event.type for event in events] == ["start", "done"]
     assert done.message.response_id == "resp_done"
-    assert done.message.content == []
+    assert done.message.blocks == []
 
 
 def _collect_stream_events(

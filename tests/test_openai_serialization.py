@@ -16,7 +16,7 @@ def test_serialize_response_input_flattens_sample_thread() -> None:
         UserMessage(content="Write a haiku about rain."),
         AssistantTurn(
             response_id="resp_123",
-            content=[
+            blocks=[
                 ReasoningBlock(
                     summary_text="Draft a short seasonal poem.",
                     reasoning_signature='{"id":"rs_123","type":"reasoning","summary":[{"type":"summary_text","text":"Draft a short seasonal poem."}],"encrypted_content":"enc_123","status":"completed"}',
@@ -30,7 +30,7 @@ def test_serialize_response_input_flattens_sample_thread() -> None:
         ),
         AssistantTurn(
             status="aborted",
-            content=[
+            blocks=[
                 ReasoningBlock(
                     summary_text="This partial turn should be skipped.",
                 )
@@ -92,7 +92,7 @@ def test_serialize_response_input_flattens_sample_thread() -> None:
 def test_serialize_history_items_skips_reasoning_without_replay_metadata() -> None:
     history = [
         AssistantTurn(
-            content=[
+            blocks=[
                 ReasoningBlock(summary_text="Think first."),
                 TextBlock(text="Answer next."),
             ]
@@ -122,7 +122,7 @@ def test_serialize_history_items_skips_reasoning_without_replay_metadata() -> No
 def test_serialize_history_items_skips_reasoning_without_signature() -> None:
     history = [
         AssistantTurn(
-            content=[
+            blocks=[
                 ReasoningBlock(
                     summary_text="Think first.",
                 )
@@ -139,7 +139,7 @@ def test_serialize_history_items_skips_reasoning_without_signature() -> None:
 def test_serialize_history_items_generates_fallback_message_ids() -> None:
     history = [
         AssistantTurn(
-            content=[
+            blocks=[
                 TextBlock(text="Answer next."),
             ]
         )
@@ -168,7 +168,7 @@ def test_serialize_history_items_generates_fallback_message_ids() -> None:
 def test_serialize_history_items_replays_tool_calls_and_tool_results() -> None:
     history = [
         AssistantTurn(
-            content=[
+            blocks=[
                 TextBlock(text="Checking the weather.", message_id="msg_0"),
                 ToolCallBlock(
                     call_id="call_123",

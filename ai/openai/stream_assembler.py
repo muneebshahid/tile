@@ -56,7 +56,7 @@ TERMINAL_NORMALIZED_EVENT_TYPES: frozenset[NormalizedEventType] = frozenset(
 class StreamAssemblyState:
     """Mutable state used while assembling one assistant stream."""
 
-    partial: AssistantMessage = field(default_factory=AssistantMessage)
+    message: AssistantMessage = field(default_factory=AssistantMessage)
     active_block: AssistantBlock | None = None
     active_text_part_type: TextPartType | None = None
 
@@ -67,7 +67,7 @@ async def assemble_stream(
     """Assemble normalized provider events into app-level stream events."""
 
     state = StreamAssemblyState()
-    yield StreamStartEvent(type="start", partial=state.partial)
+    yield StreamStartEvent(type="start", message=state.message)
 
     async for event in normalized_stream:
         if adapted_event := _yield_stream_event(state, event):
@@ -84,7 +84,7 @@ def _yield_stream_event(
     match event["type"]:
         case NormalizedEventType.CREATED:
             created_event = cast(CreatedNormalizedEvent, event)
-            state.partial.response_id = created_event["response_id"]
+            state.message.response_id = created_event["response_id"]
 
         case NormalizedEventType.REASONING_ADDED:
             return _start_reasoning_block(state)
@@ -156,8 +156,8 @@ def _start_reasoning_block(state: StreamAssemblyState) -> ReasoningStartEvent:
     reasoning_block = ReasoningBlock(summary_text="")
     state.active_block = reasoning_block
     state.active_text_part_type = None
-    state.partial.content.append(reasoning_block)
-    return ReasoningStartEvent(type="reasoning_start", partial=state.partial)
+    state.message.blocks.append(reasoning_block)
+    return ReasoningStartEvent(type="reasoning_start", message=state.message)
 
 
 def _append_reasoning_delta(
@@ -171,7 +171,7 @@ def _append_reasoning_delta(
     return ReasoningDeltaEvent(
         type="reasoning_delta",
         delta=delta,
-        partial=state.partial,
+        message=state.message,
     )
 
 
@@ -186,7 +186,7 @@ def _finalize_reasoning_block(
         state.active_block.summary_text = event["summary_text"]
     state.active_block.reasoning_signature = event["reasoning_signature"]
     state.active_block = None
-    return ReasoningEndEvent(type="reasoning_end", partial=state.partial)
+    return ReasoningEndEvent(type="reasoning_end", message=state.message)
 
 
 def _start_text_block(
@@ -200,8 +200,8 @@ def _start_text_block(
     )
     state.active_block = text_block
     state.active_text_part_type = None
-    state.partial.content.append(text_block)
-    return TextStartEvent(type="text_start", partial=state.partial)
+    state.message.blocks.append(text_block)
+    return TextStartEvent(type="text_start", message=state.message)
 
 
 def _activate_text_part(
@@ -224,7 +224,7 @@ def _append_text_delta(
 
     delta = event["delta"]
     state.active_block.text += delta
-    return TextDeltaEvent(type="text_delta", delta=delta, partial=state.partial)
+    return TextDeltaEvent(type="text_delta", delta=delta, message=state.message)
 
 
 def _finalize_text_block(
@@ -239,7 +239,7 @@ def _finalize_text_block(
     state.active_block.phase = event["phase"]
     state.active_block = None
     state.active_text_part_type = None
-    return TextEndEvent(type="text_end", partial=state.partial)
+    return TextEndEvent(type="text_end", message=state.message)
 
 
 def _start_tool_call_block(
@@ -254,8 +254,8 @@ def _start_tool_call_block(
         provider_item_id=event["provider_item_id"],
     )
     state.active_block = tool_call_block
-    state.partial.content.append(tool_call_block)
-    return ToolCallStartEvent(type="tool_call_start", partial=state.partial)
+    state.message.blocks.append(tool_call_block)
+    return ToolCallStartEvent(type="tool_call_start", message=state.message)
 
 
 def _append_tool_call_arguments_delta(
@@ -268,7 +268,7 @@ def _append_tool_call_arguments_delta(
     return ToolCallDeltaEvent(
         type="tool_call_delta",
         delta=delta,
-        partial=state.partial,
+        message=state.message,
     )
 
 
@@ -292,21 +292,21 @@ def _finalize_tool_call_block(
     state.active_block.arguments = event["arguments"]
     state.active_block.provider_item_id = event["provider_item_id"]
     state.active_block = None
-    return ToolCallEndEvent(type="tool_call_end", partial=state.partial)
+    return ToolCallEndEvent(type="tool_call_end", message=state.message)
 
 
 def _build_stream_done_event(
     state: StreamAssemblyState,
     stop_reason: StopReason,
 ) -> StreamDoneEvent:
-    state.partial.stop_reason = stop_reason
-    return StreamDoneEvent(type="done", message=state.partial)
+    state.message.stop_reason = stop_reason
+    return StreamDoneEvent(type="done", message=state.message)
 
 
 def _build_stream_error_event(
     state: StreamAssemblyState,
     error_message: str,
 ) -> StreamErrorEvent:
-    state.partial.stop_reason = "error"
-    state.partial.error_message = error_message
-    return StreamErrorEvent(type="error", error=state.partial)
+    state.message.stop_reason = "error"
+    state.message.error_message = error_message
+    return StreamErrorEvent(type="error", error=state.message)
