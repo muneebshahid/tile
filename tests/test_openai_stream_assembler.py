@@ -1,4 +1,11 @@
-"""Tests for assembling normalized provider events into stream events."""
+"""Tests for assembling normalized provider events into stream events.
+
+These tests document the middle of the streaming lifecycle. OpenAI transport
+adapters produce normalized events such as ``CREATED``, ``MESSAGE_TEXT_PART``,
+``MESSAGE_TEXT_DELTA``, and ``COMPLETED``. The stream assembler consumes those
+events, mutates one shared assistant message, and emits app-level stream events
+such as ``text_start``, ``text_delta``, ``text_end``, and ``done``.
+"""
 
 import asyncio
 from collections.abc import AsyncIterator, Sequence

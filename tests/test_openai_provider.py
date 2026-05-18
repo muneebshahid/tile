@@ -1,3 +1,17 @@
+"""Tests for OpenAI provider stream integration.
+
+These tests document the first half of the streaming lifecycle:
+
+1. Raw OpenAI SDK events or ChatGPT subscription SSE payloads are created in the
+   test itself.
+2. The provider passes those raw events through the matching adapter.
+3. The adapter emits normalized events, and ``assemble_stream`` turns them into
+   app-level ``StreamEvent`` models.
+
+The expected ``StreamEvent`` order in each test is the executable spec for how
+raw OpenAI events correspond to application stream events.
+"""
+
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence

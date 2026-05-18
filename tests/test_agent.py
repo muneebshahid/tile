@@ -1,3 +1,11 @@
+"""Tests for translating stream events into agent events.
+
+These tests document the final streaming lifecycle layer. The agent receives
+app-level ``StreamEvent`` models, emits ``message_start`` and ``message_update``
+events while the assistant message is streaming, finalizes history on ``done``
+or ``error``, and executes tools before starting a follow-up assistant turn.
+"""
+
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
