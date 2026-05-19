@@ -6,198 +6,316 @@ This document maps raw OpenAI stream events from both supported transports to th
 - `tests/test_openai_stream_assembler.py` covers normalized events through app stream events.
 - `tests/test_agent.py` covers app stream events through agent events.
 
-## Pipeline
+The diagrams below use actor-style Mermaid sequence diagrams. Columns are stages in the pipeline, and time flows from top to bottom.
+
+## Actors
 
 ```mermaid
-flowchart TD
-    sdk["OpenAI SDK raw event object"]
-    subscription["ChatGPT subscription SSE payload"]
-    sdk_adapter["normalize_sdk_events"]
-    subscription_adapter["normalize_subscription_events"]
-    normalized["NormalizedEvent"]
-    assembler["assemble_stream"]
-    stream["StreamEvent"]
-    agent["Agent.run"]
-    agent_event["AgentEvent"]
-    history["conversation history"]
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant SDKA as normalize_sdk_events
+    participant SubA as normalize_subscription_events
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
+    participant Hist as Conversation history
 
-    sdk --> sdk_adapter
-    subscription --> subscription_adapter
-    sdk_adapter --> normalized
-    subscription_adapter --> normalized
-    normalized --> assembler
-    assembler --> stream
-    stream --> agent
-    agent --> agent_event
-    agent --> history
+    SDK->>SDKA: OpenAI Python SDK event object
+    Sub->>SubA: ChatGPT subscription SSE payload
+    SDKA->>Norm: transport-independent event
+    SubA->>Norm: transport-independent event
+    Norm->>Asm: consumed in order
+    Asm->>Stream: app-level stream event
+    Stream->>Agent: consumed in order
+    Agent->>Hist: finalized assistant/tool-result turns
 ```
 
-`assemble_stream` emits `StreamStartEvent` before consuming the first normalized event. Later `CREATED` events mutate that same shared assistant message with the provider response id.
+## Stream Start And Created
 
-## Response Start
+`assemble_stream` emits a start event before it consumes provider events. The later `CREATED` event mutates the same shared assistant message with the provider response id.
 
 ```mermaid
-flowchart TD
-    start["assemble_stream starts"]
-    stream_start["StreamStartEvent(type=start, message=empty AssistantMessage)"]
-    agent_turn_start["TurnStartEvent"]
-    agent_message_start["MessageStartEvent(message=AssistantMessage)"]
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
 
-    raw_created["SDK: ResponseCreatedEvent<br/>Subscription: response.created"]
-    normalized_created["NormalizedEventType.CREATED<br/>response_id"]
-    mutate_response_id["Assembler mutates message.response_id<br/>no new StreamEvent"]
+    Asm->>Stream: StreamStartEvent(message=empty AssistantMessage)
+    Stream->>Agent: start
+    Agent-->>Agent: emit TurnStartEvent
+    Agent-->>Agent: emit MessageStartEvent(message)
 
-    start --> stream_start
-    stream_start --> agent_turn_start
-    agent_turn_start --> agent_message_start
-
-    raw_created --> normalized_created
-    normalized_created --> mutate_response_id
-    mutate_response_id -. "same shared message object" .-> agent_message_start
+    SDK->>Adapter: ResponseCreatedEvent
+    Sub->>Adapter: response.created
+    Adapter->>Norm: CREATED(response_id)
+    Norm->>Asm: CREATED
+    Asm-->>Asm: message.response_id = response_id
+    Note over Asm,Agent: No new StreamEvent is emitted. The shared message is mutated.
 ```
 
-## Reasoning Events
+## Reasoning Item
+
+Reasoning summary deltas and reasoning text deltas both normalize to `REASONING_DELTA`. A reasoning summary part completion becomes a paragraph-separator reasoning delta.
 
 ```mermaid
-flowchart TD
-    raw_reasoning_added["SDK: ResponseOutputItemAddedEvent(item=reasoning)<br/>Subscription: response.output_item.added item.type=reasoning"]
-    normalized_reasoning_added["REASONING_ADDED"]
-    start_reasoning["Assembler creates ReasoningBlock<br/>active_block=ReasoningBlock"]
-    reasoning_start["ReasoningStartEvent"]
-    agent_reasoning_start["MessageUpdateEvent(stream_event=reasoning_start)"]
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
 
-    raw_reasoning_delta["SDK: ResponseReasoningSummaryTextDeltaEvent<br/>SDK: ResponseReasoningTextDeltaEvent<br/>Subscription: response.reasoning_summary_text.delta<br/>Subscription: response.reasoning_text.delta"]
-    normalized_reasoning_delta["REASONING_DELTA"]
-    append_reasoning["Append delta to ReasoningBlock.summary_text"]
-    reasoning_delta["ReasoningDeltaEvent"]
-    agent_reasoning_delta["MessageUpdateEvent(stream_event=reasoning_delta)"]
+    SDK->>Adapter: ResponseOutputItemAddedEvent(item=reasoning)
+    Sub->>Adapter: response.output_item.added(item.type=reasoning)
+    Adapter->>Norm: REASONING_ADDED(item_id)
+    Norm->>Asm: REASONING_ADDED
+    Asm-->>Asm: create ReasoningBlock and set active_block=ReasoningBlock
+    Asm->>Stream: ReasoningStartEvent(message)
+    Stream->>Agent: reasoning_start
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_reasoning_part_done["SDK: ResponseReasoningSummaryPartDoneEvent<br/>Subscription: response.reasoning_summary_part.done"]
-    normalized_reasoning_separator["REASONING_DELTA(delta='\\n\\n')"]
+    SDK->>Adapter: ResponseReasoningSummaryTextDeltaEvent
+    SDK->>Adapter: ResponseReasoningTextDeltaEvent
+    Sub->>Adapter: response.reasoning_summary_text.delta
+    Sub->>Adapter: response.reasoning_text.delta
+    Adapter->>Norm: REASONING_DELTA(delta)
+    Norm->>Asm: REASONING_DELTA
+    Asm-->>Asm: append delta to ReasoningBlock.summary_text
+    Asm->>Stream: ReasoningDeltaEvent(delta, message)
+    Stream->>Agent: reasoning_delta
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_reasoning_done["SDK: ResponseOutputItemDoneEvent(item=reasoning)<br/>Subscription: response.output_item.done item.type=reasoning"]
-    normalized_reasoning_done["REASONING_DONE<br/>summary_text + reasoning_signature"]
-    finalize_reasoning["Finalize ReasoningBlock<br/>active_block=None"]
-    reasoning_end["ReasoningEndEvent"]
-    agent_reasoning_end["MessageUpdateEvent(stream_event=reasoning_end)"]
+    SDK->>Adapter: ResponseReasoningSummaryPartDoneEvent
+    Sub->>Adapter: response.reasoning_summary_part.done
+    Adapter->>Norm: REASONING_DELTA(delta="\\n\\n")
+    Norm->>Asm: REASONING_DELTA
+    Asm-->>Asm: append paragraph separator
+    Asm->>Stream: ReasoningDeltaEvent(delta, message)
+    Stream->>Agent: reasoning_delta
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_reasoning_added --> normalized_reasoning_added --> start_reasoning --> reasoning_start --> agent_reasoning_start
-    raw_reasoning_delta --> normalized_reasoning_delta --> append_reasoning --> reasoning_delta --> agent_reasoning_delta
-    raw_reasoning_part_done --> normalized_reasoning_separator --> append_reasoning
-    raw_reasoning_done --> normalized_reasoning_done --> finalize_reasoning --> reasoning_end --> agent_reasoning_end
+    SDK->>Adapter: ResponseOutputItemDoneEvent(item=reasoning)
+    Sub->>Adapter: response.output_item.done(item.type=reasoning)
+    Adapter->>Norm: REASONING_DONE(summary_text, reasoning_signature)
+    Norm->>Asm: REASONING_DONE
+    Asm-->>Asm: finalize ReasoningBlock and set active_block=None
+    Asm->>Stream: ReasoningEndEvent(message)
+    Stream->>Agent: reasoning_end
+    Agent-->>Agent: emit MessageUpdateEvent
 ```
 
-## Text And Refusal Events
+## Text And Refusal Item
+
+`MESSAGE_TEXT_PART` selects which text channel is active. Output-text deltas are ignored while refusal is active, refusal deltas are ignored while output text is active, and unsupported parts set the active part to `None`.
 
 ```mermaid
-flowchart TD
-    raw_message_added["SDK: ResponseOutputItemAddedEvent(item=message)<br/>Subscription: response.output_item.added item.type=message"]
-    normalized_message_added["MESSAGE_ADDED"]
-    start_text["Assembler creates TextBlock<br/>active_block=TextBlock<br/>active_text_part_type=None"]
-    text_start["TextStartEvent"]
-    agent_text_start["MessageUpdateEvent(stream_event=text_start)"]
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
 
-    raw_part_added["SDK: ResponseContentPartAddedEvent<br/>Subscription: response.content_part.added"]
-    normalized_part["MESSAGE_TEXT_PART<br/>part_type=output_text | refusal | None"]
-    activate_part["Set active_text_part_type<br/>no StreamEvent"]
+    SDK->>Adapter: ResponseOutputItemAddedEvent(item=message)
+    Sub->>Adapter: response.output_item.added(item.type=message)
+    Adapter->>Norm: MESSAGE_ADDED(item_id, phase)
+    Norm->>Asm: MESSAGE_ADDED
+    Asm-->>Asm: create TextBlock and set active_text_part_type=None
+    Asm->>Stream: TextStartEvent(message)
+    Stream->>Agent: text_start
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_output_delta["SDK: ResponseTextDeltaEvent<br/>Subscription: response.output_text.delta"]
-    normalized_output_delta["MESSAGE_TEXT_DELTA(part_type=output_text)"]
-    raw_refusal_delta["SDK: ResponseRefusalDeltaEvent<br/>Subscription: response.refusal.delta"]
-    normalized_refusal_delta["MESSAGE_TEXT_DELTA(part_type=refusal)"]
-    part_guard["Append only if active_text_part_type matches delta part_type"]
-    text_delta["TextDeltaEvent"]
-    agent_text_delta["MessageUpdateEvent(stream_event=text_delta)"]
+    SDK->>Adapter: ResponseContentPartAddedEvent
+    Sub->>Adapter: response.content_part.added
+    Adapter->>Norm: MESSAGE_TEXT_PART(output_text | refusal | None)
+    Norm->>Asm: MESSAGE_TEXT_PART
+    Asm-->>Asm: set active_text_part_type
+    Note over Asm: No StreamEvent is emitted for content-part activation.
 
-    raw_message_done["SDK: ResponseOutputItemDoneEvent(item=message)<br/>Subscription: response.output_item.done item.type=message"]
-    normalized_message_done["MESSAGE_DONE<br/>final text + phase"]
-    finalize_text["Finalize TextBlock<br/>active_block=None<br/>active_text_part_type=None"]
-    text_end["TextEndEvent"]
-    agent_text_end["MessageUpdateEvent(stream_event=text_end)"]
+    SDK->>Adapter: ResponseTextDeltaEvent
+    Sub->>Adapter: response.output_text.delta
+    Adapter->>Norm: MESSAGE_TEXT_DELTA(part_type=output_text)
+    Norm->>Asm: MESSAGE_TEXT_DELTA
+    Asm-->>Asm: append only if active_text_part_type=output_text
+    Asm->>Stream: TextDeltaEvent(delta, message)
+    Stream->>Agent: text_delta
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_message_added --> normalized_message_added --> start_text --> text_start --> agent_text_start
-    raw_part_added --> normalized_part --> activate_part
-    raw_output_delta --> normalized_output_delta --> part_guard
-    raw_refusal_delta --> normalized_refusal_delta --> part_guard
-    activate_part --> part_guard --> text_delta --> agent_text_delta
-    raw_message_done --> normalized_message_done --> finalize_text --> text_end --> agent_text_end
+    SDK->>Adapter: ResponseRefusalDeltaEvent
+    Sub->>Adapter: response.refusal.delta
+    Adapter->>Norm: MESSAGE_TEXT_DELTA(part_type=refusal)
+    Norm->>Asm: MESSAGE_TEXT_DELTA
+    Asm-->>Asm: append only if active_text_part_type=refusal
+    Asm->>Stream: TextDeltaEvent(delta, message)
+    Stream->>Agent: text_delta
+    Agent-->>Agent: emit MessageUpdateEvent
+
+    SDK->>Adapter: ResponseOutputItemDoneEvent(item=message)
+    Sub->>Adapter: response.output_item.done(item.type=message)
+    Adapter->>Norm: MESSAGE_DONE(text, phase)
+    Norm->>Asm: MESSAGE_DONE
+    Asm-->>Asm: finalize TextBlock and clear active_block and active_text_part_type
+    Asm->>Stream: TextEndEvent(message)
+    Stream->>Agent: text_end
+    Agent-->>Agent: emit MessageUpdateEvent
 ```
 
-Unsupported content parts normalize to `MESSAGE_TEXT_PART(part_type=None)`. That clears text accumulation until another supported `output_text` or `refusal` part becomes active.
+## Tool Call Item
 
-## Tool Call Events
+Argument deltas are emitted for streaming UI updates. Parsed arguments are stored on the tool-call block when the arguments-done or item-done events arrive.
 
 ```mermaid
-flowchart TD
-    raw_tool_added["SDK: ResponseOutputItemAddedEvent(item=function_call)<br/>Subscription: response.output_item.added item.type=function_call"]
-    normalized_tool_added["TOOL_CALL_ADDED<br/>provider_item_id + call_id + name + arguments"]
-    start_tool["Assembler creates ToolCallBlock<br/>active_block=ToolCallBlock"]
-    tool_start["ToolCallStartEvent"]
-    agent_tool_start_update["MessageUpdateEvent(stream_event=tool_call_start)"]
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
 
-    raw_tool_delta["SDK: ResponseFunctionCallArgumentsDeltaEvent<br/>Subscription: response.function_call_arguments.delta"]
-    normalized_tool_delta["TOOL_CALL_ARGUMENTS_DELTA"]
-    tool_delta_event["ToolCallDeltaEvent"]
-    agent_tool_delta_update["MessageUpdateEvent(stream_event=tool_call_delta)"]
+    SDK->>Adapter: ResponseOutputItemAddedEvent(item=function_call)
+    Sub->>Adapter: response.output_item.added(item.type=function_call)
+    Adapter->>Norm: TOOL_CALL_ADDED(provider_item_id, call_id, name, arguments)
+    Norm->>Asm: TOOL_CALL_ADDED
+    Asm-->>Asm: create ToolCallBlock and set active_block=ToolCallBlock
+    Asm->>Stream: ToolCallStartEvent(message)
+    Stream->>Agent: tool_call_start
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_tool_args_done["SDK: ResponseFunctionCallArgumentsDoneEvent<br/>Subscription: response.function_call_arguments.done"]
-    normalized_tool_args_done["TOOL_CALL_ARGUMENTS_DONE<br/>parsed arguments"]
-    replace_args["Replace ToolCallBlock.arguments<br/>no StreamEvent"]
+    SDK->>Adapter: ResponseFunctionCallArgumentsDeltaEvent
+    Sub->>Adapter: response.function_call_arguments.delta
+    Adapter->>Norm: TOOL_CALL_ARGUMENTS_DELTA(delta)
+    Norm->>Asm: TOOL_CALL_ARGUMENTS_DELTA
+    Asm->>Stream: ToolCallDeltaEvent(delta, message)
+    Stream->>Agent: tool_call_delta
+    Agent-->>Agent: emit MessageUpdateEvent
 
-    raw_tool_done["SDK: ResponseOutputItemDoneEvent(item=function_call)<br/>Subscription: response.output_item.done item.type=function_call"]
-    normalized_tool_done["TOOL_CALL_DONE<br/>final tool call data"]
-    finalize_tool["Finalize ToolCallBlock<br/>active_block=None"]
-    tool_end["ToolCallEndEvent"]
-    agent_tool_end_update["MessageUpdateEvent(stream_event=tool_call_end)"]
+    SDK->>Adapter: ResponseFunctionCallArgumentsDoneEvent
+    Sub->>Adapter: response.function_call_arguments.done
+    Adapter->>Norm: TOOL_CALL_ARGUMENTS_DONE(arguments)
+    Norm->>Asm: TOOL_CALL_ARGUMENTS_DONE
+    Asm-->>Asm: replace ToolCallBlock.arguments
+    Note over Asm: No StreamEvent is emitted for parsed-arguments replacement.
 
-    raw_tool_added --> normalized_tool_added --> start_tool --> tool_start --> agent_tool_start_update
-    raw_tool_delta --> normalized_tool_delta --> tool_delta_event --> agent_tool_delta_update
-    raw_tool_args_done --> normalized_tool_args_done --> replace_args
-    raw_tool_done --> normalized_tool_done --> finalize_tool --> tool_end --> agent_tool_end_update
+    SDK->>Adapter: ResponseOutputItemDoneEvent(item=function_call)
+    Sub->>Adapter: response.output_item.done(item.type=function_call)
+    Adapter->>Norm: TOOL_CALL_DONE(final tool call data)
+    Norm->>Asm: TOOL_CALL_DONE
+    Asm-->>Asm: finalize ToolCallBlock and set active_block=None
+    Asm->>Stream: ToolCallEndEvent(message)
+    Stream->>Agent: tool_call_end
+    Agent-->>Agent: emit MessageUpdateEvent
 ```
 
-`ToolCallDeltaEvent` reports the raw argument delta for UI streaming. Parsed arguments are stored on the `ToolCallBlock` when `TOOL_CALL_ARGUMENTS_DONE` or `TOOL_CALL_DONE` arrives.
-
-## Terminal Events And Agent Finalization
+## Completed Turn Without Tools
 
 ```mermaid
-flowchart TD
-    raw_completed["SDK: ResponseCompletedEvent<br/>Subscription: response.completed or response.done(status=completed)"]
-    normalized_completed["COMPLETED<br/>stop_reason=stop | tool_use"]
-    stream_done["StreamDoneEvent(message=AssistantMessage)"]
-    message_end["MessageEndEvent(message=AssistantTurn)"]
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
+    participant Hist as Conversation history
 
-    has_tools{"AssistantTurn contains ToolCallBlock?"}
-    no_tools["TurnEndEvent(tool_results=[])"]
-    tool_start["ToolExecutionStartEvent"]
-    tool_end["ToolExecutionEndEvent"]
-    tool_result["Append ToolResultTurn to history"]
-    tool_turn_end["TurnEndEvent(tool_results=[...])"]
-    follow_up["Agent starts another provider stream"]
-
-    raw_incomplete_length["SDK: ResponseIncompleteEvent<br/>Subscription: response.incomplete or response.done(status=incomplete)<br/>reason=max_output_tokens"]
-    normalized_incomplete_length["INCOMPLETE(stop_reason=length)"]
-
-    raw_incomplete_error["SDK: ResponseIncompleteEvent<br/>Subscription: response.incomplete or response.done(status=incomplete)<br/>reason=content_filter"]
-    normalized_incomplete_error["INCOMPLETE(stop_reason=error)"]
-    stream_error_from_incomplete["StreamErrorEvent(error=AssistantMessage)"]
-
-    raw_failed["SDK: ResponseFailedEvent<br/>SDK: ResponseErrorEvent<br/>Subscription: response.failed<br/>Subscription: error"]
-    normalized_failed["FAILED(message)"]
-    stream_error["StreamErrorEvent(error=AssistantMessage)"]
-    error_message_end["MessageEndEvent(message=AssistantTurn status=error)"]
-    error_turn_end["TurnEndEvent(tool_results=[])"]
-
-    raw_completed --> normalized_completed --> stream_done --> message_end --> has_tools
-    raw_incomplete_length --> normalized_incomplete_length --> stream_done
-    has_tools -- no --> no_tools
-    has_tools -- yes --> tool_start --> tool_end --> tool_result --> tool_turn_end --> follow_up
-
-    raw_incomplete_error --> normalized_incomplete_error --> stream_error_from_incomplete --> error_message_end --> error_turn_end
-    raw_failed --> normalized_failed --> stream_error --> error_message_end
+    SDK->>Adapter: ResponseCompletedEvent
+    Sub->>Adapter: response.completed or response.done(status=completed)
+    Adapter->>Norm: COMPLETED(stop_reason=stop)
+    Norm->>Asm: COMPLETED
+    Asm-->>Asm: message.stop_reason=stop
+    Asm->>Stream: StreamDoneEvent(message)
+    Stream->>Agent: done
+    Agent-->>Agent: build AssistantTurn(status=completed)
+    Agent->>Hist: append AssistantTurn
+    Agent-->>Agent: emit MessageEndEvent
+    Agent-->>Agent: emit TurnEndEvent(tool_results=[])
+    Agent-->>Agent: emit AgentEndEvent(items=history)
 ```
 
-The agent appends the finalized assistant turn to history on `StreamDoneEvent` and `StreamErrorEvent`. If the completed assistant turn contains tool calls, the agent executes tools, appends tool-result turns, ends the current turn, and then requests a follow-up assistant stream.
+## Completed Turn With Tools
+
+```mermaid
+sequenceDiagram
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
+    participant Tool as Tool execution
+    participant Hist as Conversation history
+
+    Adapter->>Norm: COMPLETED(stop_reason=tool_use)
+    Norm->>Asm: COMPLETED
+    Asm->>Stream: StreamDoneEvent(message with ToolCallBlock)
+    Stream->>Agent: done
+    Agent->>Hist: append AssistantTurn
+    Agent-->>Agent: emit MessageEndEvent
+    Agent->>Tool: execute tool call
+    Agent-->>Agent: emit ToolExecutionStartEvent
+    Tool-->>Agent: result
+    Agent-->>Agent: emit ToolExecutionEndEvent
+    Agent->>Hist: append ToolResultTurn
+    Agent-->>Agent: emit TurnEndEvent(tool_results=[...])
+    Agent-->>Agent: request follow-up stream
+    Note over Agent,Stream: The follow-up stream starts a new turn and repeats the same lifecycle.
+```
+
+## Incomplete And Failed Turns
+
+```mermaid
+sequenceDiagram
+    participant SDK as SDK raw event
+    participant Sub as Subscription raw event
+    participant Adapter as Adapter
+    participant Norm as NormalizedEvent
+    participant Asm as assemble_stream
+    participant Stream as StreamEvent
+    participant Agent as Agent.run
+    participant Hist as Conversation history
+
+    SDK->>Adapter: ResponseIncompleteEvent(max_output_tokens)
+    Sub->>Adapter: response.incomplete or response.done(status=incomplete)
+    Adapter->>Norm: INCOMPLETE(stop_reason=length)
+    Norm->>Asm: INCOMPLETE(length)
+    Asm->>Stream: StreamDoneEvent(message)
+    Stream->>Agent: done
+    Agent->>Hist: append AssistantTurn(status=completed, stop_reason=length)
+    Agent-->>Agent: emit MessageEndEvent
+    Agent-->>Agent: emit TurnEndEvent
+
+    SDK->>Adapter: ResponseIncompleteEvent(content_filter)
+    Sub->>Adapter: response.incomplete or response.done(status=incomplete)
+    Adapter->>Norm: INCOMPLETE(stop_reason=error)
+    Norm->>Asm: INCOMPLETE(error)
+    Asm->>Stream: StreamErrorEvent(error=message)
+    Stream->>Agent: error
+    Agent->>Hist: append AssistantTurn(status=error)
+    Agent-->>Agent: emit MessageEndEvent
+    Agent-->>Agent: emit TurnEndEvent(tool_results=[])
+
+    SDK->>Adapter: ResponseFailedEvent or ResponseErrorEvent
+    Sub->>Adapter: response.failed or error
+    Adapter->>Norm: FAILED(message)
+    Norm->>Asm: FAILED
+    Asm->>Stream: StreamErrorEvent(error=message)
+    Stream->>Agent: error
+    Agent->>Hist: append AssistantTurn(status=error)
+    Agent-->>Agent: emit MessageEndEvent
+    Agent-->>Agent: emit TurnEndEvent(tool_results=[])
+```
 
 ## Raw Event Mapping
 
