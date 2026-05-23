@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from agent.tools.ls import fn
+from agent.tools.ls import fn, ls
+
+
+def test_ls_schema_requires_only_path() -> None:
+    """Require only path so callers can omit optional limit."""
+
+    assert ls.input_schema["required"] == ["path"]
 
 
 @pytest.mark.asyncio

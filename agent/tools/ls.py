@@ -57,7 +57,7 @@ ls = ToolDefinition(
                 "description": "The maximum number of entries to list. Defaults to 500.",
             },
         },
-        "required": ["path", "limit"],
+        "required": ["path"],
         "additionalProperties": False,
     },
     fn=fn,
