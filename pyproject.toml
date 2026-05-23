@@ -9,6 +9,7 @@ dependencies = [
     "openai>=1.0.0",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
+    "textual>=8.2.1",
 ]
 
 [dependency-groups]
@@ -16,6 +17,7 @@ dev = [
     "jupyter>=1.1.1",
     "pytest>=8.4.2",
     "ruff>=0.15.6",
+    "textual-dev>=1.8.0",
     "ty>=0.0.24",
 ]
 

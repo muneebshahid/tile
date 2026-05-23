@@ -17,3 +17,4 @@ Any violations must be flagged and fixed
   - `make format` to format the code
   - `make type_check` to check for type errors
   - `make test` to run tests
+- Add documentation and docstrings to all function, classes, modules or even variables.

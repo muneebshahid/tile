@@ -84,15 +84,19 @@ class Agent:
     def history(self) -> Sequence[ConversationItem]:
         return tuple(self._history)
 
+    def add_user_message(self, text: str) -> UserMessage:
+        message = UserMessage(content=text)
+        self._history.append(message)
+        return message
+
     def replace_history(self, history: Sequence[ConversationItem]) -> None:
         self._history = list(history)
 
     def add_item(self, item: ConversationItem) -> None:
         self._history.append(item)
 
-    async def run(self, prompt: str) -> AsyncIterator[AgentEvent]:
+    async def run(self) -> AsyncIterator[AgentEvent]:
         yield AgentStartEvent()
-        self._history.append(UserMessage(content=prompt))
         async for event in self._run():
             yield event
         yield AgentEndEvent(items=self._history)
@@ -149,7 +153,7 @@ class Agent:
         event: StreamStartEvent,
     ) -> AsyncIterator[AgentEvent]:
         yield TurnStartEvent()
-        yield MessageStartEvent(message=event.partial)
+        yield MessageStartEvent(message=event.message)
 
     async def _handle_stream_done_event(
         self,
@@ -202,7 +206,7 @@ class Agent:
             | ToolCallEndEvent
         ),
     ) -> AsyncIterator[AgentEvent]:
-        yield MessageUpdateEvent(message=event.partial, stream_event=event)
+        yield MessageUpdateEvent(message=event.message, stream_event=event)
 
     async def _execute_tool(
         self,
@@ -247,7 +251,7 @@ def _build_assistant_turn(message: AssistantMessage) -> AssistantTurn:
         status = "error"
 
     return AssistantTurn(
-        content=[block.model_copy(deep=True) for block in message.content],
+        blocks=[block.model_copy(deep=True) for block in message.blocks],
         response_id=message.response_id,
         stop_reason=message.stop_reason,
         status=status,
@@ -258,7 +262,7 @@ def _build_assistant_turn(message: AssistantMessage) -> AssistantTurn:
 def _collect_tool_calls(message: AssistantMessage) -> list[ToolCallBlock]:
     return [
         block.model_copy(deep=True)
-        for block in message.content
+        for block in message.blocks
         if isinstance(block, ToolCallBlock)
     ]
 

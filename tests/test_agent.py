@@ -1,3 +1,11 @@
+"""Tests for translating stream events into agent events.
+
+These tests document the final streaming lifecycle layer. The agent receives
+app-level ``StreamEvent`` models, emits ``message_start`` and ``message_update``
+events while the assistant message is streaming, finalizes history on ``done``
+or ``error``, and executes tools before starting a follow-up assistant turn.
+"""
+
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
@@ -95,9 +103,9 @@ def _build_stream_fn(
     return _stream_fn
 
 
-def _collect_run_events(agent: Agent, prompt: str) -> list[AgentEvent]:
+def _collect_run_events(agent: Agent) -> list[AgentEvent]:
     async def _collect() -> list[AgentEvent]:
-        return [event async for event in agent.run(prompt)]
+        return [event async for event in agent.run()]
 
     return asyncio.run(_collect())
 
@@ -158,12 +166,22 @@ def _sample_tools() -> list[ToolDefinition]:
     ]
 
 
+def test_add_user_message_appends_user_turn_to_history() -> None:
+    agent = Agent(stream_fn=AsyncMock(), model="gpt-5.4")
+
+    agent.add_user_message("Hello, piy")
+
+    assert len(agent.history) == 1
+    user_message = _expect_user_message(agent.history[0])
+    assert user_message.content == "Hello, piy"
+
+
 def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     tools = _sample_tools()
     invocations: list[StreamInvocation] = []
-    tool_call_start_partial = AssistantMessage(
+    tool_call_start_message = AssistantMessage(
         response_id="resp_tool_call",
-        content=[
+        blocks=[
             ReasoningBlock(summary_text="Thinking about weather"),
             ToolCallBlock(
                 call_id="call_123",
@@ -173,53 +191,53 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
             ),
         ],
     )
-    reasoning_partial = AssistantMessage(
+    reasoning_message = AssistantMessage(
         response_id="resp_tool_call",
-        content=[ReasoningBlock(summary_text="Thinking about weather")],
+        blocks=[ReasoningBlock(summary_text="Thinking about weather")],
     )
-    text_partial = AssistantMessage(
+    text_message = AssistantMessage(
         response_id="resp_follow_up",
-        content=[TextBlock(text="It is sunny in Munich.")],
+        blocks=[TextBlock(text="It is sunny in Munich.")],
     )
     stream_fn = _build_stream_fn(
         streams=[
             [
                 StreamStartEvent(
                     type="start",
-                    partial=AssistantMessage(response_id="resp_tool_call"),
+                    message=AssistantMessage(response_id="resp_tool_call"),
                 ),
                 ReasoningStartEvent(
                     type="reasoning_start",
-                    partial=reasoning_partial,
+                    message=reasoning_message,
                 ),
                 ReasoningDeltaEvent(
                     type="reasoning_delta",
                     delta="Thinking about weather",
-                    partial=reasoning_partial,
+                    message=reasoning_message,
                 ),
                 ReasoningEndEvent(
                     type="reasoning_end",
-                    partial=reasoning_partial,
+                    message=reasoning_message,
                 ),
                 ToolCallStartEvent(
                     type="tool_call_start",
-                    partial=tool_call_start_partial,
+                    message=tool_call_start_message,
                 ),
                 ToolCallDeltaEvent(
                     type="tool_call_delta",
                     delta='{"city":"Munich"}',
-                    partial=tool_call_start_partial,
+                    message=tool_call_start_message,
                 ),
                 ToolCallEndEvent(
                     type="tool_call_end",
-                    partial=tool_call_start_partial,
+                    message=tool_call_start_message,
                 ),
                 StreamDoneEvent(
                     type="done",
                     message=AssistantMessage(
                         response_id="resp_tool_call",
                         stop_reason="tool_use",
-                        content=[
+                        blocks=[
                             ToolCallBlock(
                                 call_id="call_123",
                                 name="get_weather",
@@ -233,27 +251,27 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
             [
                 StreamStartEvent(
                     type="start",
-                    partial=AssistantMessage(response_id="resp_follow_up"),
+                    message=AssistantMessage(response_id="resp_follow_up"),
                 ),
                 TextStartEvent(
                     type="text_start",
-                    partial=text_partial,
+                    message=text_message,
                 ),
                 TextDeltaEvent(
                     type="text_delta",
                     delta="It is sunny in Munich.",
-                    partial=text_partial,
+                    message=text_message,
                 ),
                 TextEndEvent(
                     type="text_end",
-                    partial=text_partial,
+                    message=text_message,
                 ),
                 StreamDoneEvent(
                     type="done",
                     message=AssistantMessage(
                         response_id="resp_follow_up",
                         stop_reason="stop",
-                        content=[TextBlock(text="It is sunny in Munich.")],
+                        blocks=[TextBlock(text="It is sunny in Munich.")],
                     ),
                 ),
             ],
@@ -264,8 +282,9 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     get_tool_mock = AsyncMock(return_value=tool)
     agent = Agent(stream_fn=stream_fn, model="gpt-5.4", tools=tools)
     agent._get_tool = get_tool_mock  # type: ignore[invalid-assignment]
+    agent.add_user_message("What is the weather in Munich?")
 
-    events = _collect_run_events(agent, prompt="What is the weather in Munich?")
+    events = _collect_run_events(agent)
 
     assert [event.type for event in events] == [
         "agent_start",
@@ -311,17 +330,17 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     second_message_end = _expect_event_type(events[18], MessageEndEvent)
     second_turn_end = _expect_event_type(events[19], TurnEndEvent)
     agent_end = _expect_event_type(events[20], AgentEndEvent)
-    first_partial_message = _expect_assistant_message(first_message_start.message)
-    second_partial_message = _expect_assistant_message(second_message_start.message)
+    first_stream_message = _expect_assistant_message(first_message_start.message)
+    second_stream_message = _expect_assistant_message(second_message_start.message)
     first_final_message = _expect_agent_assistant_turn(first_message_end.message)
     second_final_message = _expect_agent_assistant_turn(second_message_end.message)
 
     assert isinstance(events[0], AgentStartEvent)
     assert first_turn_start.type == "turn_start"
-    assert first_partial_message.response_id == "resp_tool_call"
-    assert first_partial_message.content == []
+    assert first_stream_message.response_id == "resp_tool_call"
+    assert first_stream_message.blocks == []
     assert first_reasoning_start.stream_event.type == "reasoning_start"
-    assert first_reasoning_start.message is reasoning_partial
+    assert first_reasoning_start.message is reasoning_message
     assert first_reasoning_delta.stream_event.type == "reasoning_delta"
     assert (
         _expect_stream_event_type(
@@ -329,11 +348,11 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         ).delta
         == "Thinking about weather"
     )
-    assert first_reasoning_delta.message is reasoning_partial
+    assert first_reasoning_delta.message is reasoning_message
     assert first_reasoning_end.stream_event.type == "reasoning_end"
-    assert first_reasoning_end.message is reasoning_partial
+    assert first_reasoning_end.message is reasoning_message
     assert first_tool_call_start.stream_event.type == "tool_call_start"
-    assert first_tool_call_start.message is tool_call_start_partial
+    assert first_tool_call_start.message is tool_call_start_message
     assert first_tool_call_delta.stream_event.type == "tool_call_delta"
     assert (
         _expect_stream_event_type(
@@ -341,9 +360,9 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         ).delta
         == '{"city":"Munich"}'
     )
-    assert first_tool_call_delta.message is tool_call_start_partial
+    assert first_tool_call_delta.message is tool_call_start_message
     assert first_tool_call_end.stream_event.type == "tool_call_end"
-    assert first_tool_call_end.message is tool_call_start_partial
+    assert first_tool_call_end.message is tool_call_start_message
     assert first_final_message.response_id == "resp_tool_call"
     assert first_final_message.stop_reason == "tool_use"
     assert tool_execution_start.call_id == "call_123"
@@ -359,7 +378,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_turn_end.message.response_id == "resp_tool_call"
     assert first_turn_end.message.stop_reason == "tool_use"
     assert first_turn_end.message.status == "completed"
-    assert first_turn_end.message.content == [
+    assert first_turn_end.message.blocks == [
         ToolCallBlock(
             call_id="call_123",
             name="get_weather",
@@ -374,22 +393,22 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     )
     assert first_turn_end.tool_results[0].is_error is False
     assert second_turn_start.type == "turn_start"
-    assert second_partial_message.response_id == "resp_follow_up"
-    assert second_partial_message.content == []
+    assert second_stream_message.response_id == "resp_follow_up"
+    assert second_stream_message.blocks == []
     assert second_text_start.stream_event.type == "text_start"
-    assert second_text_start.message is text_partial
+    assert second_text_start.message is text_message
     assert second_text_delta.stream_event.type == "text_delta"
     assert _expect_stream_event_type(
         second_text_delta.stream_event, TextDeltaEvent
     ).delta == ("It is sunny in Munich.")
-    assert second_text_delta.message is text_partial
+    assert second_text_delta.message is text_message
     assert second_text_end.stream_event.type == "text_end"
-    assert second_text_end.message is text_partial
+    assert second_text_end.message is text_message
     assert second_final_message.response_id == "resp_follow_up"
     assert second_final_message.stop_reason == "stop"
     assert second_turn_end.message.response_id == "resp_follow_up"
     assert second_turn_end.message.stop_reason == "stop"
-    assert second_turn_end.message.content == [TextBlock(text="It is sunny in Munich.")]
+    assert second_turn_end.message.blocks == [TextBlock(text="It is sunny in Munich.")]
     assert second_turn_end.tool_results == []
     assert len(invocations) == 2
     assert invocations[0].model == "gpt-5.4"
@@ -422,7 +441,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
             [
                 StreamStartEvent(
                     type="start",
-                    partial=AssistantMessage(response_id="resp_error"),
+                    message=AssistantMessage(response_id="resp_error"),
                 ),
                 StreamErrorEvent(
                     type="error",
@@ -437,8 +456,9 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
         invocations=invocations,
     )
     agent = Agent(stream_fn=stream_fn, model="gpt-5.4")
+    agent.add_user_message("Say hello")
 
-    events = _collect_run_events(agent, prompt="Say hello")
+    events = _collect_run_events(agent)
 
     assert [event.type for event in events] == [
         "agent_start",
@@ -453,13 +473,13 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     message_end = _expect_event_type(events[3], MessageEndEvent)
     turn_end = _expect_event_type(events[4], TurnEndEvent)
     agent_end = _expect_event_type(events[5], AgentEndEvent)
-    partial_message = _expect_assistant_message(message_start.message)
+    stream_message = _expect_assistant_message(message_start.message)
     final_message = _expect_agent_assistant_turn(message_end.message)
 
     assert isinstance(events[0], AgentStartEvent)
     assert isinstance(events[1], TurnStartEvent)
-    assert partial_message.response_id == "resp_error"
-    assert partial_message.content == []
+    assert stream_message.response_id == "resp_error"
+    assert stream_message.blocks == []
     assert final_message.response_id == "resp_error"
     assert final_message.status == "error"
     assert turn_end.message.response_id == "resp_error"

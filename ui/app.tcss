@@ -1,0 +1,65 @@
+Screen {
+    layout: vertical;
+    background: #11141a;
+    color: #fff8dc;
+}
+
+#output {
+    height: 1fr;
+    min-height: 12;
+    padding: 1 2;
+    background: #11141a;
+    scrollbar-gutter: stable;
+}
+
+.transcript-message {
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0;
+    layer: below;
+}
+
+.transcript-message > .message-body {
+    height: auto;
+    padding: 1 2;
+    color: #fff8dc;
+}
+
+.user-message {
+    margin: 0 8 1 0;
+    border-left: solid #ff2975;
+    background: #1a2029;
+}
+
+.user-message > .message-body {
+    background: #171c24;
+}
+
+.agent-message {
+    margin: 0 8 1 0;
+    border-left: solid #62c7d6;
+    background: #151a23;
+}
+
+.agent-message > .message-body {
+    background: #121722;
+}
+
+TextArea {
+    border: none;
+    background: transparent;
+    color: #fff8dc;
+}
+
+TextArea:focus {
+    border: none;
+}
+
+#input {
+    height: auto;
+    min-height: 1;
+    max-height: 6;
+    border-top: solid #ff2975;
+    border-bottom: solid #ff2975;
+    background: #141820;
+}

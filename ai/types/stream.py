@@ -33,34 +33,33 @@ class ToolCallBlock(BaseModel):
     name: str
     arguments: JsonObject = Field(default_factory=dict)
     provider_item_id: str | None = None
-    namespace: str | None = None
 
 
 AssistantBlock: TypeAlias = TextBlock | ReasoningBlock | ToolCallBlock
 
 
 class AssistantMessage(BaseModel):
-    """The partial or final assistant message assembled during streaming."""
+    """The assistant message assembled during streaming or returned at completion."""
 
     role: Literal["assistant"] = "assistant"
-    content: list[AssistantBlock] = Field(default_factory=list)
+    blocks: list[AssistantBlock] = Field(default_factory=list)
     response_id: str | None = None
     stop_reason: StopReason = "stop"
     error_message: str | None = None
 
 
 class StreamStartEvent(BaseModel):
-    """Marks the start of a new assistant stream with an empty partial message."""
+    """Marks the start of a new assistant stream with an empty message."""
 
     type: Literal["start"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class ReasoningStartEvent(BaseModel):
     """Marks the start of a reasoning block."""
 
     type: Literal["reasoning_start"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class ReasoningDeltaEvent(BaseModel):
@@ -68,21 +67,21 @@ class ReasoningDeltaEvent(BaseModel):
 
     type: Literal["reasoning_delta"]
     delta: str
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class ReasoningEndEvent(BaseModel):
     """Marks the end of the current reasoning block."""
 
     type: Literal["reasoning_end"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class TextStartEvent(BaseModel):
     """Marks the start of a text block."""
 
     type: Literal["text_start"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class TextDeltaEvent(BaseModel):
@@ -90,21 +89,21 @@ class TextDeltaEvent(BaseModel):
 
     type: Literal["text_delta"]
     delta: str
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class TextEndEvent(BaseModel):
     """Marks the end of the current text block."""
 
     type: Literal["text_end"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class ToolCallStartEvent(BaseModel):
     """Marks the start of a tool call block."""
 
     type: Literal["tool_call_start"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class ToolCallDeltaEvent(BaseModel):
@@ -112,14 +111,14 @@ class ToolCallDeltaEvent(BaseModel):
 
     type: Literal["tool_call_delta"]
     delta: str
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class ToolCallEndEvent(BaseModel):
     """Marks the end of the current tool call block."""
 
     type: Literal["tool_call_end"]
-    partial: AssistantMessage
+    message: AssistantMessage
 
 
 class StreamDoneEvent(BaseModel):
@@ -130,7 +129,7 @@ class StreamDoneEvent(BaseModel):
 
 
 class StreamErrorEvent(BaseModel):
-    """Marks failed stream completion with the latest partial assistant message."""
+    """Marks failed stream completion with the latest assistant message."""
 
     type: Literal["error"]
     error: AssistantMessage

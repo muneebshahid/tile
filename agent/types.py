@@ -4,12 +4,7 @@ from typing import Literal, Protocol, TypeAlias
 from pydantic import BaseModel, JsonValue
 
 from ai.types.contracts import AsyncEventStream, Reasoning
-from ai.types.conversation import (
-    AssistantTurn,
-    ConversationItem,
-    ToolResultTurn,
-    UserMessage,
-)
+from ai.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
 from ai.types.stream import (
     AssistantMessage,
     ReasoningDeltaEvent,
@@ -24,9 +19,6 @@ from ai.types.stream import (
 )
 from ai.types.tools import JsonObject, ToolDefinition
 
-AgentMessage: TypeAlias = (
-    UserMessage | AssistantMessage | AssistantTurn | ToolResultTurn
-)
 AssistantMessageUpdateEvent: TypeAlias = (
     ReasoningStartEvent
     | ReasoningDeltaEvent
@@ -83,7 +75,7 @@ class MessageStartEvent(BaseModel):
     """Marks the start of a message lifecycle event."""
 
     type: Literal["message_start"] = "message_start"
-    message: AgentMessage
+    message: AssistantMessage
 
 
 class MessageUpdateEvent(BaseModel):
@@ -98,7 +90,7 @@ class MessageEndEvent(BaseModel):
     """Marks the end of a message lifecycle event."""
 
     type: Literal["message_end"] = "message_end"
-    message: AgentMessage
+    message: AssistantTurn
 
 
 class ToolExecutionStartEvent(BaseModel):

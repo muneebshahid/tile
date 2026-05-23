@@ -16,7 +16,7 @@ class AssistantTurn(BaseModel):
     """A finalized assistant turn that can be replayed to a provider."""
 
     role: Literal["assistant"] = "assistant"
-    content: list[AssistantBlock] = Field(default_factory=list)
+    blocks: list[AssistantBlock] = Field(default_factory=list)
     response_id: str | None = None
     stop_reason: StopReason = "stop"
     status: Literal["completed", "aborted", "error"] = "completed"
