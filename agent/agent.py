@@ -209,28 +209,36 @@ class Agent:
         tool_name: str,
         arguments: JsonObject,
     ) -> AsyncIterator[AgentEvent]:
+        """Emit the full lifecycle for one tool execution."""
+
         yield ToolExecutionStartEvent(
             call_id=call_id,
             tool_name=tool_name,
             arguments=arguments,
         )
 
-        result: JsonValue = None
-        try:
-            tool = await self._get_tool(tool_name)
-            if tool is None:
-                result = {"error": f"Tool '{tool_name}' not found"}
-            else:
-                result = await tool(**arguments)
-        except Exception as e:
-            result = {"error": str(e)}
-
+        result = await self._call_tool(tool_name, arguments)
         yield ToolExecutionEndEvent(
             call_id=call_id,
             tool_name=tool_name,
             result=result,
             is_error=isinstance(result, dict) and "error" in result,
         )
+
+    async def _call_tool(
+        self,
+        tool_name: str,
+        arguments: JsonObject,
+    ) -> JsonValue:
+        """Resolve and call a tool while normalizing tool failures."""
+
+        try:
+            tool = await self._get_tool(tool_name)
+            if tool is None:
+                return {"error": f"Tool '{tool_name}' not found"}
+            return await tool(**arguments)
+        except Exception as error:
+            return {"error": str(error)}
 
     async def _get_tool(
         self,
