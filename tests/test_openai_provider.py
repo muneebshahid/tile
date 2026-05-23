@@ -632,8 +632,15 @@ def _sample_tools() -> list[ToolDefinition]:
                 "required": ["city"],
                 "additionalProperties": False,
             },
+            fn=_sample_tool_fn,
         )
     ]
+
+
+async def _sample_tool_fn(city: str) -> JsonObject:
+    """Return a deterministic payload for provider-only tool definitions."""
+
+    return {"city": city}
 
 
 def test_stream_maps_raw_events_with_shared_message_state() -> None:

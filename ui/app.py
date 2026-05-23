@@ -24,15 +24,13 @@ from ui.widgets import (
     UserMessageWidget,
     TranscriptMessageWidget,
 )
+from agent.tools import tools
 
 
 def create_agent() -> Agent:
     """Build the default agent used by the UI."""
 
-    return Agent(
-        stream_fn=stream_api,
-        model=settings.openai_model,
-    )
+    return Agent(stream_fn=stream_api, model=settings.openai_model, tools=tools)
 
 
 class PiyApp(App[None]):

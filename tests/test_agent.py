@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from typing import TypeVar, cast
 from unittest.mock import AsyncMock
 
+from pydantic import JsonValue
+
 from agent.agent import Agent
 from agent.types import (
     AgentEndEvent,
@@ -162,8 +164,15 @@ def _sample_tools() -> list[ToolDefinition]:
                 "required": ["city"],
                 "additionalProperties": False,
             },
+            fn=_get_weather,
         )
     ]
+
+
+async def _get_weather(city: str) -> JsonValue:
+    """Return a deterministic weather payload for tests."""
+
+    return {"temperature_c": 18, "condition": "sunny", "city": city}
 
 
 def test_add_user_message_appends_user_turn_to_history() -> None:
@@ -432,6 +441,62 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
 
     get_tool_mock.assert_awaited_once_with("get_weather")
     tool.assert_awaited_once_with(city="Munich")
+
+
+def test_agent_run_executes_registered_tool_definition() -> None:
+    tools = _sample_tools()
+    invocations: list[StreamInvocation] = []
+    stream_fn = _build_stream_fn(
+        streams=[
+            [
+                StreamStartEvent(
+                    type="start",
+                    message=AssistantMessage(response_id="resp_tool_call"),
+                ),
+                StreamDoneEvent(
+                    type="done",
+                    message=AssistantMessage(
+                        response_id="resp_tool_call",
+                        stop_reason="tool_use",
+                        blocks=[
+                            ToolCallBlock(
+                                call_id="call_123",
+                                name="get_weather",
+                                arguments={"city": "Munich"},
+                                provider_item_id="fc_123",
+                            )
+                        ],
+                    ),
+                ),
+            ],
+            [
+                StreamStartEvent(
+                    type="start",
+                    message=AssistantMessage(response_id="resp_follow_up"),
+                ),
+                StreamDoneEvent(
+                    type="done",
+                    message=AssistantMessage(
+                        response_id="resp_follow_up",
+                        stop_reason="stop",
+                    ),
+                ),
+            ],
+        ],
+        invocations=invocations,
+    )
+    agent = Agent(stream_fn=stream_fn, model="gpt-5.4", tools=tools)
+    agent.add_user_message("What is the weather in Munich?")
+
+    events = _collect_run_events(agent)
+
+    tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
+    assert tool_execution_end.result == {
+        "temperature_c": 18,
+        "condition": "sunny",
+        "city": "Munich",
+    }
+    assert tool_execution_end.is_error is False
 
 
 def test_agent_run_yields_error_turn_end_for_stream_error() -> None:

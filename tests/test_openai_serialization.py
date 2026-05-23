@@ -1,14 +1,20 @@
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
-from ai.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
-from ai.types.stream import ReasoningBlock, TextBlock, ToolCallBlock
-from ai.types.tools import ToolDefinition
 from ai.openai.serialization import (
     serialize_history_items,
     serialize_response_input,
     serialize_tools,
 )
+from ai.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
+from ai.types.stream import ReasoningBlock, TextBlock, ToolCallBlock
+from ai.types.tools import ToolDefinition
 from openai.types.responses.response_input_param import ResponseInputParam
+
+
+async def _sample_tool_fn(city: str) -> JsonValue:
+    """Return a deterministic payload for serialization-only tool definitions."""
+
+    return {"city": city}
 
 
 def test_serialize_response_input_flattens_sample_thread() -> None:
@@ -234,6 +240,7 @@ def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
                 "required": ["city"],
                 "additionalProperties": False,
             },
+            fn=_sample_tool_fn,
         )
     ]
 

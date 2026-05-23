@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Literal
 
 from pydantic import JsonValue
@@ -28,7 +28,7 @@ from ai.types.stream import (
     ToolCallDeltaEvent,
     ToolCallEndEvent,
 )
-from ai.types.tools import JsonObject, ToolDefinition
+from ai.types.tools import JsonObject, ToolDefinition, ToolFunction
 from agent.prompt import PROMPT
 from agent.types import (
     AgentEndEvent,
@@ -243,13 +243,15 @@ class Agent:
     async def _get_tool(
         self,
         tool_name: str,
-    ) -> Callable[..., Awaitable[JsonValue]] | None:
-        # In a real implementation, this method would look up the tool by name and return a callable that executes it.
-        # Here, we just return a dummy callable that simulates tool execution.
-        async def dummy_tool(**kwargs: JsonValue) -> JsonObject:
-            return {"result": f"Executed {tool_name} with arguments {kwargs}"}
+    ) -> ToolFunction | None:
+        """Find a registered tool implementation by name."""
+        tool_name = tool_name.lower().strip()
 
-        return dummy_tool
+        for tool in self._tools:
+            if tool.name == tool_name:
+                return tool.fn
+
+        return None
 
 
 def _build_assistant_turn(message: AssistantMessage) -> AssistantTurn:
