@@ -30,7 +30,12 @@ async def test_ls_respects_limit_after_sorting_entries(tmp_path: Path) -> None:
 
     result = await fn(path=str(tmp_path), limit=2)
 
-    assert result.splitlines() == ["a.txt", "b.txt"]
+    assert result.splitlines() == [
+        "a.txt",
+        "b.txt",
+        "",
+        "[2 entries limit reached. Use limit=4 for more]",
+    ]
 
 
 @pytest.mark.asyncio
@@ -43,6 +48,40 @@ async def test_ls_appends_slash_to_directories(tmp_path: Path) -> None:
     result = await fn(path=str(tmp_path), limit=10)
 
     assert result.splitlines() == ["file.txt", "folder/"]
+
+
+@pytest.mark.asyncio
+async def test_ls_includes_dotfiles_and_dot_directories(tmp_path: Path) -> None:
+    """Include hidden files and hidden directories in directory listings."""
+
+    _create_file(tmp_path / ".hidden-file")
+    _create_directory(tmp_path / ".hidden-dir")
+
+    result = await fn(path=str(tmp_path), limit=10)
+
+    assert result.splitlines() == [".hidden-dir/", ".hidden-file"]
+
+
+@pytest.mark.asyncio
+async def test_ls_sorts_entries_case_insensitively(tmp_path: Path) -> None:
+    """Sort entries alphabetically without separating upper and lower case names."""
+
+    _create_file(tmp_path / "beta.txt")
+    _create_file(tmp_path / "Alpha.txt")
+    _create_file(tmp_path / "charlie.txt")
+
+    result = await fn(path=str(tmp_path), limit=10)
+
+    assert result.splitlines() == ["Alpha.txt", "beta.txt", "charlie.txt"]
+
+
+@pytest.mark.asyncio
+async def test_ls_reports_empty_directory(tmp_path: Path) -> None:
+    """Return an explicit marker for empty directories."""
+
+    result = await fn(path=str(tmp_path), limit=10)
+
+    assert result == "(empty directory)"
 
 
 def _create_file(path: Path) -> None:

@@ -11,7 +11,16 @@ async def fn(path: str = ".", limit: int = 500) -> str:
 
     try:
         entries = await asyncio.to_thread(_list_directory_entries, path)
-        return "\n".join(entries[:limit])
+        limited_entries = entries[:limit]
+        if not limited_entries:
+            return "(empty directory)"
+
+        result = "\n".join(limited_entries)
+        if len(entries) > limit:
+            result += (
+                f"\n\n[{limit} entries limit reached. Use limit={limit * 2} for more]"
+            )
+        return result
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -19,7 +28,10 @@ async def fn(path: str = ".", limit: int = 500) -> str:
 def _list_directory_entries(path: str) -> list[str]:
     """Return directory entry names for a string path."""
 
-    return sorted(_format_directory_entry(entry) for entry in Path(path).iterdir())
+    return sorted(
+        (_format_directory_entry(entry) for entry in Path(path).iterdir()),
+        key=str.lower,
+    )
 
 
 def _format_directory_entry(entry: Path) -> str:
