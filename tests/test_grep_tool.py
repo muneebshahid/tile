@@ -7,6 +7,7 @@ from typing import Literal
 
 import pytest
 import agent.tools.grep as grep
+import agent.tools.truncation as truncation
 
 
 def test_schema_requires_only_pattern() -> None:
@@ -282,6 +283,84 @@ def test_format_results_reports_truncation() -> None:
     assert result == (
         "example.txt:1: first\n\n"
         "[1 matches limit reached. Use limit=2 for more, or refine pattern]"
+    )
+
+
+def test_format_results_reports_byte_limit() -> None:
+    """Append a byte-limit notice when formatted output exceeds 50KB."""
+
+    result = grep._format_results(
+        grep.Results(
+            lines=[
+                grep.Line(
+                    kind="match",
+                    path=f"{index:03d}.txt",
+                    line_number=1,
+                    text="x" * 196,
+                )
+                for index in range(300)
+            ],
+            match_count=300,
+            truncated=False,
+        ),
+        limit=500,
+    )
+    notice = "\n\n[50.0KB limit reached]"
+    body = result.removesuffix(notice)
+
+    assert result.endswith(notice)
+    assert len(body.encode("utf-8")) <= truncation.OUTPUT_BYTE_LIMIT
+
+
+def test_format_results_reports_line_limit() -> None:
+    """Append a line-limit notice when a result line is shortened."""
+
+    result = grep._format_results(
+        grep.Results(
+            lines=[
+                grep.Line(
+                    kind="match",
+                    path="example.txt",
+                    line_number=1,
+                    text="x" * 501,
+                )
+            ],
+            match_count=1,
+            truncated=False,
+        ),
+        limit=100,
+    )
+
+    assert result == (
+        f"example.txt:1: {'x' * 500}... [truncated]\n\n"
+        "[Some lines truncated to 500 chars. Use read tool to see full lines]"
+    )
+
+
+def test_format_results_combines_truncation_notices() -> None:
+    """Report match, byte, and line truncation in one notice block."""
+
+    result = grep._format_results(
+        grep.Results(
+            lines=[
+                grep.Line(
+                    kind="match",
+                    path=f"{index:03d}.txt",
+                    line_number=1,
+                    text="x" * 501,
+                )
+                for index in range(120)
+            ],
+            match_count=120,
+            truncated=True,
+        ),
+        limit=100,
+    )
+
+    assert result.endswith(
+        "\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern. "
+        "50.0KB limit reached. "
+        "Some lines truncated to 500 chars. Use read tool to see full lines]"
     )
 
 

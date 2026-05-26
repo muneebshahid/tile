@@ -8,6 +8,12 @@ from typing import Literal
 from pydantic import BaseModel, ValidationError
 
 from ai.types.tools import ToolDefinition
+from agent.tools.truncation import (
+    GREP_LINE_CHARACTER_LIMIT,
+    OUTPUT_BYTE_LIMIT_LABEL,
+    truncate_line,
+    truncate_to_byte_limit,
+)
 
 
 class Line(BaseModel):
@@ -117,15 +123,30 @@ def _format_results(results: Results, limit: int) -> str:
     if not results.lines:
         return "No matches found"
 
-    formatted_lines = [_format_line(line) for line in results.lines]
-    output = "\n".join(formatted_lines)
+    formatted_lines, line_limit_results = zip(
+        *(_format_line(line) for line in results.lines),
+        strict=True,
+    )
 
+    output = "\n".join(formatted_lines)
+    output, byte_limit_reached = truncate_to_byte_limit(output)
+
+    notices: list[str] = []
     if results.truncated:
         effective_limit = max(1, limit)
-        output += (
-            f"\n\n[{effective_limit} matches limit reached. "
-            f"Use limit={effective_limit * 2} for more, or refine pattern]"
+        notices.append(
+            f"{effective_limit} matches limit reached. "
+            f"Use limit={effective_limit * 2} for more, or refine pattern"
         )
+    if byte_limit_reached:
+        notices.append(f"{OUTPUT_BYTE_LIMIT_LABEL} limit reached")
+    if any(line_limit_results):
+        notices.append(
+            f"Some lines truncated to {GREP_LINE_CHARACTER_LIMIT} chars. "
+            "Use read tool to see full lines"
+        )
+    if notices:
+        output += f"\n\n[{'. '.join(notices)}]"
 
     return output
 
@@ -179,12 +200,13 @@ def _build_line(event: SearchEvent) -> Line:
     )
 
 
-def _format_line(line: Line) -> str:
+def _format_line(line: Line) -> tuple[str, bool]:
     """Format one search line using grep's match or context separators."""
 
+    text, was_truncated = truncate_line(line.text)
     if line.kind == "match":
-        return f"{line.path}:{line.line_number}: {line.text}"
-    return f"{line.path}-{line.line_number}- {line.text}"
+        return f"{line.path}:{line.line_number}: {text}", was_truncated
+    return f"{line.path}-{line.line_number}- {text}", was_truncated
 
 
 tool = ToolDefinition(
