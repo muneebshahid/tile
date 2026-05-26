@@ -44,6 +44,48 @@ async def test_ls_respects_limit_after_sorting_entries(tmp_path: Path) -> None:
     ]
 
 
+def test_truncate_to_byte_limit_keeps_complete_lines() -> None:
+    """Truncate over-limit output at line boundaries instead of mid-line."""
+
+    assert ls._truncate_to_byte_limit("a.txt\nb.txt", byte_limit=11) == (
+        "a.txt\nb.txt",
+        False,
+    )
+    assert ls._truncate_to_byte_limit("a.txt\nb.txt", byte_limit=10) == (
+        "a.txt",
+        True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_ls_reports_byte_limit(tmp_path: Path) -> None:
+    """Report byte truncation when the listing output exceeds 50KB."""
+
+    _create_long_file_names(tmp_path, count=270)
+
+    result = await ls.fn(path=str(tmp_path), limit=500)
+    notice = "\n\n[50.0KB limit reached]"
+    entries = ls._list_directory_entries(str(tmp_path))
+    body = result.removesuffix(notice)
+
+    assert result.endswith(notice)
+    assert len("\n".join(entries).encode("utf-8")) > ls.BYTE_LIMIT
+    assert len(body.encode("utf-8")) <= ls.BYTE_LIMIT
+
+
+@pytest.mark.asyncio
+async def test_ls_reports_entry_and_byte_limits(tmp_path: Path) -> None:
+    """Report entry and byte truncation together when both limits are reached."""
+
+    _create_long_file_names(tmp_path, count=300)
+
+    result = await ls.fn(path=str(tmp_path), limit=260)
+
+    assert result.endswith(
+        "\n\n[260 entries limit reached. Use limit=520 for more. 50.0KB limit reached]"
+    )
+
+
 @pytest.mark.asyncio
 async def test_ls_appends_slash_to_directories(tmp_path: Path) -> None:
     """Mark directory entries with a trailing slash and leave files unchanged."""
@@ -119,3 +161,10 @@ def _create_directory(path: Path) -> None:
     """Create a test directory."""
 
     path.mkdir()
+
+
+def _create_long_file_names(path: Path, count: int) -> None:
+    """Create enough long file names to exceed listing byte limits."""
+
+    for index in range(count):
+        _create_file(path / f"{index:03d}-{'x' * 196}.txt")
