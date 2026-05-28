@@ -1,5 +1,6 @@
 """Tests for the default directory listing tool."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -14,28 +15,83 @@ def test_ls_schema_requires_only_path() -> None:
     assert ls.tool.input_schema["required"] == ["path"]
 
 
-@pytest.mark.asyncio
-async def test_ls_returns_all_directory_entries(tmp_path: Path) -> None:
-    """Return every file and directory name when the result is under the limit."""
+@pytest.fixture
+def populated_directory(tmp_path: Path) -> Path:
+    """Create a directory with representative file and directory entries."""
 
     _create_file(tmp_path / "README.md")
     _create_file(tmp_path / "uv.lock")
     _create_directory(tmp_path / "src")
+    return tmp_path
 
-    result = await ls.fn(path=str(tmp_path), limit=10)
+
+@pytest.fixture
+def unsorted_directory(tmp_path: Path) -> Path:
+    """Create a directory whose entries need sorting before limiting."""
+
+    _create_file(tmp_path / "b.txt")
+    _create_file(tmp_path / "a.txt")
+    _create_file(tmp_path / "c.txt")
+    return tmp_path
+
+
+@pytest.fixture
+def long_directory(tmp_path: Path) -> Callable[[int], Path]:
+    """Return a factory for directories with long file names."""
+
+    def create(count: int) -> Path:
+        """Create long file names and return the populated directory."""
+
+        _create_long_file_names(tmp_path, count=count)
+        return tmp_path
+
+    return create
+
+
+@pytest.fixture
+def directory_with_child_directory(tmp_path: Path) -> Path:
+    """Create a directory containing one file and one child directory."""
+
+    _create_file(tmp_path / "file.txt")
+    _create_directory(tmp_path / "folder")
+    return tmp_path
+
+
+@pytest.fixture
+def hidden_entries_directory(tmp_path: Path) -> Path:
+    """Create a directory containing hidden file and directory entries."""
+
+    _create_file(tmp_path / ".hidden-file")
+    _create_directory(tmp_path / ".hidden-dir")
+    return tmp_path
+
+
+@pytest.fixture
+def mixed_case_directory(tmp_path: Path) -> Path:
+    """Create a directory containing mixed-case file names."""
+
+    _create_file(tmp_path / "beta.txt")
+    _create_file(tmp_path / "Alpha.txt")
+    _create_file(tmp_path / "charlie.txt")
+    return tmp_path
+
+
+@pytest.mark.asyncio
+async def test_ls_returns_all_directory_entries(populated_directory: Path) -> None:
+    """Return every file and directory name when the result is under the limit."""
+
+    result = await ls.fn(path=str(populated_directory), limit=10)
 
     assert result.splitlines() == ["README.md", "src/", "uv.lock"]
 
 
 @pytest.mark.asyncio
-async def test_ls_respects_limit_after_sorting_entries(tmp_path: Path) -> None:
+async def test_ls_respects_limit_after_sorting_entries(
+    unsorted_directory: Path,
+) -> None:
     """Return only the first sorted entries up to the requested limit."""
 
-    _create_file(tmp_path / "b.txt")
-    _create_file(tmp_path / "a.txt")
-    _create_file(tmp_path / "c.txt")
-
-    result = await ls.fn(path=str(tmp_path), limit=2)
+    result = await ls.fn(path=str(unsorted_directory), limit=2)
 
     assert result.splitlines() == [
         "a.txt",
@@ -46,14 +102,14 @@ async def test_ls_respects_limit_after_sorting_entries(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ls_reports_byte_limit(tmp_path: Path) -> None:
+async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> None:
     """Report byte truncation when the listing output exceeds 50KB."""
 
-    _create_long_file_names(tmp_path, count=270)
+    path = long_directory(270)
 
-    result = await ls.fn(path=str(tmp_path), limit=500)
+    result = await ls.fn(path=str(path), limit=500)
     notice = "\n\n[50.0KB limit reached]"
-    entries = ls._list_directory_entries(str(tmp_path))
+    entries = ls._list_directory_entries(str(path))
     body = result.removesuffix(notice)
 
     assert result.endswith(notice)
@@ -62,12 +118,14 @@ async def test_ls_reports_byte_limit(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ls_reports_entry_and_byte_limits(tmp_path: Path) -> None:
+async def test_ls_reports_entry_and_byte_limits(
+    long_directory: Callable[[int], Path],
+) -> None:
     """Report entry and byte truncation together when both limits are reached."""
 
-    _create_long_file_names(tmp_path, count=300)
+    path = long_directory(300)
 
-    result = await ls.fn(path=str(tmp_path), limit=260)
+    result = await ls.fn(path=str(path), limit=260)
 
     assert result.endswith(
         "\n\n[260 entries limit reached. Use limit=520 for more. 50.0KB limit reached]"
@@ -75,38 +133,34 @@ async def test_ls_reports_entry_and_byte_limits(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ls_appends_slash_to_directories(tmp_path: Path) -> None:
+async def test_ls_appends_slash_to_directories(
+    directory_with_child_directory: Path,
+) -> None:
     """Mark directory entries with a trailing slash and leave files unchanged."""
 
-    _create_file(tmp_path / "file.txt")
-    _create_directory(tmp_path / "folder")
-
-    result = await ls.fn(path=str(tmp_path), limit=10)
+    result = await ls.fn(path=str(directory_with_child_directory), limit=10)
 
     assert result.splitlines() == ["file.txt", "folder/"]
 
 
 @pytest.mark.asyncio
-async def test_ls_includes_dotfiles_and_dot_directories(tmp_path: Path) -> None:
+async def test_ls_includes_dotfiles_and_dot_directories(
+    hidden_entries_directory: Path,
+) -> None:
     """Include hidden files and hidden directories in directory listings."""
 
-    _create_file(tmp_path / ".hidden-file")
-    _create_directory(tmp_path / ".hidden-dir")
-
-    result = await ls.fn(path=str(tmp_path), limit=10)
+    result = await ls.fn(path=str(hidden_entries_directory), limit=10)
 
     assert result.splitlines() == [".hidden-dir/", ".hidden-file"]
 
 
 @pytest.mark.asyncio
-async def test_ls_sorts_entries_case_insensitively(tmp_path: Path) -> None:
+async def test_ls_sorts_entries_case_insensitively(
+    mixed_case_directory: Path,
+) -> None:
     """Sort entries alphabetically without separating upper and lower case names."""
 
-    _create_file(tmp_path / "beta.txt")
-    _create_file(tmp_path / "Alpha.txt")
-    _create_file(tmp_path / "charlie.txt")
-
-    result = await ls.fn(path=str(tmp_path), limit=10)
+    result = await ls.fn(path=str(mixed_case_directory), limit=10)
 
     assert result.splitlines() == ["Alpha.txt", "beta.txt", "charlie.txt"]
 

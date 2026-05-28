@@ -1,10 +1,11 @@
 """Tests for the default search tool scaffold."""
 
 import json
-from collections.abc import Sequence
+from unittest.mock import AsyncMock
 from typing import Literal
 
 import pytest
+
 import agent.tools.executables as executables
 import agent.tools.grep as grep
 import agent.tools.truncation as truncation
@@ -80,14 +81,37 @@ def test_build_args_protects_flag_like_patterns() -> None:
     )[-3:] == ["--", "--pre=payload", "."]
 
 
+@pytest.fixture
+def rg_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the rg executable available to fn-level tests."""
+
+    monkeypatch.setattr(executables.shutil, "which", _find_command)
+
+
+@pytest.fixture
+def rg_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the rg executable unavailable to fn-level tests."""
+
+    monkeypatch.setattr(executables.shutil, "which", _find_no_commands)
+
+
+@pytest.fixture
+def execution(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Patch command execution with an async mock for fn-level tests."""
+
+    execution_mock = AsyncMock()
+    monkeypatch.setattr(grep, "execute", execution_mock)
+    return execution_mock
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rg_available")
 async def test_fn_returns_results_when_command_is_available(
-    monkeypatch: pytest.MonkeyPatch,
+    execution: AsyncMock,
 ) -> None:
     """Return compact grep-style text when rg exists."""
 
-    monkeypatch.setattr(executables.shutil, "which", _find_command)
-    monkeypatch.setattr(grep, "execute", _fake_execution)
+    execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
     result = await grep.fn(pattern="needle")
 
@@ -95,13 +119,18 @@ async def test_fn_returns_results_when_command_is_available(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("rg_available")
 async def test_fn_returns_multiple_result_lines(
-    monkeypatch: pytest.MonkeyPatch,
+    execution: AsyncMock,
 ) -> None:
     """Return compact grep-style text for multiple command output lines."""
 
-    monkeypatch.setattr(executables.shutil, "which", _find_command)
-    monkeypatch.setattr(grep, "execute", _fake_multi_line_execution)
+    execution.return_value = "\n".join(
+        [
+            _event("match", "one.txt", 1, "needle one\n"),
+            _event("match", "two.txt", 2, "needle two\n"),
+        ]
+    )
 
     result = await grep.fn(pattern="needle")
 
@@ -109,12 +138,9 @@ async def test_fn_returns_multiple_result_lines(
 
 
 @pytest.mark.asyncio
-async def test_fn_raises_when_command_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+@pytest.mark.usefixtures("rg_missing")
+async def test_fn_raises_when_command_is_missing() -> None:
     """Raise a clear exception when rg is unavailable."""
-
-    monkeypatch.setattr(executables.shutil, "which", _find_no_commands)
 
     with pytest.raises(RuntimeError, match="ripgrep"):
         await grep.fn(pattern="needle")
@@ -354,33 +380,6 @@ def _find_no_commands(command: str) -> None:
 
     _ = command
     return None
-
-
-async def _fake_execution(
-    executable: str,
-    args: Sequence[str],
-    allowed_exit_codes: tuple[int, ...] = (0,),
-) -> str:
-    """Return representative command output for fn tests."""
-
-    _ = (executable, args, allowed_exit_codes)
-    return _event("match", "example.txt", 2, "needle line\n")
-
-
-async def _fake_multi_line_execution(
-    executable: str,
-    args: Sequence[str],
-    allowed_exit_codes: tuple[int, ...] = (0,),
-) -> str:
-    """Return multiple representative command output lines for fn tests."""
-
-    _ = (executable, args, allowed_exit_codes)
-    return "\n".join(
-        [
-            _event("match", "one.txt", 1, "needle one\n"),
-            _event("match", "two.txt", 2, "needle two\n"),
-        ]
-    )
 
 
 def _event(
