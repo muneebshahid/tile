@@ -102,6 +102,19 @@ async def test_ls_respects_limit_after_sorting_entries(
 
 
 @pytest.mark.asyncio
+async def test_ls_clamps_limit_to_one(unsorted_directory: Path) -> None:
+    """Keep entry limits positive when callers pass a low limit."""
+
+    result = await ls.fn(path=str(unsorted_directory), limit=0)
+
+    assert result.splitlines() == [
+        "a.txt",
+        "",
+        "[1 entries limit reached. Use limit=2 for more]",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> None:
     """Report byte truncation when the listing output exceeds 50KB."""
 

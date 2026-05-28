@@ -20,6 +20,7 @@ class Results(BaseModel):
 async def fn(path: str = ".", limit: int = 500) -> str:
     """List the contents of a directory."""
 
+    limit = max(1, limit)
     output = await _execute(path)
     results = _parse_output(output)
     return _format_results(results, limit)
