@@ -108,7 +108,7 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
     path = long_directory(270)
 
     result = await ls.fn(path=str(path), limit=500)
-    notice = "\n\n[50.0KB limit reached]"
+    notice = "\n\n[50.0KB limit reached. Directory has 270 entries]"
     entries = ls._list_directory_entries(str(path))
     body = result.removesuffix(notice)
 
@@ -118,18 +118,16 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
 
 
 @pytest.mark.asyncio
-async def test_ls_reports_entry_and_byte_limits(
+async def test_ls_reports_first_truncation_boundary(
     long_directory: Callable[[int], Path],
 ) -> None:
-    """Report entry and byte truncation together when both limits are reached."""
+    """Report only the first truncation boundary reached by formatted output."""
 
     path = long_directory(300)
 
     result = await ls.fn(path=str(path), limit=260)
 
-    assert result.endswith(
-        "\n\n[260 entries limit reached. Use limit=520 for more. 50.0KB limit reached]"
-    )
+    assert result.endswith("\n\n[50.0KB limit reached. Directory has 300 entries]")
 
 
 @pytest.mark.asyncio

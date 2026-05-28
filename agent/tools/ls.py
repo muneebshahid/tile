@@ -8,21 +8,20 @@ from pydantic import BaseModel
 
 from ai.types.tools import ToolDefinition
 
-from agent.tools.truncation import OUTPUT_BYTE_LIMIT_LABEL, truncate_to_byte_limit
+from agent.tools.truncation import OUTPUT_BYTE_LIMIT_LABEL, truncate_head
 
 
 class Results(BaseModel):
     """Structured directory listing results returned by the ls tool."""
 
     entries: list[str]
-    truncated: bool
 
 
 async def fn(path: str = ".", limit: int = 500) -> str:
     """List the contents of a directory."""
 
     output = await _execute(path)
-    results = _parse_output(output, limit)
+    results = _parse_output(output)
     return _format_results(results, limit)
 
 
@@ -32,10 +31,10 @@ async def _execute(path: str) -> list[str]:
     return await asyncio.to_thread(_list_directory_entries, path)
 
 
-def _parse_output(output: Sequence[str], limit: int) -> Results:
-    """Apply the entry limit to raw directory entries."""
+def _parse_output(output: Sequence[str]) -> Results:
+    """Parse raw directory entries into structured results."""
 
-    return Results(entries=list(output[:limit]), truncated=len(output) > limit)
+    return Results(entries=list(output))
 
 
 def _format_results(results: Results, limit: int) -> str:
@@ -44,14 +43,17 @@ def _format_results(results: Results, limit: int) -> str:
     if not results.entries:
         return "(empty directory)"
 
-    result = "\n".join(results.entries)
-    result, byte_limit_reached = truncate_to_byte_limit(result)
+    truncation = truncate_head("\n".join(results.entries), max_lines=limit)
+    result = truncation.content
 
     notices: list[str] = []
-    if results.truncated:
+    if truncation.truncated_by == "lines":
         notices.append(f"{limit} entries limit reached. Use limit={limit * 2} for more")
-    if byte_limit_reached:
-        notices.append(f"{OUTPUT_BYTE_LIMIT_LABEL} limit reached")
+    if truncation.truncated_by == "bytes":
+        notices.append(
+            f"{OUTPUT_BYTE_LIMIT_LABEL} limit reached. "
+            f"Directory has {len(results.entries)} entries"
+        )
     if notices:
         result += f"\n\n[{'. '.join(notices)}]"
     return result
