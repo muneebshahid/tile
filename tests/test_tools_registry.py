@@ -25,4 +25,11 @@ def test_build_tools_preserves_default_tool_order(tmp_path: Path) -> None:
 
     tools = build_tools(tmp_path)
 
-    assert [tool.name for tool in tools] == ["read", "grep", "find", "ls", "write"]
+    assert [tool.name for tool in tools] == [
+        "read",
+        "bash",
+        "grep",
+        "find",
+        "ls",
+        "write",
+    ]

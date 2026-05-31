@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import cast
 
 from ai.types.tools import ToolDefinition, ToolFunction
+from agent.tools.bash import tool as bash_tool
 from agent.tools.find import tool as find_tool
 from agent.tools.grep import tool as grep_tool
 from agent.tools.ls import tool as ls_tool
@@ -12,7 +13,7 @@ from agent.tools.paths import normalize_cwd
 from agent.tools.read import tool as read_tool
 from agent.tools.write import tool as write_tool
 
-_TOOLS = [read_tool, grep_tool, find_tool, ls_tool, write_tool]
+_TOOLS = [read_tool, bash_tool, grep_tool, find_tool, ls_tool, write_tool]
 
 
 def build_tools(cwd: Path | str) -> list[ToolDefinition]:
