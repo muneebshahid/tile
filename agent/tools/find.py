@@ -1,5 +1,7 @@
 """File path search tool scaffold for the default agent."""
 
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from ai.types.tools import ToolDefinition, ToolResult
@@ -17,13 +19,15 @@ async def fn(
     pattern: str,
     path: str = ".",
     limit: int = 1000,
+    *,
+    cwd: Path,
 ) -> ToolResult:
     """Find file paths matching a glob pattern."""
 
     limit = max(1, limit)
     executable = require_executable("fd", "fd")
     args = _build_args(pattern, path, limit)
-    output = await execute(executable, args)
+    output = await execute(executable, args, cwd=cwd)
     results = _parse_output(output)
     return ToolResult.text(_format_results(results, limit))
 

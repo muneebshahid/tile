@@ -6,12 +6,13 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from ai.types.tools import ToolDefinition, ToolResult
+from agent.tools.paths import resolve_to_cwd
 
 
-async def fn(path: str, content: str) -> ToolResult:
+async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:
     """Write content to a file."""
 
-    resolved_path = _resolve_path(path)
+    resolved_path = _resolve_path(path, cwd)
     result = await _execute(resolved_path, content)
     return ToolResult.text(_format_results(result))
 
@@ -35,13 +36,10 @@ def _format_results(result: Results) -> str:
     return f"Successfully wrote {result.bytes_written} bytes to {result.path}"
 
 
-def _resolve_path(path: str) -> Path:
+def _resolve_path(path: str, cwd: Path) -> Path:
     """Resolve a user-provided path for writing."""
 
-    candidate = Path(path).expanduser()
-    if not candidate.is_absolute():
-        candidate = Path.cwd() / candidate
-    return candidate.resolve(strict=False)
+    return resolve_to_cwd(path, cwd).resolve(strict=False)
 
 
 def _write_file(path: Path, content: str) -> Results:

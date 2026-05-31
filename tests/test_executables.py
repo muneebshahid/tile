@@ -1,6 +1,7 @@
 """Tests for external executable availability helpers."""
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -32,9 +33,26 @@ def test_require_executable_raises_when_missing(
 async def test_execute_returns_process_stdout() -> None:
     """Return captured stdout from a successful process."""
 
-    result = await executables.execute(sys.executable, ["-c", "print('out')"])
+    result = await executables.execute(
+        sys.executable,
+        ["-c", "print('out')"],
+        cwd=Path.cwd(),
+    )
 
     assert result == "out\n"
+
+
+@pytest.mark.asyncio
+async def test_execute_runs_process_from_supplied_cwd(tmp_path: Path) -> None:
+    """Run a process from the supplied working directory."""
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", "from pathlib import Path; print(Path.cwd())"],
+        cwd=tmp_path,
+    )
+
+    assert result == f"{tmp_path}\n"
 
 
 @pytest.mark.asyncio
@@ -45,6 +63,7 @@ async def test_execute_raises_on_disallowed_exit_code() -> None:
         await executables.execute(
             sys.executable,
             ["-c", "import sys; print('boom', file=sys.stderr); sys.exit(2)"],
+            cwd=Path.cwd(),
         )
 
 
@@ -56,6 +75,7 @@ async def test_execute_allows_configured_exit_code() -> None:
         sys.executable,
         ["-c", "import sys; print('empty'); sys.exit(1)"],
         allowed_exit_codes=(0, 1),
+        cwd=Path.cwd(),
     )
 
     assert result == "empty\n"

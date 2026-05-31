@@ -1,8 +1,9 @@
 """Tests for the default search tool scaffold."""
 
 import json
-from unittest.mock import AsyncMock
+from pathlib import Path
 from typing import Literal
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -114,7 +115,7 @@ async def test_fn_returns_results_when_command_is_available(
 
     execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
-    result = _text(await grep.fn(pattern="needle"))
+    result = _text(await grep.fn(pattern="needle", cwd=Path.cwd()))
 
     assert result == "example.txt:2: needle line"
 
@@ -133,9 +134,26 @@ async def test_fn_returns_multiple_result_lines(
         ]
     )
 
-    result = _text(await grep.fn(pattern="needle"))
+    result = _text(await grep.fn(pattern="needle", cwd=Path.cwd()))
 
     assert result == "one.txt:1: needle one\ntwo.txt:2: needle two"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("rg_available")
+async def test_fn_resolves_search_path_against_supplied_cwd(
+    execution: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    """Resolve relative search roots against the supplied tool cwd."""
+
+    execution.return_value = _event("match", "example.txt", 2, "needle line\n")
+
+    result = _text(await grep.fn(pattern="needle", path="src", cwd=tmp_path))
+
+    assert result == "example.txt:2: needle line"
+    assert _captured_args(execution)[-1] == "src"
+    assert _captured_cwd(execution) == tmp_path
 
 
 @pytest.mark.asyncio
@@ -144,7 +162,7 @@ async def test_fn_raises_when_command_is_missing() -> None:
     """Raise a clear exception when rg is unavailable."""
 
     with pytest.raises(RuntimeError, match="ripgrep"):
-        await grep.fn(pattern="needle")
+        await grep.fn(pattern="needle", cwd=Path.cwd())
 
 
 def test_parse_output_returns_pydantic_results() -> None:
@@ -381,6 +399,28 @@ def _find_no_commands(command: str) -> None:
 
     _ = command
     return None
+
+
+def _captured_args(execution: AsyncMock) -> list[str]:
+    """Return the rg args captured by a fake execution call."""
+
+    execution.assert_awaited_once()
+    await_args = execution.await_args
+    assert await_args is not None
+    args = await_args.args
+    assert isinstance(args[1], list)
+    return args[1]
+
+
+def _captured_cwd(execution: AsyncMock) -> Path | None:
+    """Return the cwd captured by a fake execution call."""
+
+    execution.assert_awaited_once()
+    await_args = execution.await_args
+    assert await_args is not None
+    cwd = await_args.kwargs.get("cwd")
+    assert isinstance(cwd, Path) or cwd is None
+    return cwd
 
 
 def _event(

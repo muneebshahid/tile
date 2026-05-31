@@ -13,6 +13,7 @@ from agent.tools.image_processing import (
     ProcessedImage,
     process_image,
 )
+from agent.tools.paths import resolve_to_cwd
 from agent.tools.truncation import (
     OUTPUT_BYTE_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
@@ -40,10 +41,12 @@ async def fn(
     path: str,
     offset: int | None = None,
     limit: int | None = None,
+    *,
+    cwd: Path,
 ) -> ToolResult:
     """Read a UTF-8 text file or supported image file."""
 
-    resolved_path = _resolve_path(path)
+    resolved_path = _resolve_path(path, cwd)
     image_mime_type = _detect_supported_image_mime_type(resolved_path)
     if image_mime_type is not None:
         return _read_image(resolved_path, image_mime_type)
@@ -95,10 +98,11 @@ def _format_results(selection: ReadSelection, path: str) -> str:
     return truncation.content
 
 
-def _resolve_path(path: str) -> Path:
+def _resolve_path(path: str, cwd: Path) -> Path:
     """Resolve a path with Pi-compatible user-input path variants."""
 
-    resolved = _resolve_to_cwd(_expand_path(path))
+    normalized_path = _normalize_unicode_spaces(_normalize_at_prefix(path))
+    resolved = _resolve_to_cwd(normalized_path, cwd)
     return _existing_path_variant(resolved)
 
 
@@ -202,13 +206,6 @@ def _is_webp(content: bytes) -> bool:
     return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
 
 
-def _expand_path(path: str) -> str:
-    """Expand shorthand path syntax before absolute resolution."""
-
-    normalized = _normalize_unicode_spaces(_normalize_at_prefix(path))
-    return str(Path(normalized).expanduser())
-
-
 def _normalize_at_prefix(path: str) -> str:
     """Strip a leading at sign used when users paste referenced paths."""
 
@@ -223,13 +220,10 @@ def _normalize_unicode_spaces(path: str) -> str:
     return UNICODE_SPACES.sub(" ", path)
 
 
-def _resolve_to_cwd(path: str) -> Path:
+def _resolve_to_cwd(path: str, cwd: Path) -> Path:
     """Resolve relative paths against the current working directory."""
 
-    candidate = Path(path)
-    if candidate.is_absolute():
-        return candidate
-    return Path.cwd() / candidate
+    return resolve_to_cwd(path, cwd)
 
 
 def _existing_path_variant(path: Path) -> Path:

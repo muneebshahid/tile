@@ -1,11 +1,13 @@
 """Application entrypoint for the Textual chat UI."""
 
 from collections.abc import Sequence
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
 from agent.agent import Agent
+from agent.tools import build_tools
 from agent.types import (
     AgentEndEvent,
     AgentEvent,
@@ -24,13 +26,18 @@ from ui.widgets import (
     UserMessageWidget,
     TranscriptMessageWidget,
 )
-from agent.tools import tools
 
 
 def create_agent() -> Agent:
     """Build the default agent used by the UI."""
 
-    return Agent(stream_fn=stream_api, model=settings.openai_model, tools=tools)
+    cwd = Path.cwd().resolve()
+    return Agent(
+        stream_fn=stream_api,
+        model=settings.openai_model,
+        tools=build_tools(cwd),
+        cwd=cwd,
+    )
 
 
 class PiyApp(App[None]):

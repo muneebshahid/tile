@@ -1,5 +1,6 @@
 """Search tool for the default agent."""
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ValidationError
@@ -60,12 +61,14 @@ async def fn(
     literal: bool = False,
     context: int = 0,
     limit: int = 100,
+    *,
+    cwd: Path,
 ) -> ToolResult:
     """Search file contents for a pattern."""
 
     executable = require_executable("rg", "ripgrep (rg)")
     args = _build_args(pattern, path, glob, ignore_case, literal, context, limit)
-    output = await execute(executable, args, allowed_exit_codes=(0, 1))
+    output = await execute(executable, args, allowed_exit_codes=(0, 1), cwd=cwd)
     results = _parse_output(output, limit)
     return ToolResult.text(_format_results(results, limit))
 

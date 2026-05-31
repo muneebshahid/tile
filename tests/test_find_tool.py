@@ -1,5 +1,6 @@
 """Tests for the default file path search tool."""
 
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -58,7 +59,7 @@ async def test_fn_uses_default_file_search_flags(
 
     execution.return_value = "./agent/tools/find.py\n"
 
-    result = _text(await find.fn(pattern="*.py"))
+    result = _text(await find.fn(pattern="*.py", cwd=Path.cwd()))
 
     assert result == "agent/tools/find.py"
     execution.assert_awaited_once_with(
@@ -74,7 +75,25 @@ async def test_fn_uses_default_file_search_flags(
             "*.py",
             ".",
         ],
+        cwd=Path.cwd(),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fd_available")
+async def test_fn_resolves_search_path_against_supplied_cwd(
+    execution: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    """Resolve relative search roots against the supplied tool cwd."""
+
+    execution.return_value = "./agent/tools/find.py\n"
+
+    result = _text(await find.fn(pattern="*.py", path="src", cwd=tmp_path))
+
+    assert result == "agent/tools/find.py"
+    assert _captured_args(execution)[-1] == "src"
+    assert _captured_cwd(execution) == tmp_path
 
 
 @pytest.mark.asyncio
@@ -86,7 +105,9 @@ async def test_fn_uses_full_path_for_path_patterns(
 
     execution.return_value = "./agent/tools/find.py\n"
 
-    result = _text(await find.fn(pattern="agent/**/*.py", path=".", limit=25))
+    result = _text(
+        await find.fn(pattern="agent/**/*.py", path=".", limit=25, cwd=Path.cwd())
+    )
 
     assert result == "agent/tools/find.py"
     assert _captured_args(execution) == [
@@ -112,7 +133,9 @@ async def test_fn_normalizes_root_relative_full_path_pattern(
 
     execution.return_value = "./agent/tools/find.py\n"
 
-    result = _text(await find.fn(pattern="/tools/*.py", path=".", limit=25))
+    result = _text(
+        await find.fn(pattern="/tools/*.py", path=".", limit=25, cwd=Path.cwd())
+    )
 
     assert result == "agent/tools/find.py"
     assert _captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
@@ -127,7 +150,9 @@ async def test_fn_preserves_prefixed_full_path_pattern(
 
     execution.return_value = "./agent/tools/find.py\n"
 
-    result = _text(await find.fn(pattern="**/tools/*.py", path=".", limit=25))
+    result = _text(
+        await find.fn(pattern="**/tools/*.py", path=".", limit=25, cwd=Path.cwd())
+    )
 
     assert result == "agent/tools/find.py"
     assert _captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
@@ -140,7 +165,7 @@ async def test_fn_clamps_limit_to_one(execution: AsyncMock) -> None:
 
     execution.return_value = "./a.py\n./b.py\n"
 
-    result = _text(await find.fn(pattern="*.py", limit=0))
+    result = _text(await find.fn(pattern="*.py", limit=0, cwd=Path.cwd()))
 
     assert (
         result
@@ -158,7 +183,7 @@ async def test_fn_returns_no_matches_when_fd_output_is_empty(
 
     execution.return_value = ""
 
-    result = _text(await find.fn(pattern="*.missing"))
+    result = _text(await find.fn(pattern="*.missing", cwd=Path.cwd()))
 
     assert result == "No files found matching pattern"
 
@@ -169,7 +194,7 @@ async def test_fn_raises_when_fd_is_missing() -> None:
     """Raise a clear exception when fd is unavailable."""
 
     with pytest.raises(RuntimeError, match="fd"):
-        await find.fn(pattern="*.py")
+        await find.fn(pattern="*.py", cwd=Path.cwd())
 
 
 @pytest.mark.asyncio
@@ -183,7 +208,7 @@ async def test_fn_normalizes_paths_and_reports_result_limit(
         ".\\agent\\tools\\find.py\n./tests/test_find_tool.py\n./extra.py\n"
     )
 
-    result = _text(await find.fn(pattern="*.py", limit=2))
+    result = _text(await find.fn(pattern="*.py", limit=2, cwd=Path.cwd()))
 
     assert result == (
         "agent/tools/find.py\ntests/test_find_tool.py\n\n"
@@ -200,7 +225,7 @@ async def test_fn_reports_result_limit_when_result_boundary_is_first(
 
     execution.return_value = "./a.py\n./b.py\n"
 
-    result = _text(await find.fn(pattern="*.py", limit=1))
+    result = _text(await find.fn(pattern="*.py", limit=1, cwd=Path.cwd()))
 
     assert result == (
         "a.py\n\n[1 results limit reached. Use limit=2 for more, or refine pattern]"
@@ -215,7 +240,7 @@ async def test_fn_reports_byte_limit(execution: AsyncMock) -> None:
     stdout = "\n".join(f"./{index:03d}-{'x' * 196}.py" for index in range(300))
     execution.return_value = f"{stdout}\n"
 
-    result = _text(await find.fn(pattern="*.py", limit=1000))
+    result = _text(await find.fn(pattern="*.py", limit=1000, cwd=Path.cwd()))
     notice = "\n\n[50.0KB limit reached]"
     body = result.removesuffix(notice)
 
@@ -233,7 +258,7 @@ async def test_fn_reports_byte_limit_when_byte_boundary_is_first(
     stdout = "\n".join(f"./{index:03d}-{'x' * 196}.py" for index in range(300))
     execution.return_value = f"{stdout}\n"
 
-    result = _text(await find.fn(pattern="*.py", limit=260))
+    result = _text(await find.fn(pattern="*.py", limit=260, cwd=Path.cwd()))
 
     assert result.endswith("\n\n[50.0KB limit reached]")
     assert "results limit reached" not in result
@@ -248,6 +273,17 @@ def _captured_args(execution: AsyncMock) -> list[str]:
     args = await_args.args
     assert isinstance(args[1], list)
     return args[1]
+
+
+def _captured_cwd(execution: AsyncMock) -> Path | None:
+    """Return the cwd captured by a fake execution call."""
+
+    execution.assert_awaited_once()
+    await_args = execution.await_args
+    assert await_args is not None
+    cwd = await_args.kwargs.get("cwd")
+    assert isinstance(cwd, Path) or cwd is None
+    return cwd
 
 
 def _find_command(command: str) -> str | None:

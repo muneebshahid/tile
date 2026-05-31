@@ -33,9 +33,28 @@ async def test_read_returns_file_contents(tmp_path: Path) -> None:
 
     file_path = _write_lines(tmp_path / "sample.txt", ["one", "two", "three"])
 
-    result = _text(await read.fn(path=str(file_path)))
+    result = _text(await read.fn(path=str(file_path), cwd=Path.cwd()))
 
     assert result == "one\ntwo\nthree"
+
+
+@pytest.mark.asyncio
+async def test_read_resolves_relative_path_against_supplied_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resolve relative read paths against the supplied tool cwd."""
+
+    project = tmp_path / "project"
+    other = tmp_path / "other"
+    project.mkdir()
+    other.mkdir()
+    _write_lines(project / "sample.txt", ["content"])
+    monkeypatch.chdir(other)
+
+    result = _text(await read.fn(path="sample.txt", cwd=project))
+
+    assert result == "content"
 
 
 @pytest.mark.asyncio
@@ -44,7 +63,7 @@ async def test_read_starts_from_one_indexed_offset(tmp_path: Path) -> None:
 
     file_path = _write_lines(tmp_path / "sample.txt", ["one", "two", "three"])
 
-    result = _text(await read.fn(path=str(file_path), offset=2))
+    result = _text(await read.fn(path=str(file_path), offset=2, cwd=Path.cwd()))
 
     assert result == "two\nthree"
 
@@ -55,7 +74,7 @@ async def test_read_reports_remaining_lines_after_limit(tmp_path: Path) -> None:
 
     file_path = _write_numbered_lines(tmp_path / "sample.txt", count=100)
 
-    result = _text(await read.fn(path=str(file_path), limit=10))
+    result = _text(await read.fn(path=str(file_path), limit=10, cwd=Path.cwd()))
 
     assert result == (
         "\n".join(f"line {index}" for index in range(1, 11))
@@ -69,7 +88,9 @@ async def test_read_handles_offset_and_limit_together(tmp_path: Path) -> None:
 
     file_path = _write_numbered_lines(tmp_path / "sample.txt", count=100)
 
-    result = _text(await read.fn(path=str(file_path), offset=41, limit=20))
+    result = _text(
+        await read.fn(path=str(file_path), offset=41, limit=20, cwd=Path.cwd())
+    )
 
     assert result == (
         "\n".join(f"line {index}" for index in range(41, 61))
@@ -84,7 +105,7 @@ async def test_read_raises_when_offset_is_beyond_file(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "sample.txt", ["one", "two", "three"])
 
     with pytest.raises(RuntimeError, match="Offset 100 is beyond end of file"):
-        await read.fn(path=str(file_path), offset=100)
+        await read.fn(path=str(file_path), offset=100, cwd=Path.cwd())
 
 
 @pytest.mark.asyncio
@@ -96,7 +117,7 @@ async def test_read_reports_line_truncation(tmp_path: Path) -> None:
         count=truncation.OUTPUT_LINE_LIMIT + 1,
     )
 
-    result = _text(await read.fn(path=str(file_path)))
+    result = _text(await read.fn(path=str(file_path), cwd=Path.cwd()))
 
     assert result.endswith(
         "\n\n[Showing lines 1-2000 of 2001. Use offset=2001 to continue.]"
@@ -109,7 +130,7 @@ async def test_read_reports_byte_truncation(tmp_path: Path) -> None:
 
     file_path = _write_lines(tmp_path / "sample.txt", ["x" * 200 for _ in range(500)])
 
-    result = _text(await read.fn(path=str(file_path)))
+    result = _text(await read.fn(path=str(file_path), cwd=Path.cwd()))
 
     assert "50.0KB limit" in result
     assert result.endswith("to continue.]")
@@ -121,7 +142,7 @@ async def test_read_reports_first_line_exceeds_byte_limit(tmp_path: Path) -> Non
 
     file_path = _write_lines(tmp_path / "sample.txt", ["x" * (50 * 1024 + 1)])
 
-    result = _text(await read.fn(path=str(file_path)))
+    result = _text(await read.fn(path=str(file_path), cwd=Path.cwd()))
 
     assert result == (
         f"[Line 1 is 50.0KB, exceeds 50.0KB limit. Use bash: "
@@ -136,7 +157,7 @@ async def test_read_returns_image_content_for_supported_image(tmp_path: Path) ->
     image_bytes = _png_bytes()
     file_path = _write_bytes(tmp_path / "sample.png", image_bytes)
 
-    result = await read.fn(path=str(file_path))
+    result = await read.fn(path=str(file_path), cwd=Path.cwd())
 
     assert len(result.content) == 2
     text_content = result.content[0]
@@ -153,7 +174,7 @@ async def test_read_raises_when_path_does_not_exist(tmp_path: Path) -> None:
     """Raise filesystem errors so the agent can mark tool execution as failed."""
 
     with pytest.raises(FileNotFoundError):
-        await read.fn(path=str(tmp_path / "missing.txt"))
+        await read.fn(path=str(tmp_path / "missing.txt"), cwd=Path.cwd())
 
 
 @pytest.mark.asyncio
@@ -162,7 +183,7 @@ async def test_read_strips_at_prefix_for_referenced_paths(tmp_path: Path) -> Non
 
     file_path = _write_lines(tmp_path / "sample.txt", ["content"])
 
-    result = _text(await read.fn(path=f"@{file_path}"))
+    result = _text(await read.fn(path=f"@{file_path}", cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -177,7 +198,7 @@ async def test_read_expands_home_directory(
     monkeypatch.setenv("HOME", str(tmp_path))
     _write_lines(tmp_path / "sample.txt", ["content"])
 
-    result = _text(await read.fn(path="~/sample.txt"))
+    result = _text(await read.fn(path="~/sample.txt", cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -189,7 +210,7 @@ async def test_read_normalizes_unicode_spaces(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "my file.txt", ["content"])
     requested_path = str(file_path).replace(" ", "\u00a0")
 
-    result = _text(await read.fn(path=requested_path))
+    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -204,7 +225,7 @@ async def test_read_tries_macos_screenshot_ampm_spacing(tmp_path: Path) -> None:
     )
     requested_path = str(file_path).replace("\u202fAM.", " AM.")
 
-    result = _text(await read.fn(path=requested_path))
+    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -217,7 +238,7 @@ async def test_read_tries_nfd_filename_variant(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / decomposed_name, ["content"])
     requested_path = str(file_path.with_name("café.txt"))
 
-    result = _text(await read.fn(path=requested_path))
+    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -229,7 +250,7 @@ async def test_read_tries_curly_quote_filename_variant(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "Capture d\u2019ecran.txt", ["content"])
     requested_path = str(file_path).replace("\u2019", "'")
 
-    result = _text(await read.fn(path=requested_path))
+    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 

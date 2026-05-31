@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from ai.types.tools import ToolDefinition, ToolResult
 
+from agent.tools.paths import resolve_to_cwd
 from agent.tools.truncation import OUTPUT_BYTE_LIMIT_LABEL, truncate_head
 
 
@@ -17,16 +18,17 @@ class Results(BaseModel):
     entries: list[str]
 
 
-async def fn(path: str = ".", limit: int = 500) -> ToolResult:
+async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
     """List the contents of a directory."""
 
     limit = max(1, limit)
-    output = await _execute(path)
+    resolved_path = _resolve_path(path, cwd)
+    output = await _execute(resolved_path)
     results = _parse_output(output)
     return ToolResult.text(_format_results(results, limit))
 
 
-async def _execute(path: str) -> list[str]:
+async def _execute(path: Path) -> list[str]:
     """List directory entries asynchronously."""
 
     return await asyncio.to_thread(_list_directory_entries, path)
@@ -60,11 +62,17 @@ def _format_results(results: Results, limit: int) -> str:
     return result
 
 
-def _list_directory_entries(path: str) -> list[str]:
-    """Return directory entry names for a string path."""
+def _resolve_path(path: str, cwd: Path) -> Path:
+    """Resolve a directory path against the tool working directory."""
+
+    return resolve_to_cwd(path, cwd).resolve(strict=False)
+
+
+def _list_directory_entries(path: Path) -> list[str]:
+    """Return directory entry names for a path."""
 
     return sorted(
-        (_format_directory_entry(entry) for entry in Path(path).iterdir()),
+        (_format_directory_entry(entry) for entry in path.iterdir()),
         key=str.lower,
     )
 
