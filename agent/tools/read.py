@@ -17,7 +17,7 @@ from agent.tools.paths import resolve_to_cwd
 from agent.tools.truncation import (
     OUTPUT_BYTE_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
-    HeadTruncation,
+    Truncation,
     format_size,
     truncate_head,
 )
@@ -89,7 +89,7 @@ def _format_results(selection: ReadSelection, path: str) -> str:
     """Format selected file content with Pi-compatible continuation notices."""
 
     truncation = truncate_head(selection.content)
-    if truncation.first_line_exceeds_limit:
+    if truncation.edge_line_exceeds_limit:
         return _format_first_line_too_large(selection, path)
     if truncation.truncated:
         return _format_truncated_selection(selection, truncation)
@@ -311,7 +311,7 @@ def _format_first_line_too_large(selection: ReadSelection, path: str) -> str:
 
 def _format_truncated_selection(
     selection: ReadSelection,
-    truncation: HeadTruncation,
+    truncation: Truncation,
 ) -> str:
     """Return truncated content with an offset continuation notice."""
 
@@ -345,7 +345,7 @@ def _user_limit_left_remaining_lines(selection: ReadSelection) -> bool:
 
 def _truncation_notice(
     selection: ReadSelection,
-    truncation: HeadTruncation,
+    truncation: Truncation,
     end_line: int,
     next_offset: int,
 ) -> str:

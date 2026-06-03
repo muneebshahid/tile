@@ -46,4 +46,39 @@ def test_truncate_head_reports_first_line_exceeds_limit() -> None:
 
     assert result.content == ""
     assert result.truncated is True
-    assert result.first_line_exceeds_limit is True
+    assert result.edge_line_exceeds_limit is True
+    assert result.keep == "head"
+
+
+def test_truncate_tail_reports_line_limit() -> None:
+    """Report line-limit metadata while keeping trailing complete lines."""
+
+    result = truncation.truncate_tail("a\nb\nc", max_lines=2, max_bytes=100)
+
+    assert result.content == "b\nc"
+    assert result.truncated is True
+    assert result.truncated_by == "lines"
+    assert result.output_lines == 2
+    assert result.total_lines == 3
+
+
+def test_truncate_tail_reports_byte_limit() -> None:
+    """Report byte-limit metadata while keeping trailing complete lines."""
+
+    result = truncation.truncate_tail("abcd\nefgh", max_lines=100, max_bytes=6)
+
+    assert result.content == "efgh"
+    assert result.truncated is True
+    assert result.truncated_by == "bytes"
+    assert result.output_bytes == 4
+
+
+def test_truncate_tail_reports_last_line_exceeds_limit() -> None:
+    """Return no partial content when the final line exceeds the byte limit."""
+
+    result = truncation.truncate_tail("first\nabcdef", max_lines=100, max_bytes=5)
+
+    assert result.content == ""
+    assert result.truncated is True
+    assert result.edge_line_exceeds_limit is True
+    assert result.keep == "tail"

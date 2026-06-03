@@ -4,17 +4,23 @@ import asyncio
 import os
 import signal
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import BaseModel
-
 from ai.types.tools import ToolDefinition, ToolResult
+from agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
+from agent.tools.truncation import (
+    OUTPUT_BYTE_LIMIT_LABEL,
+    Truncation,
+    format_size,
+)
 
 
-class ExecutionResult(BaseModel):
+@dataclass(frozen=True)
+class ExecutionResult:
     """Captured shell command execution result."""
 
-    output: str
+    snapshot: OutputSnapshot
     exit_code: int | None
     timed_out: bool
     timeout: float | None
@@ -51,9 +57,9 @@ async def _execute(
         cwd=cwd,
         start_new_session=_supports_process_groups(),
     )
-    output, timed_out = await _wait_for_process(process, timeout)
+    snapshot, timed_out = await _wait_for_process(process, timeout)
     return ExecutionResult(
-        output=output,
+        snapshot=snapshot,
         exit_code=process.returncode,
         timed_out=timed_out,
         timeout=timeout,
@@ -63,11 +69,11 @@ async def _execute(
 async def _wait_for_process(
     process: asyncio.subprocess.Process,
     timeout: float | None,
-) -> tuple[str, bool]:
+) -> tuple[OutputSnapshot, bool]:
     """Wait for a shell process while enforcing the optional timeout."""
 
-    output_chunks: list[bytes] = []
-    output_task = asyncio.create_task(_read_output(process, output_chunks))
+    output = OutputAccumulator()
+    output_task = asyncio.create_task(_read_output(process, output))
     wait_task = asyncio.create_task(process.wait())
     timed_out = False
 
@@ -82,12 +88,12 @@ async def _wait_for_process(
     finally:
         await output_task
 
-    return b"".join(output_chunks).decode(errors="replace"), timed_out
+    return output.finish(), timed_out
 
 
 async def _read_output(
     process: asyncio.subprocess.Process,
-    output_chunks: list[bytes],
+    output: OutputAccumulator,
 ) -> None:
     """Read merged process output until the pipe closes."""
 
@@ -95,7 +101,7 @@ async def _read_output(
         return
 
     while chunk := await process.stdout.read(4096):
-        output_chunks.append(chunk)
+        output.accumulate(chunk)
 
 
 async def _stop_timed_out_process(
@@ -117,15 +123,49 @@ def _format_results(result: ExecutionResult) -> str:
 
     if result.timed_out:
         raise RuntimeError(
-            _append_status(result.output, _timeout_status(result.timeout))
+            _append_status(
+                _format_output(result.snapshot, empty_text=""),
+                _timeout_status(result.timeout),
+            )
         )
     if result.exit_code not in (0, None):
         raise RuntimeError(
             _append_status(
-                result.output, f"Command exited with code {result.exit_code}"
+                _format_output(result.snapshot, empty_text=""),
+                f"Command exited with code {result.exit_code}",
             )
         )
-    return result.output or "(no output)"
+    return _format_output(result.snapshot, empty_text="(no output)")
+
+
+def _format_output(snapshot: OutputSnapshot, empty_text: str) -> str:
+    """Format captured shell output with tail truncation."""
+
+    if not snapshot.content and not snapshot.truncation.truncated:
+        return empty_text
+
+    if not snapshot.truncation.truncated:
+        return snapshot.content
+    return _append_status(
+        snapshot.content,
+        _truncation_notice(snapshot.truncation),
+    )
+
+
+def _truncation_notice(truncation: Truncation) -> str:
+    """Return a compact bash output truncation notice."""
+
+    if truncation.edge_line_exceeds_limit:
+        return f"[Output omitted: last line exceeds {OUTPUT_BYTE_LIMIT_LABEL} limit]"
+
+    start_line = truncation.total_lines - truncation.output_lines + 1
+    end_line = truncation.total_lines
+    if truncation.truncated_by == "lines":
+        return f"[Showing lines {start_line}-{end_line} of {truncation.total_lines}]"
+    return (
+        f"[Showing lines {start_line}-{end_line} of {truncation.total_lines} "
+        f"({format_size(truncation.max_bytes)} limit)]"
+    )
 
 
 def _append_status(output: str, status: str) -> str:

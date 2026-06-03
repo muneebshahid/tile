@@ -1,11 +1,13 @@
 """Tests for the default shell command tool scaffold."""
 
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 import agent.tools.bash as bash
 from ai.types.tools import ToolResult, ToolTextContent
+from agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
 
 
 def test_bash_schema_requires_only_command() -> None:
@@ -22,6 +24,15 @@ def test_bash_schema_exposes_command_controls() -> None:
     assert bash.tool.name == "bash"
     assert isinstance(properties, dict)
     assert set(properties) == {"command", "timeout"}
+
+
+@pytest.fixture
+def execution(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
+    """Patch shell execution with an async mock for fn-level tests."""
+
+    execution_mock = AsyncMock()
+    monkeypatch.setattr(bash, "_execute", execution_mock)
+    return execution_mock
 
 
 @pytest.mark.asyncio
@@ -53,6 +64,28 @@ async def test_fn_returns_no_output_marker(tmp_path: Path) -> None:
     result = _text(await bash.fn(command="true", cwd=tmp_path))
 
     assert result == "(no output)"
+
+
+@pytest.mark.asyncio
+async def test_fn_truncates_to_tail_output(
+    execution: AsyncMock,
+    tmp_path: Path,
+) -> None:
+    """Keep the end of large bash output instead of returning all content."""
+
+    output = "\n".join(f"line {index}" for index in range(2002))
+    execution.return_value = bash.ExecutionResult(
+        snapshot=_snapshot(output),
+        exit_code=0,
+        timed_out=False,
+        timeout=None,
+    )
+
+    result = _text(await bash.fn(command="generate-output", cwd=tmp_path))
+
+    assert result.startswith("line 2\n")
+    assert result.endswith("\n\n[Showing lines 3-2002 of 2002]")
+    execution.assert_awaited_once_with("generate-output", None, tmp_path.resolve())
 
 
 @pytest.mark.asyncio
@@ -94,3 +127,11 @@ def _text(result: ToolResult) -> str:
     content = result.content[0]
     assert isinstance(content, ToolTextContent)
     return content.text
+
+
+def _snapshot(output: str) -> OutputSnapshot:
+    """Build an output snapshot from text."""
+
+    accumulator = OutputAccumulator()
+    accumulator.accumulate(output.encode("utf-8"))
+    return accumulator.finish()

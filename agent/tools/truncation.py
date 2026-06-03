@@ -1,5 +1,6 @@
 """Shared truncation helpers for built-in tool output."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Literal
 
@@ -12,64 +13,109 @@ OUTPUT_BYTE_LIMIT_LABEL: str = "50.0KB"
 # Maximum characters to keep from one grep result text line.
 GREP_LINE_CHARACTER_LIMIT: int = 500
 TruncationReason = Literal["lines", "bytes"]
+TruncationKeep = Literal["head", "tail"]
 
 
 @dataclass(frozen=True)
-class HeadTruncation:
-    """Metadata returned when keeping the beginning of tool output."""
+class Truncation:
+    """Metadata returned when keeping one edge of tool output."""
 
     content: str
     truncated: bool
     truncated_by: TruncationReason | None
+    keep: TruncationKeep
     total_lines: int
     total_bytes: int
     output_lines: int
     output_bytes: int
-    first_line_exceeds_limit: bool
+    edge_line_exceeds_limit: bool
     max_lines: int
     max_bytes: int
+
+
+def truncate_text(
+    text: str,
+    *,
+    keep: TruncationKeep,
+    max_lines: int = OUTPUT_LINE_LIMIT,
+    max_bytes: int = OUTPUT_BYTE_LIMIT,
+) -> Truncation:
+    """Return one edge of text constrained by line and byte limits."""
+
+    total_bytes = len(text.encode("utf-8"))
+    lines = text.split("\n")
+    total_lines = len(lines)
+    if total_lines <= max_lines and total_bytes <= max_bytes:
+        return Truncation(
+            content=text,
+            truncated=False,
+            truncated_by=None,
+            keep=keep,
+            total_lines=total_lines,
+            total_bytes=total_bytes,
+            output_lines=total_lines,
+            output_bytes=total_bytes,
+            edge_line_exceeds_limit=False,
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
+
+    edge_line = lines[0] if keep == "head" else lines[-1]
+    if len(edge_line.encode("utf-8")) > max_bytes:
+        return Truncation(
+            content="",
+            truncated=True,
+            truncated_by="bytes",
+            keep=keep,
+            total_lines=total_lines,
+            total_bytes=total_bytes,
+            output_lines=0,
+            output_bytes=0,
+            edge_line_exceeds_limit=True,
+            max_lines=max_lines,
+            max_bytes=max_bytes,
+        )
+
+    output_lines, truncated_by = _select_output_lines(
+        lines,
+        keep,
+        max_lines,
+        max_bytes,
+    )
+    content = "\n".join(output_lines)
+    return Truncation(
+        content=content,
+        truncated=True,
+        truncated_by=truncated_by,
+        keep=keep,
+        total_lines=total_lines,
+        total_bytes=total_bytes,
+        output_lines=len(output_lines),
+        output_bytes=len(content.encode("utf-8")),
+        edge_line_exceeds_limit=False,
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+    )
 
 
 def truncate_head(
     text: str,
     max_lines: int = OUTPUT_LINE_LIMIT,
     max_bytes: int = OUTPUT_BYTE_LIMIT,
-) -> HeadTruncation:
+) -> Truncation:
     """Return leading complete lines constrained by line and byte limits."""
 
-    total_bytes = len(text.encode("utf-8"))
-    lines = text.split("\n")
-    total_lines = len(lines)
-    if total_lines <= max_lines and total_bytes <= max_bytes:
-        return _untruncated_head(text, total_lines, total_bytes, max_lines, max_bytes)
-    if len(lines[0].encode("utf-8")) > max_bytes:
-        return _first_line_exceeds_head(total_lines, total_bytes, max_lines, max_bytes)
+    return truncate_text(text, keep="head", max_lines=max_lines, max_bytes=max_bytes)
 
-    output_lines: list[str] = []
-    output_bytes = 0
-    truncated_by: TruncationReason = "lines"
-    for line in lines[:max_lines]:
-        separator_bytes = 1 if output_lines else 0
-        line_bytes = len(line.encode("utf-8"))
-        if output_bytes + separator_bytes + line_bytes > max_bytes:
-            truncated_by = "bytes"
-            break
-        output_lines.append(line)
-        output_bytes += separator_bytes + line_bytes
 
-    content = "\n".join(output_lines)
-    return HeadTruncation(
-        content=content,
-        truncated=True,
-        truncated_by=truncated_by,
-        total_lines=total_lines,
-        total_bytes=total_bytes,
-        output_lines=len(output_lines),
-        output_bytes=len(content.encode("utf-8")),
-        first_line_exceeds_limit=False,
-        max_lines=max_lines,
-        max_bytes=max_bytes,
-    )
+def truncate_tail(
+    text: str,
+    max_lines: int = OUTPUT_LINE_LIMIT,
+    max_bytes: int = OUTPUT_BYTE_LIMIT,
+) -> Truncation:
+    """Return trailing complete lines constrained by line and byte limits."""
+
+    return truncate_text(text, keep="tail", max_lines=max_lines, max_bytes=max_bytes)
 
 
 def truncate_to_byte_limit(
@@ -116,46 +162,38 @@ def format_size(byte_count: int) -> str:
     return f"{byte_count / (1024 * 1024):.1f}MB"
 
 
-def _untruncated_head(
-    text: str,
-    total_lines: int,
-    total_bytes: int,
+def _select_output_lines(
+    lines: list[str],
+    keep: TruncationKeep,
     max_lines: int,
     max_bytes: int,
-) -> HeadTruncation:
-    """Build metadata for content that did not need truncation."""
+) -> tuple[list[str], TruncationReason]:
+    """Return selected output lines and the boundary that stopped selection."""
 
-    return HeadTruncation(
-        content=text,
-        truncated=False,
-        truncated_by=None,
-        total_lines=total_lines,
-        total_bytes=total_bytes,
-        output_lines=total_lines,
-        output_bytes=total_bytes,
-        first_line_exceeds_limit=False,
-        max_lines=max_lines,
-        max_bytes=max_bytes,
-    )
+    output_lines: list[str] = []
+    output_bytes = 0
+    truncated_by: TruncationReason = "lines"
+    for line in _iter_lines(lines, keep):
+        if len(output_lines) >= max_lines:
+            break
+
+        separator_bytes = 1 if output_lines else 0
+        line_bytes = len(line.encode("utf-8"))
+        if output_bytes + separator_bytes + line_bytes > max_bytes:
+            truncated_by = "bytes"
+            break
+
+        output_lines.append(line)
+        output_bytes += separator_bytes + line_bytes
+
+    if keep == "tail":
+        output_lines.reverse()
+    return output_lines, truncated_by
 
 
-def _first_line_exceeds_head(
-    total_lines: int,
-    total_bytes: int,
-    max_lines: int,
-    max_bytes: int,
-) -> HeadTruncation:
-    """Build metadata for content whose first line cannot fit."""
+def _iter_lines(lines: list[str], keep: TruncationKeep) -> Iterator[str]:
+    """Iterate lines from the retained edge."""
 
-    return HeadTruncation(
-        content="",
-        truncated=True,
-        truncated_by="bytes",
-        total_lines=total_lines,
-        total_bytes=total_bytes,
-        output_lines=0,
-        output_bytes=0,
-        first_line_exceeds_limit=True,
-        max_lines=max_lines,
-        max_bytes=max_bytes,
-    )
+    if keep == "head":
+        return iter(lines)
+    return reversed(lines)
