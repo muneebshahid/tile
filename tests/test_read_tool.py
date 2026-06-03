@@ -18,7 +18,7 @@ def test_read_schema_requires_only_path() -> None:
 
 
 def test_read_schema_exposes_text_read_controls() -> None:
-    """Expose the text file read inputs from the Pi-compatible schema."""
+    """Expose the text file read inputs from the schema."""
 
     properties = read.tool.input_schema["properties"]
 

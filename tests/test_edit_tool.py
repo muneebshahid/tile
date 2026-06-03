@@ -64,13 +64,12 @@ def test_edit_normalizes_unicode_spaces(tmp_path: Path) -> None:
     """Resolve paths typed with uncommon Unicode spaces."""
 
     file_path = tmp_path / "my file.txt"
-    file_path.write_text("content", encoding="utf-8")
     requested_path = str(file_path).replace(" ", "\u00a0")
 
     assert edit._resolve_path(requested_path, Path.cwd()) == file_path
 
 
-def test_edit_keeps_at_prefix(tmp_path: Path) -> None:
-    """Leave leading at signs untouched for edit paths."""
+def test_edit_strips_at_prefix(tmp_path: Path) -> None:
+    """Strip leading at signs from referenced edit paths."""
 
-    assert edit._resolve_path("@sample.txt", tmp_path) == tmp_path / "@sample.txt"
+    assert edit._resolve_path("@sample.txt", tmp_path) == tmp_path / "sample.txt"
