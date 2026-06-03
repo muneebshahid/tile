@@ -1,5 +1,7 @@
 """Tool contracts shared by agents and AI providers."""
 
+from __future__ import annotations
+
 from collections.abc import Awaitable, Callable
 from typing import Literal, TypeAlias
 
@@ -68,7 +70,7 @@ class ToolResult(BaseModel):
         text: str,
         *,
         details: ToolResultDetails | None = None,
-    ) -> "ToolResult":
+    ) -> ToolResult:
         """Create a text-only tool result."""
 
         return cls(content=[ToolTextContent(text=text)], details=details)
@@ -80,7 +82,7 @@ class ToolResult(BaseModel):
         image: ToolImageContent,
         *,
         details: ToolResultDetails | None = None,
-    ) -> "ToolResult":
+    ) -> ToolResult:
         """Create an image tool result with an explanatory text block."""
 
         return cls(content=[ToolTextContent(text=text), image], details=details)

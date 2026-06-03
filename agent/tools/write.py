@@ -1,5 +1,7 @@
 """File write tool for the default agent."""
 
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
 
@@ -17,7 +19,7 @@ async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:
     return ToolResult.text(_format_results(result))
 
 
-async def _execute(path: Path, content: str) -> "Results":
+async def _execute(path: Path, content: str) -> Results:
     """Write file content asynchronously."""
 
     return await asyncio.to_thread(_write_file, path, content)

@@ -1,5 +1,7 @@
 """Image processing pipeline for tool-returned images."""
 
+from __future__ import annotations
+
 import base64
 from dataclasses import dataclass
 from io import BytesIO
@@ -20,8 +22,8 @@ JPEG_QUALITY_STEPS = (DEFAULT_JPEG_QUALITY, 85, 70, 55, 40)
 def process_image(
     data: bytes,
     mime_type: ImageMimeType,
-    options: "ImageProcessingOptions | None" = None,
-) -> "ProcessedImage":
+    options: ImageProcessingOptions | None = None,
+) -> ProcessedImage:
     """Run the image processing pipeline before model submission."""
 
     effective_options = options or ImageProcessingOptions()
@@ -162,7 +164,7 @@ def _resize(
 
 def _replace_with_encoded_image(
     image: ProcessedImage,
-    candidate: "EncodedCandidate",
+    candidate: EncodedCandidate,
     width: int,
     height: int,
     *,
