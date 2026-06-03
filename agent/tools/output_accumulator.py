@@ -6,10 +6,9 @@ from dataclasses import dataclass, replace
 from agent.tools.truncation import (
     OUTPUT_BYTE_LIMIT,
     OUTPUT_LINE_LIMIT,
-    Truncation,
-    TruncationReason,
     truncate_tail,
 )
+from tools.types import Truncation, TruncationReason
 
 
 @dataclass(frozen=True)

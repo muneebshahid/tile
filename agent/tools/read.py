@@ -17,10 +17,10 @@ from agent.tools.paths import resolve_to_cwd
 from agent.tools.truncation import (
     OUTPUT_BYTE_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
-    Truncation,
     format_size,
     truncate_head,
 )
+from tools.types import Truncation
 
 UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202F\u205F\u3000]")
 NARROW_NO_BREAK_SPACE = "\u202f"

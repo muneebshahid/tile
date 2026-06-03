@@ -87,9 +87,10 @@ async def test_ls_returns_all_directory_entries(populated_directory: Path) -> No
     assert result.splitlines() == ["README.md", "src/", "uv.lock"]
     details = _ls_details(tool_result)
     assert details.path == str(populated_directory.resolve(strict=False))
-    assert details.entries_returned == 3
-    assert details.total_entries == 3
-    assert details.truncation is None
+    assert details.output.output_lines == 3
+    assert details.output.total_lines == 3
+    assert details.output.truncated is False
+    assert details.output.truncated_by is None
 
 
 @pytest.mark.asyncio
@@ -140,14 +141,12 @@ async def test_ls_respects_limit_after_sorting_entries(
         "[2 entries limit reached. Use limit=4 for more]",
     ]
     details = _ls_details(tool_result)
-    assert details.entries_returned == 2
-    assert details.total_entries == 3
-    assert details.truncation is not None
-    assert details.truncation.reason == "lines"
-    assert details.truncation.keep == "head"
-    assert details.truncation.line_limit == 2
-    assert details.truncation.lines_returned == 2
-    assert details.truncation.total_lines == 3
+    assert details.output.output_lines == 2
+    assert details.output.total_lines == 3
+    assert details.output.truncated is True
+    assert details.output.truncated_by == "lines"
+    assert details.output.keep == "head"
+    assert details.output.max_lines == 2
 
 
 @pytest.mark.asyncio
@@ -179,13 +178,13 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
     assert len("\n".join(entries).encode("utf-8")) > truncation.OUTPUT_BYTE_LIMIT
     assert len(body.encode("utf-8")) <= truncation.OUTPUT_BYTE_LIMIT
     details = _ls_details(tool_result)
-    assert details.entries_returned < details.total_entries
-    assert details.total_entries == 270
-    assert details.truncation is not None
-    assert details.truncation.reason == "bytes"
-    assert details.truncation.byte_limit == truncation.OUTPUT_BYTE_LIMIT
-    assert details.truncation.bytes_returned <= truncation.OUTPUT_BYTE_LIMIT
-    assert details.truncation.total_bytes > truncation.OUTPUT_BYTE_LIMIT
+    assert details.output.output_lines < details.output.total_lines
+    assert details.output.total_lines == 270
+    assert details.output.truncated is True
+    assert details.output.truncated_by == "bytes"
+    assert details.output.max_bytes == truncation.OUTPUT_BYTE_LIMIT
+    assert details.output.output_bytes <= truncation.OUTPUT_BYTE_LIMIT
+    assert details.output.total_bytes > truncation.OUTPUT_BYTE_LIMIT
 
 
 @pytest.mark.asyncio
@@ -253,9 +252,10 @@ async def test_ls_reports_empty_directory(tmp_path: Path) -> None:
 
     assert result == "(empty directory)"
     details = _ls_details(tool_result)
-    assert details.entries_returned == 0
-    assert details.total_entries == 0
-    assert details.truncation is None
+    assert details.output.output_lines == 0
+    assert details.output.total_lines == 0
+    assert details.output.truncated is False
+    assert details.output.truncated_by is None
 
 
 @pytest.mark.asyncio

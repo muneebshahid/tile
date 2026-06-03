@@ -9,14 +9,14 @@ from pydantic import BaseModel
 from ai.types.tools import (
     LsDetails,
     ToolDefinition,
+    ToolOutputDetails,
     ToolResult,
-    ToolTruncationDetails,
 )
 
 from agent.tools.paths import resolve_to_cwd
 from agent.tools.truncation import (
+    OUTPUT_BYTE_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
-    Truncation,
     truncate_head,
 )
 
@@ -65,8 +65,18 @@ def _format_results(results: Results, limit: int, path: Path) -> FormattedResult
             text="(empty directory)",
             details=LsDetails(
                 path=str(path),
-                entries_returned=0,
-                total_entries=0,
+                output=ToolOutputDetails(
+                    truncated=False,
+                    truncated_by=None,
+                    keep="head",
+                    total_lines=0,
+                    total_bytes=0,
+                    output_lines=0,
+                    output_bytes=0,
+                    edge_line_exceeds_limit=False,
+                    max_lines=limit,
+                    max_bytes=OUTPUT_BYTE_LIMIT,
+                ),
             ),
         )
 
@@ -87,30 +97,8 @@ def _format_results(results: Results, limit: int, path: Path) -> FormattedResult
         text=result,
         details=LsDetails(
             path=str(path),
-            entries_returned=truncation.output_lines,
-            total_entries=len(results.entries),
-            truncation=_build_truncation_details(truncation),
+            output=ToolOutputDetails.from_truncation(truncation),
         ),
-    )
-
-
-def _build_truncation_details(
-    truncation: Truncation,
-) -> ToolTruncationDetails | None:
-    """Build tool-level truncation details from shared truncation metadata."""
-
-    if truncation.truncated_by is None:
-        return None
-    return ToolTruncationDetails(
-        reason=truncation.truncated_by,
-        keep=truncation.keep,
-        line_limit=truncation.max_lines,
-        byte_limit=truncation.max_bytes,
-        lines_returned=truncation.output_lines,
-        bytes_returned=truncation.output_bytes,
-        total_lines=truncation.total_lines,
-        total_bytes=truncation.total_bytes,
-        edge_line_exceeds_limit=truncation.edge_line_exceeds_limit,
     )
 
 

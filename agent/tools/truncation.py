@@ -1,8 +1,8 @@
 """Shared truncation helpers for built-in tool output."""
 
 from collections.abc import Iterator
-from dataclasses import dataclass
-from typing import Literal
+
+from tools.types import Truncation, TruncationKeep, TruncationReason
 
 # Maximum lines to keep before appending a truncation notice.
 OUTPUT_LINE_LIMIT: int = 2000
@@ -12,25 +12,6 @@ OUTPUT_BYTE_LIMIT: int = 50 * 1024
 OUTPUT_BYTE_LIMIT_LABEL: str = "50.0KB"
 # Maximum characters to keep from one grep result text line.
 GREP_LINE_CHARACTER_LIMIT: int = 500
-TruncationReason = Literal["lines", "bytes"]
-TruncationKeep = Literal["head", "tail"]
-
-
-@dataclass(frozen=True)
-class Truncation:
-    """Metadata returned when keeping one edge of tool output."""
-
-    content: str
-    truncated: bool
-    truncated_by: TruncationReason | None
-    keep: TruncationKeep
-    total_lines: int
-    total_bytes: int
-    output_lines: int
-    output_bytes: int
-    edge_line_exceeds_limit: bool
-    max_lines: int
-    max_bytes: int
 
 
 def truncate_text(

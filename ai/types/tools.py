@@ -7,24 +7,47 @@ from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, JsonValue
 
+from tools.types import Truncation, TruncationKeep, TruncationReason
+
 JsonObject: TypeAlias = dict[str, JsonValue]
 ImageMimeType: TypeAlias = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
-ToolTruncationReason: TypeAlias = Literal["lines", "bytes"]
-ToolTruncationKeep: TypeAlias = Literal["head", "tail"]
+ToolTruncationReason: TypeAlias = TruncationReason
+ToolTruncationKeep: TypeAlias = TruncationKeep
 
 
-class ToolTruncationDetails(BaseModel):
-    """Structured metadata describing tool output truncation."""
+class ToolOutputDetails(BaseModel):
+    """Structured metadata describing bounded tool output."""
 
-    reason: ToolTruncationReason
+    truncated: bool
+    truncated_by: ToolTruncationReason | None
     keep: ToolTruncationKeep
-    line_limit: int
-    byte_limit: int
-    lines_returned: int
-    bytes_returned: int
     total_lines: int
     total_bytes: int
-    edge_line_exceeds_limit: bool = False
+    output_lines: int
+    output_bytes: int
+    edge_line_exceeds_limit: bool
+    max_lines: int
+    max_bytes: int
+
+    @classmethod
+    def from_truncation(
+        cls,
+        truncation: Truncation,
+    ) -> ToolOutputDetails:
+        """Create output details from matching truncation metadata."""
+
+        return cls(
+            truncated=truncation.truncated,
+            truncated_by=truncation.truncated_by,
+            keep=truncation.keep,
+            total_lines=truncation.total_lines,
+            total_bytes=truncation.total_bytes,
+            output_lines=truncation.output_lines,
+            output_bytes=truncation.output_bytes,
+            edge_line_exceeds_limit=truncation.edge_line_exceeds_limit,
+            max_lines=truncation.max_lines,
+            max_bytes=truncation.max_bytes,
+        )
 
 
 class LsDetails(BaseModel):
@@ -32,9 +55,7 @@ class LsDetails(BaseModel):
 
     type: Literal["ls"] = "ls"
     path: str
-    entries_returned: int
-    total_entries: int
-    truncation: ToolTruncationDetails | None = None
+    output: ToolOutputDetails
 
 
 ToolResultDetails: TypeAlias = LsDetails

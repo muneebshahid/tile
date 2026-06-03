@@ -11,9 +11,9 @@ from ai.types.tools import ToolDefinition, ToolResult
 from agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
 from agent.tools.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
-    Truncation,
     format_size,
 )
+from tools.types import Truncation
 
 
 @dataclass(frozen=True)
