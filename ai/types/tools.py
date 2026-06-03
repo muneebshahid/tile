@@ -7,6 +7,33 @@ from pydantic import BaseModel, JsonValue
 
 JsonObject: TypeAlias = dict[str, JsonValue]
 ImageMimeType: TypeAlias = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+ToolTruncationReason: TypeAlias = Literal["lines", "bytes"]
+ToolTruncationKeep: TypeAlias = Literal["head", "tail"]
+
+
+class ToolTruncationDetails(BaseModel):
+    """Structured metadata describing tool output truncation."""
+
+    reason: ToolTruncationReason
+    keep: ToolTruncationKeep
+    line_limit: int
+    byte_limit: int
+    lines_returned: int
+    bytes_returned: int
+    total_lines: int
+    total_bytes: int
+    edge_line_exceeds_limit: bool = False
+
+
+class LsDetails(BaseModel):
+    """Directory listing metadata for UI and persistence."""
+
+    type: Literal["ls"] = "ls"
+    path: str
+    truncation: ToolTruncationDetails | None = None
+
+
+ToolResultDetails: TypeAlias = LsDetails
 
 
 class ToolTextContent(BaseModel):
@@ -31,18 +58,30 @@ class ToolResult(BaseModel):
     """Provider-neutral tool execution result."""
 
     content: list[ToolResultContent]
+    details: ToolResultDetails | None = None
 
     @classmethod
-    def text(cls, text: str) -> "ToolResult":
+    def text(
+        cls,
+        text: str,
+        *,
+        details: ToolResultDetails | None = None,
+    ) -> "ToolResult":
         """Create a text-only tool result."""
 
-        return cls(content=[ToolTextContent(text=text)])
+        return cls(content=[ToolTextContent(text=text)], details=details)
 
     @classmethod
-    def image(cls, text: str, image: ToolImageContent) -> "ToolResult":
+    def image(
+        cls,
+        text: str,
+        image: ToolImageContent,
+        *,
+        details: ToolResultDetails | None = None,
+    ) -> "ToolResult":
         """Create an image tool result with an explanatory text block."""
 
-        return cls(content=[ToolTextContent(text=text), image])
+        return cls(content=[ToolTextContent(text=text), image], details=details)
 
 
 ToolFunctionResult: TypeAlias = ToolResult

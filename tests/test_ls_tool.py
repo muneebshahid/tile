@@ -7,7 +7,7 @@ import pytest
 
 import agent.tools.ls as ls
 import agent.tools.truncation as truncation
-from ai.types.tools import ToolResult, ToolTextContent
+from ai.types.tools import LsDetails, ToolResult, ToolTextContent
 
 
 def test_ls_schema_requires_no_arguments() -> None:
@@ -81,9 +81,13 @@ def mixed_case_directory(tmp_path: Path) -> Path:
 async def test_ls_returns_all_directory_entries(populated_directory: Path) -> None:
     """Return every file and directory name when the result is under the limit."""
 
-    result = _text(await ls.fn(path=str(populated_directory), limit=10, cwd=Path.cwd()))
+    tool_result = await ls.fn(path=str(populated_directory), limit=10, cwd=Path.cwd())
+    result = _text(tool_result)
 
     assert result.splitlines() == ["README.md", "src/", "uv.lock"]
+    details = _ls_details(tool_result)
+    assert details.path == str(populated_directory.resolve(strict=False))
+    assert details.truncation is None
 
 
 @pytest.mark.asyncio
@@ -111,9 +115,11 @@ async def test_ls_uses_cwd_when_path_is_omitted(tmp_path: Path) -> None:
 
     _create_file(tmp_path / "sample.txt")
 
-    result = _text(await ls.fn(limit=10, cwd=tmp_path))
+    tool_result = await ls.fn(limit=10, cwd=tmp_path)
+    result = _text(tool_result)
 
     assert result == "sample.txt"
+    assert _ls_details(tool_result).path == str(tmp_path.resolve(strict=False))
 
 
 @pytest.mark.asyncio
@@ -122,7 +128,8 @@ async def test_ls_respects_limit_after_sorting_entries(
 ) -> None:
     """Return only the first sorted entries up to the requested limit."""
 
-    result = _text(await ls.fn(path=str(unsorted_directory), limit=2, cwd=Path.cwd()))
+    tool_result = await ls.fn(path=str(unsorted_directory), limit=2, cwd=Path.cwd())
+    result = _text(tool_result)
 
     assert result.splitlines() == [
         "a.txt",
@@ -130,6 +137,13 @@ async def test_ls_respects_limit_after_sorting_entries(
         "",
         "[2 entries limit reached. Use limit=4 for more]",
     ]
+    details = _ls_details(tool_result)
+    assert details.truncation is not None
+    assert details.truncation.reason == "lines"
+    assert details.truncation.keep == "head"
+    assert details.truncation.line_limit == 2
+    assert details.truncation.lines_returned == 2
+    assert details.truncation.total_lines == 3
 
 
 @pytest.mark.asyncio
@@ -151,7 +165,8 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
 
     path = long_directory(270)
 
-    result = _text(await ls.fn(path=str(path), limit=500, cwd=Path.cwd()))
+    tool_result = await ls.fn(path=str(path), limit=500, cwd=Path.cwd())
+    result = _text(tool_result)
     notice = "\n\n[50.0KB limit reached. Directory has 270 entries]"
     entries = ls._list_directory_entries(path)
     body = result.removesuffix(notice)
@@ -159,6 +174,14 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
     assert result.endswith(notice)
     assert len("\n".join(entries).encode("utf-8")) > truncation.OUTPUT_BYTE_LIMIT
     assert len(body.encode("utf-8")) <= truncation.OUTPUT_BYTE_LIMIT
+    details = _ls_details(tool_result)
+    assert details.truncation is not None
+    assert details.truncation.reason == "bytes"
+    assert details.truncation.byte_limit == truncation.OUTPUT_BYTE_LIMIT
+    assert details.truncation.lines_returned < details.truncation.total_lines
+    assert details.truncation.total_lines == 270
+    assert details.truncation.bytes_returned <= truncation.OUTPUT_BYTE_LIMIT
+    assert details.truncation.total_bytes > truncation.OUTPUT_BYTE_LIMIT
 
 
 @pytest.mark.asyncio
@@ -221,9 +244,12 @@ async def test_ls_sorts_entries_case_insensitively(
 async def test_ls_reports_empty_directory(tmp_path: Path) -> None:
     """Return an explicit marker for empty directories."""
 
-    result = _text(await ls.fn(path=str(tmp_path), limit=10, cwd=Path.cwd()))
+    tool_result = await ls.fn(path=str(tmp_path), limit=10, cwd=Path.cwd())
+    result = _text(tool_result)
 
     assert result == "(empty directory)"
+    details = _ls_details(tool_result)
+    assert details.truncation is None
 
 
 @pytest.mark.asyncio
@@ -271,3 +297,10 @@ def _text(result: ToolResult) -> str:
     content = result.content[0]
     assert isinstance(content, ToolTextContent)
     return content.text
+
+
+def _ls_details(result: ToolResult) -> LsDetails:
+    """Return ls details from a tool result."""
+
+    assert isinstance(result.details, LsDetails)
+    return result.details

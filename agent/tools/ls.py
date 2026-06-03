@@ -6,16 +6,32 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from ai.types.tools import ToolDefinition, ToolResult
+from ai.types.tools import (
+    LsDetails,
+    ToolDefinition,
+    ToolResult,
+    ToolTruncationDetails,
+)
 
 from agent.tools.paths import resolve_to_cwd
-from agent.tools.truncation import OUTPUT_BYTE_LIMIT_LABEL, truncate_head
+from agent.tools.truncation import (
+    OUTPUT_BYTE_LIMIT_LABEL,
+    Truncation,
+    truncate_head,
+)
 
 
 class Results(BaseModel):
     """Structured directory listing results returned by the ls tool."""
 
     entries: list[str]
+
+
+class FormattedResults(BaseModel):
+    """Formatted ls output and metadata."""
+
+    text: str
+    details: LsDetails
 
 
 async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
@@ -25,7 +41,8 @@ async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
     resolved_path = _resolve_path(path, cwd)
     output = await _execute(resolved_path)
     results = _parse_output(output)
-    return ToolResult.text(_format_results(results, limit))
+    formatted = _format_results(results, limit, resolved_path)
+    return ToolResult.text(formatted.text, details=formatted.details)
 
 
 async def _execute(path: Path) -> list[str]:
@@ -40,11 +57,16 @@ def _parse_output(output: Sequence[str]) -> Results:
     return Results(entries=list(output))
 
 
-def _format_results(results: Results, limit: int) -> str:
+def _format_results(results: Results, limit: int, path: Path) -> FormattedResults:
     """Format directory listing results as compact plain text."""
 
     if not results.entries:
-        return "(empty directory)"
+        return FormattedResults(
+            text="(empty directory)",
+            details=LsDetails(
+                path=str(path),
+            ),
+        )
 
     truncation = truncate_head("\n".join(results.entries), max_lines=limit)
     result = truncation.content
@@ -59,7 +81,33 @@ def _format_results(results: Results, limit: int) -> str:
         )
     if notices:
         result += f"\n\n[{'. '.join(notices)}]"
-    return result
+    return FormattedResults(
+        text=result,
+        details=LsDetails(
+            path=str(path),
+            truncation=_build_truncation_details(truncation),
+        ),
+    )
+
+
+def _build_truncation_details(
+    truncation: Truncation,
+) -> ToolTruncationDetails | None:
+    """Build tool-level truncation details from shared truncation metadata."""
+
+    if truncation.truncated_by is None:
+        return None
+    return ToolTruncationDetails(
+        reason=truncation.truncated_by,
+        keep=truncation.keep,
+        line_limit=truncation.max_lines,
+        byte_limit=truncation.max_bytes,
+        lines_returned=truncation.output_lines,
+        bytes_returned=truncation.output_bytes,
+        total_lines=truncation.total_lines,
+        total_bytes=truncation.total_bytes,
+        edge_line_exceeds_limit=truncation.edge_line_exceeds_limit,
+    )
 
 
 def _resolve_path(path: str, cwd: Path) -> Path:
