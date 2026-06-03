@@ -86,7 +86,7 @@ def _parse_output(
 
 
 def _format_results(selection: ReadSelection, path: str) -> str:
-    """Format selected file content with Pi-compatible continuation notices."""
+    """Format selected file content with continuation notices."""
 
     truncation = truncate_head(selection.content)
     if truncation.edge_line_exceeds_limit:
@@ -99,7 +99,7 @@ def _format_results(selection: ReadSelection, path: str) -> str:
 
 
 def _resolve_path(path: str, cwd: Path) -> Path:
-    """Resolve a path with Pi-compatible user-input path variants."""
+    """Resolve a path with forgiving user-input path variants."""
 
     normalized_path = _normalize_unicode_spaces(_normalize_at_prefix(path))
     resolved = _resolve_to_cwd(normalized_path, cwd)
@@ -236,7 +236,7 @@ def _existing_path_variant(path: Path) -> Path:
 
 
 def _path_variants(path: Path) -> list[Path]:
-    """Return Pi-compatible path spelling variants to try."""
+    """Return path spelling variants to try."""
 
     macos_screenshot_path = _macos_screenshot_path(path)
     nfd_path = _nfd_path(path)

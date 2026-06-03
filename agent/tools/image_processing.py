@@ -151,7 +151,7 @@ def _resize(
     height: int,
     options: ImageProcessingOptions,
 ) -> None:
-    """Resize and encode an image using Pi-compatible candidates."""
+    """Resize and encode an image using ordered candidates."""
 
     with _open_image(image.data) as current_image:
         resized_image = current_image.resize((width, height), Image.Resampling.LANCZOS)
@@ -296,7 +296,7 @@ def _next_dimensions(width: int, height: int) -> tuple[int, int]:
 
 
 def _jpeg_quality_steps(options: ImageProcessingOptions) -> tuple[int, ...]:
-    """Return unique JPEG quality attempts in Pi-compatible order."""
+    """Return unique JPEG quality attempts in preferred order."""
 
     return tuple(dict.fromkeys((options.jpeg_quality, *JPEG_QUALITY_STEPS)))
 

@@ -153,7 +153,7 @@ def truncate_line(
 
 
 def format_size(byte_count: int) -> str:
-    """Format a byte count with Pi-compatible units."""
+    """Format a byte count with compact binary units."""
 
     if byte_count < 1024:
         return f"{byte_count}B"
