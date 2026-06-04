@@ -10,7 +10,7 @@ import pytest
 import agent.tools.executables as executables
 import agent.tools.grep as grep
 import agent.tools.truncation as truncation
-from ai.types.tools import ToolResult, ToolTextContent
+from ai.types.tools import GrepDetails, ToolResult, ToolTextContent
 
 
 def test_schema_requires_only_pattern() -> None:
@@ -112,9 +112,11 @@ async def test_fn_returns_results_when_command_is_available(
 
     execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
-    result = _text(await grep.fn(pattern="needle", cwd=Path.cwd()))
+    tool_result = await grep.fn(pattern="needle", cwd=Path.cwd())
+    result = _text(tool_result)
 
     assert result == "example.txt:2: needle line"
+    assert tool_result.details is None
 
 
 @pytest.mark.asyncio
@@ -151,6 +153,68 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
     assert result == "example.txt:2: needle line"
     assert _captured_args(execution)[-1] == "src"
     assert _captured_cwd(execution) == tmp_path
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("rg_available")
+async def test_fn_reports_match_limit_in_details(execution: AsyncMock) -> None:
+    """Return grep details when the match limit is reached."""
+
+    execution.return_value = "\n".join(
+        [
+            _event("match", "one.txt", 1, "needle one\n"),
+            _event("match", "two.txt", 2, "needle two\n"),
+        ]
+    )
+
+    tool_result = await grep.fn(pattern="needle", limit=1, cwd=Path.cwd())
+
+    assert _text(tool_result).endswith(
+        "\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"
+    )
+    details = _grep_details(tool_result)
+    assert details.match_limit_reached == 1
+    assert details.truncation is None
+    assert details.lines_truncated is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("rg_available")
+async def test_fn_reports_byte_truncation_in_details(execution: AsyncMock) -> None:
+    """Return grep details when formatted output exceeds the byte limit."""
+
+    execution.return_value = "\n".join(
+        _event("match", f"{index:03d}.txt", 1, "x" * 196) for index in range(300)
+    )
+
+    tool_result = await grep.fn(pattern="needle", limit=500, cwd=Path.cwd())
+
+    assert _text(tool_result).endswith("\n\n[50.0KB limit reached]")
+    details = _grep_details(tool_result)
+    assert details.match_limit_reached is None
+    assert details.lines_truncated is False
+    assert details.truncation is not None
+    assert details.truncation.truncated is True
+    assert details.truncation.truncated_by == "bytes"
+    assert details.truncation.max_bytes == truncation.OUTPUT_BYTE_LIMIT
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("rg_available")
+async def test_fn_reports_line_truncation_in_details(execution: AsyncMock) -> None:
+    """Return grep details when individual result lines are shortened."""
+
+    execution.return_value = _event("match", "example.txt", 1, "x" * 501)
+
+    tool_result = await grep.fn(pattern="needle", cwd=Path.cwd())
+
+    assert _text(tool_result).endswith(
+        "\n\n[Some lines truncated to 500 chars. Use read tool to see full lines]"
+    )
+    details = _grep_details(tool_result)
+    assert details.match_limit_reached is None
+    assert details.truncation is None
+    assert details.lines_truncated is True
 
 
 @pytest.mark.asyncio
@@ -243,7 +307,7 @@ def test_parse_output_ignores_non_search_events() -> None:
 def test_format_results_returns_plain_text() -> None:
     """Format parsed search results using grep-style separators."""
 
-    result = grep._format_results(
+    formatted = grep._format_results(
         grep.Results(
             lines=[
                 grep.Line(
@@ -271,7 +335,7 @@ def test_format_results_returns_plain_text() -> None:
         limit=100,
     )
 
-    assert result == "\n".join(
+    assert formatted.text == "\n".join(
         [
             "example.txt-1- before",
             "example.txt:2: needle line",
@@ -283,7 +347,7 @@ def test_format_results_returns_plain_text() -> None:
 def test_format_results_reports_truncation() -> None:
     """Append a compact truncation note when matches exceed the limit."""
 
-    result = grep._format_results(
+    formatted = grep._format_results(
         grep.Results(
             lines=[
                 grep.Line(
@@ -299,7 +363,7 @@ def test_format_results_reports_truncation() -> None:
         limit=1,
     )
 
-    assert result == (
+    assert formatted.text == (
         "example.txt:1: first\n\n"
         "[1 matches limit reached. Use limit=2 for more, or refine pattern]"
     )
@@ -308,7 +372,7 @@ def test_format_results_reports_truncation() -> None:
 def test_format_results_reports_byte_limit() -> None:
     """Append a byte-limit notice when formatted output exceeds 50KB."""
 
-    result = grep._format_results(
+    formatted = grep._format_results(
         grep.Results(
             lines=[
                 grep.Line(
@@ -325,16 +389,16 @@ def test_format_results_reports_byte_limit() -> None:
         limit=500,
     )
     notice = "\n\n[50.0KB limit reached]"
-    body = result.removesuffix(notice)
+    body = formatted.text.removesuffix(notice)
 
-    assert result.endswith(notice)
+    assert formatted.text.endswith(notice)
     assert len(body.encode("utf-8")) <= truncation.OUTPUT_BYTE_LIMIT
 
 
 def test_format_results_reports_line_limit() -> None:
     """Append a line-limit notice when a result line is shortened."""
 
-    result = grep._format_results(
+    formatted = grep._format_results(
         grep.Results(
             lines=[
                 grep.Line(
@@ -350,7 +414,7 @@ def test_format_results_reports_line_limit() -> None:
         limit=100,
     )
 
-    assert result == (
+    assert formatted.text == (
         f"example.txt:1: {'x' * 500}... [truncated]\n\n"
         "[Some lines truncated to 500 chars. Use read tool to see full lines]"
     )
@@ -359,7 +423,7 @@ def test_format_results_reports_line_limit() -> None:
 def test_format_results_combines_truncation_notices() -> None:
     """Report match, byte, and line truncation in one notice block."""
 
-    result = grep._format_results(
+    formatted = grep._format_results(
         grep.Results(
             lines=[
                 grep.Line(
@@ -376,7 +440,7 @@ def test_format_results_combines_truncation_notices() -> None:
         limit=100,
     )
 
-    assert result.endswith(
+    assert formatted.text.endswith(
         "\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern. "
         "50.0KB limit reached. "
         "Some lines truncated to 500 chars. Use read tool to see full lines]"
@@ -447,3 +511,10 @@ def _text(result: ToolResult) -> str:
     content = result.content[0]
     assert isinstance(content, ToolTextContent)
     return content.text
+
+
+def _grep_details(result: ToolResult) -> GrepDetails:
+    """Return grep details from a tool result."""
+
+    assert isinstance(result.details, GrepDetails)
+    return result.details

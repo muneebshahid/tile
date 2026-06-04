@@ -5,14 +5,15 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from ai.types.tools import ToolDefinition, ToolResult
+from ai.types.tools import GrepDetails, ToolDefinition, ToolOutputDetails, ToolResult
 from agent.tools.executables import execute, require_executable
 from agent.tools.truncation import (
     GREP_LINE_CHARACTER_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
+    truncate_head,
     truncate_line,
-    truncate_to_byte_limit,
 )
+from tools.types import Truncation
 
 
 class Line(BaseModel):
@@ -30,6 +31,13 @@ class Results(BaseModel):
     lines: list[Line]
     match_count: int
     truncated: bool
+
+
+class FormattedResults(BaseModel):
+    """Formatted grep output and metadata."""
+
+    text: str
+    details: GrepDetails | None = None
 
 
 class TextValue(BaseModel):
@@ -71,7 +79,8 @@ async def fn(
     args = _build_args(pattern, path, glob, ignore_case, literal, context)
     output = await execute(executable, args, allowed_exit_codes=(0, 1), cwd=cwd)
     results = _parse_output(output, limit)
-    return ToolResult.text(_format_results(results, limit))
+    formatted = _format_results(results, limit)
+    return ToolResult.text(formatted.text, details=formatted.details)
 
 
 def _parse_output(output: str, limit: int) -> Results:
@@ -95,19 +104,21 @@ def _parse_output(output: str, limit: int) -> Results:
     return Results(lines=lines, match_count=match_count, truncated=truncated)
 
 
-def _format_results(results: Results, limit: int) -> str:
-    """Format structured search results as compact grep-style text."""
+def _format_results(results: Results, limit: int) -> FormattedResults:
+    """Format structured search results and UI metadata."""
 
     if not results.lines:
-        return "No matches found"
+        return FormattedResults(text="No matches found")
 
     formatted_lines, line_limit_results = zip(
         *(_format_line(line) for line in results.lines),
         strict=True,
     )
 
-    output = "\n".join(formatted_lines)
-    output, byte_limit_reached = truncate_to_byte_limit(output)
+    raw_output = "\n".join(formatted_lines)
+    truncation = truncate_head(raw_output, max_lines=len(formatted_lines))
+    output = truncation.content
+    lines_truncated = any(line_limit_results)
 
     notices: list[str] = []
     if results.truncated:
@@ -115,9 +126,9 @@ def _format_results(results: Results, limit: int) -> str:
             f"{limit} matches limit reached. "
             f"Use limit={limit * 2} for more, or refine pattern"
         )
-    if byte_limit_reached:
+    if truncation.truncated:
         notices.append(f"{OUTPUT_BYTE_LIMIT_LABEL} limit reached")
-    if any(line_limit_results):
+    if lines_truncated:
         notices.append(
             f"Some lines truncated to {GREP_LINE_CHARACTER_LIMIT} chars. "
             "Use read tool to see full lines"
@@ -125,7 +136,29 @@ def _format_results(results: Results, limit: int) -> str:
     if notices:
         output += f"\n\n[{'. '.join(notices)}]"
 
-    return output
+    return FormattedResults(
+        text=output,
+        details=_build_details(results, limit, truncation, lines_truncated),
+    )
+
+
+def _build_details(
+    results: Results,
+    limit: int,
+    truncation: Truncation,
+    lines_truncated: bool,
+) -> GrepDetails | None:
+    """Build grep details when the UI has a warning to render."""
+
+    output_details = ToolOutputDetails.from_truncation(truncation)
+    if not results.truncated and not output_details.truncated and not lines_truncated:
+        return None
+
+    return GrepDetails(
+        truncation=output_details if output_details.truncated else None,
+        match_limit_reached=limit if results.truncated else None,
+        lines_truncated=lines_truncated,
+    )
 
 
 def _build_args(

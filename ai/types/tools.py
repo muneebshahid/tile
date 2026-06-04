@@ -58,7 +58,16 @@ class LsDetails(BaseModel):
     output: ToolOutputDetails
 
 
-ToolResultDetails: TypeAlias = LsDetails
+class GrepDetails(BaseModel):
+    """Search metadata for UI and persistence."""
+
+    type: Literal["grep"] = "grep"
+    truncation: ToolOutputDetails | None = None
+    match_limit_reached: int | None = None
+    lines_truncated: bool = False
+
+
+ToolResultDetails: TypeAlias = LsDetails | GrepDetails
 
 
 class ToolTextContent(BaseModel):
