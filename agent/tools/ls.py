@@ -3,8 +3,6 @@
 import asyncio
 from pathlib import Path
 
-from pydantic import BaseModel
-
 from ai.types.tools import (
     LsDetails,
     ToolDefinition,
@@ -20,21 +18,13 @@ from agent.tools.truncation import (
 from tools.types import Truncation
 
 
-class Results(BaseModel):
-    """Formatted directory listing output and metadata."""
-
-    text: str
-    details: LsDetails | None = None
-
-
 async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
     """List the contents of a directory."""
 
     limit = max(1, limit)
     resolved_path = _resolve_path(path, cwd)
     entries = await _execute(resolved_path)
-    results = _build_results(entries, limit)
-    return ToolResult.text(results.text, details=results.details)
+    return _build_results(entries, limit)
 
 
 async def _execute(path: Path) -> list[str]:
@@ -43,11 +33,11 @@ async def _execute(path: Path) -> list[str]:
     return await asyncio.to_thread(_list_directory_entries, path)
 
 
-def _build_results(entries: list[str], limit: int) -> Results:
+def _build_results(entries: list[str], limit: int) -> ToolResult:
     """Build directory listing results from raw entry names."""
 
     if not entries:
-        return Results(text="(empty directory)")
+        return ToolResult.text("(empty directory)")
 
     truncation = truncate_head("\n".join(entries), max_lines=limit)
     result = truncation.content
@@ -62,10 +52,7 @@ def _build_results(entries: list[str], limit: int) -> Results:
         )
     if notices:
         result += f"\n\n[{'. '.join(notices)}]"
-    return Results(
-        text=result,
-        details=_build_details(truncation),
-    )
+    return ToolResult.text(result, details=_build_details(truncation))
 
 
 def _build_details(truncation: Truncation) -> LsDetails | None:
