@@ -261,7 +261,6 @@ def test_parse_output_returns_pydantic_results() -> None:
                 text="after",
             ),
         ],
-        match_count=1,
         truncated=False,
     )
 
@@ -279,7 +278,6 @@ def test_parse_output_marks_truncated_after_limit() -> None:
         limit=1,
     )
 
-    assert result.match_count == 1
     assert result.truncated is True
     assert [line.text for line in result.lines] == ["first"]
 
@@ -300,7 +298,6 @@ def test_parse_output_ignores_non_search_events() -> None:
         limit=100,
     )
 
-    assert result.match_count == 1
     assert [line.text for line in result.lines] == ["needle"]
 
 

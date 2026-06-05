@@ -29,7 +29,6 @@ class Results(BaseModel):
     """Structured search results returned by the search tool."""
 
     lines: list[Line]
-    match_count: int
     truncated: bool
 
 
@@ -119,7 +118,7 @@ def _parse_output(output: str, limit: int) -> Results:
             match_count += 1
         lines.append(parsed_line)
 
-    return Results(lines=lines, match_count=match_count, truncated=truncated)
+    return Results(lines=lines, truncated=truncated)
 
 
 def _build_notices(
