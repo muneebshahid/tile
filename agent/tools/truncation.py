@@ -14,6 +14,26 @@ OUTPUT_BYTE_LIMIT_LABEL: str = "50.0KB"
 GREP_LINE_CHARACTER_LIMIT: int = 500
 
 
+def truncate_head(
+    text: str,
+    max_lines: int = OUTPUT_LINE_LIMIT,
+    max_bytes: int = OUTPUT_BYTE_LIMIT,
+) -> Truncation:
+    """Return leading complete lines constrained by line and byte limits."""
+
+    return truncate_text(text, keep="head", max_lines=max_lines, max_bytes=max_bytes)
+
+
+def truncate_tail(
+    text: str,
+    max_lines: int = OUTPUT_LINE_LIMIT,
+    max_bytes: int = OUTPUT_BYTE_LIMIT,
+) -> Truncation:
+    """Return trailing complete lines constrained by line and byte limits."""
+
+    return truncate_text(text, keep="tail", max_lines=max_lines, max_bytes=max_bytes)
+
+
 def truncate_text(
     text: str,
     *,
@@ -77,26 +97,6 @@ def truncate_text(
         max_lines=max_lines,
         max_bytes=max_bytes,
     )
-
-
-def truncate_head(
-    text: str,
-    max_lines: int = OUTPUT_LINE_LIMIT,
-    max_bytes: int = OUTPUT_BYTE_LIMIT,
-) -> Truncation:
-    """Return leading complete lines constrained by line and byte limits."""
-
-    return truncate_text(text, keep="head", max_lines=max_lines, max_bytes=max_bytes)
-
-
-def truncate_tail(
-    text: str,
-    max_lines: int = OUTPUT_LINE_LIMIT,
-    max_bytes: int = OUTPUT_BYTE_LIMIT,
-) -> Truncation:
-    """Return trailing complete lines constrained by line and byte limits."""
-
-    return truncate_text(text, keep="tail", max_lines=max_lines, max_bytes=max_bytes)
 
 
 def truncate_to_byte_limit(
