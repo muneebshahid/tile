@@ -4,9 +4,8 @@ import asyncio
 import base64
 import re
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
-
-from pydantic import BaseModel
 
 from ai.types.tools import (
     ImageMimeType,
@@ -37,7 +36,8 @@ IMAGE_TYPE_SNIFF_BYTES = 4100
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-class ReadSelection(BaseModel):
+@dataclass(frozen=True)
+class ReadSelection:
     """Readable file content after offset selection."""
 
     content: str

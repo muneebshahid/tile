@@ -1,5 +1,6 @@
 """Search tool for the default agent."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -16,7 +17,8 @@ from agent.tools.truncation import (
 from tools.types import Truncation
 
 
-class Line(BaseModel):
+@dataclass(frozen=True)
+class Line:
     """One parsed search output line."""
 
     kind: Literal["match", "context"]
@@ -25,7 +27,8 @@ class Line(BaseModel):
     text: str
 
 
-class Results(BaseModel):
+@dataclass(frozen=True)
+class Results:
     """Structured search results returned by the search tool."""
 
     lines: list[Line]

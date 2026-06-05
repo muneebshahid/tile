@@ -3,6 +3,7 @@
 import asyncio
 import re
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -36,7 +37,8 @@ class EditReplacement(BaseModel):
     newText: str
 
 
-class LoadedFile(BaseModel):
+@dataclass(frozen=True)
+class LoadedFile:
     """File content split into mutation metadata and editable text."""
 
     bom: str
@@ -44,7 +46,8 @@ class LoadedFile(BaseModel):
     line_ending: LineEnding
 
 
-class MatchedEdit(BaseModel):
+@dataclass(frozen=True)
+class MatchedEdit:
     """A validated replacement location in the original normalized content."""
 
     edit_index: int
@@ -53,7 +56,8 @@ class MatchedEdit(BaseModel):
     new_text: str
 
 
-class EditExecutionResult(BaseModel):
+@dataclass(frozen=True)
+class EditExecutionResult:
     """Successful edit execution details."""
 
     path: Path

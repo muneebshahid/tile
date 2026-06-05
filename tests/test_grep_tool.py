@@ -227,8 +227,8 @@ async def test_fn_raises_when_command_is_missing() -> None:
         await grep.fn(pattern="needle", cwd=Path.cwd())
 
 
-def test_parse_output_returns_pydantic_results() -> None:
-    """Parse match and context events from JSON-lines output."""
+def test_parse_output_returns_internal_results() -> None:
+    """Parse match and context events into internal result models."""
 
     result = grep._parse_output(
         "\n".join(
