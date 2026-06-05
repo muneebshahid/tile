@@ -11,6 +11,12 @@ from ai.types.tools import ToolDefinition, ToolResult
 from agent.tools.paths import resolve_to_cwd
 
 
+class Results(BaseModel):
+    """Structured file write result."""
+
+    bytes_written: int
+
+
 async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:
     """Write content to a file."""
 
@@ -23,12 +29,6 @@ async def _execute(path: Path, content: str) -> Results:
     """Write file content asynchronously."""
 
     return await asyncio.to_thread(_write_file, path, content)
-
-
-class Results(BaseModel):
-    """Structured file write result."""
-
-    bytes_written: int
 
 
 def _format_results(result: Results, path: Path) -> str:
