@@ -20,7 +20,7 @@ async def fn(command: str, timeout: float | None = None, *, cwd: Path) -> ToolRe
 
     resolved_cwd = _resolve_cwd(cwd)
     result = await _execute(command, timeout, resolved_cwd)
-    return _build_results(result)
+    return _build_result(result)
 
 
 def _resolve_cwd(cwd: Path) -> Path:
@@ -103,7 +103,7 @@ async def _stop_timed_out_process(
         await wait_task
 
 
-def _build_results(snapshot: OutputSnapshot) -> ToolResult:
+def _build_result(snapshot: OutputSnapshot) -> ToolResult:
     """Build shell output for successful command execution."""
 
     if not snapshot.content and not snapshot.truncation.truncated:
@@ -130,24 +130,24 @@ def _raise_for_execution_failure(
     if timed_out:
         raise RuntimeError(
             _append_status(
-                _format_output(snapshot, empty_text=""),
+                _build_error_output_text(snapshot),
                 _timeout_status(timeout),
             )
         )
     if exit_code not in (0, None):
         raise RuntimeError(
             _append_status(
-                _format_output(snapshot, empty_text=""),
+                _build_error_output_text(snapshot),
                 f"Command exited with code {exit_code}",
             )
         )
 
 
-def _format_output(snapshot: OutputSnapshot, empty_text: str) -> str:
+def _build_error_output_text(snapshot: OutputSnapshot) -> str:
     """Format captured shell output for error messages."""
 
     if not snapshot.content and not snapshot.truncation.truncated:
-        return empty_text
+        return ""
 
     if not snapshot.truncation.truncated:
         return snapshot.content

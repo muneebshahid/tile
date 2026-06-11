@@ -302,10 +302,10 @@ def test_parse_output_ignores_non_search_events() -> None:
     assert [line.text for line in result.lines] == ["needle"]
 
 
-def test_build_results_returns_plain_text() -> None:
+def test_build_result_returns_plain_text() -> None:
     """Build grep-style text from raw search output."""
 
-    result = grep._build_results(
+    result = grep._build_result(
         "\n".join(
             [
                 _event("context", "example.txt", 1, "before\n"),
@@ -325,10 +325,10 @@ def test_build_results_returns_plain_text() -> None:
     )
 
 
-def test_build_results_reports_truncation() -> None:
+def test_build_result_reports_truncation() -> None:
     """Append a compact truncation note when matches exceed the limit."""
 
-    result = grep._build_results(
+    result = grep._build_result(
         "\n".join(
             [
                 _event("match", "example.txt", 1, "first\n"),
@@ -344,10 +344,10 @@ def test_build_results_reports_truncation() -> None:
     )
 
 
-def test_build_results_reports_byte_limit() -> None:
+def test_build_result_reports_byte_limit() -> None:
     """Append a byte-limit notice when formatted output exceeds 50KB."""
 
-    result = grep._build_results(
+    result = grep._build_result(
         "\n".join(
             _event("match", f"{index:03d}.txt", 1, f"{'x' * 196}\n")
             for index in range(300)
@@ -362,10 +362,10 @@ def test_build_results_reports_byte_limit() -> None:
     assert len(body.encode("utf-8")) <= truncation.OUTPUT_BYTE_LIMIT
 
 
-def test_build_results_reports_line_limit() -> None:
+def test_build_result_reports_line_limit() -> None:
     """Append a line-limit notice when a result line is shortened."""
 
-    result = grep._build_results(
+    result = grep._build_result(
         _event("match", "example.txt", 1, f"{'x' * 501}\n"),
         limit=100,
     )
@@ -376,10 +376,10 @@ def test_build_results_reports_line_limit() -> None:
     )
 
 
-def test_build_results_combines_truncation_notices() -> None:
+def test_build_result_combines_truncation_notices() -> None:
     """Report match, byte, and line truncation in one notice block."""
 
-    result = grep._build_results(
+    result = grep._build_result(
         "\n".join(
             _event("match", f"{index:03d}.txt", 1, f"{'x' * 501}\n")
             for index in range(120)

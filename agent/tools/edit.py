@@ -27,7 +27,7 @@ async def fn(path: str, edits: list[dict[str, str]], *, cwd: Path) -> ToolResult
     resolved_path = _resolve_path(path, cwd)
     replacements = _parse_edits(edits)
     result = await _execute(resolved_path, replacements, path)
-    return ToolResult.text(_format_results(result, path))
+    return _build_result(result, path)
 
 
 class EditReplacement(BaseModel):
@@ -87,10 +87,11 @@ def _parse_edits(edits: list[dict[str, str]]) -> list[EditReplacement]:
     return replacements
 
 
-def _format_results(result: EditExecutionResult, path: str) -> str:
-    """Format a successful edit result."""
+def _build_result(result: EditExecutionResult, path: str) -> ToolResult:
+    """Build a successful edit result."""
 
-    return f"Successfully replaced {result.replacement_count} block(s) in {path}."
+    text = f"Successfully replaced {result.replacement_count} block(s) in {path}."
+    return ToolResult.text(text)
 
 
 def _resolve_path(path: str, cwd: Path) -> Path:

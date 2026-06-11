@@ -25,7 +25,7 @@ async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
     limit = max(1, limit)
     resolved_path = _resolve_path(path, cwd)
     entries = await _execute(resolved_path)
-    return _build_results(entries, limit)
+    return _build_result(entries, limit)
 
 
 async def _execute(path: Path) -> list[str]:
@@ -34,7 +34,7 @@ async def _execute(path: Path) -> list[str]:
     return await asyncio.to_thread(_list_directory_entries, path)
 
 
-def _build_results(entries: list[str], limit: int) -> ToolResult:
+def _build_result(entries: list[str], limit: int) -> ToolResult:
     """Build directory listing results from raw entry names."""
 
     if not entries:

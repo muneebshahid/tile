@@ -74,10 +74,10 @@ async def fn(
     executable = require_executable("rg", "ripgrep (rg)")
     args = _build_args(pattern, path, glob, ignore_case, literal, context)
     output = await execute(executable, args, allowed_exit_codes=(0, 1), cwd=cwd)
-    return _build_results(output, limit)
+    return _build_result(output, limit)
 
 
-def _build_results(output: str, limit: int) -> ToolResult:
+def _build_result(output: str, limit: int) -> ToolResult:
     """Build search results from raw JSON-lines output."""
 
     results = _parse_output(output, limit)

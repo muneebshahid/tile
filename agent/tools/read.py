@@ -62,7 +62,7 @@ async def fn(
 
     content = await _execute(resolved_path)
     limit = max(1, limit)
-    return _build_text_result(content, offset, path, limit)
+    return _build_result(content, offset, path, limit)
 
 
 async def _execute(path: Path) -> str:
@@ -71,7 +71,7 @@ async def _execute(path: Path) -> str:
     return await asyncio.to_thread(path.read_text, encoding="utf-8")
 
 
-def _build_text_result(
+def _build_result(
     content: str,
     offset: int | None,
     path: str,
@@ -81,7 +81,7 @@ def _build_text_result(
 
     selection = _select_content(content, offset)
     truncation = truncate_head(selection.content, max_lines=limit)
-    text = _build_text(selection, truncation, path)
+    text = _build_output_text(selection, truncation, path)
     return ToolResult.text(text, details=_build_details(truncation))
 
 
@@ -103,7 +103,7 @@ def _select_content(content: str, offset: int | None) -> ReadSelection:
     )
 
 
-def _build_text(
+def _build_output_text(
     selection: ReadSelection,
     truncation: Truncation,
     path: str,

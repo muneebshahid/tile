@@ -25,7 +25,7 @@ async def fn(
     executable = require_executable("fd", "fd")
     args = _build_args(pattern, path, limit)
     output = await execute(executable, args, cwd=cwd)
-    return _build_results(output, limit)
+    return _build_result(output, limit)
 
 
 def _build_args(
@@ -52,7 +52,7 @@ def _build_args(
     return args
 
 
-def _build_results(output: str, limit: int) -> ToolResult:
+def _build_result(output: str, limit: int) -> ToolResult:
     """Build file path search results from raw fd stdout."""
 
     paths = [_normalize_path(line) for line in output.splitlines() if line]

@@ -14,7 +14,7 @@ async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:
 
     resolved_path = _resolve_path(path, cwd)
     bytes_written = await _execute(resolved_path, content)
-    return _build_results(bytes_written, resolved_path)
+    return _build_result(bytes_written, resolved_path)
 
 
 async def _execute(path: Path, content: str) -> int:
@@ -23,7 +23,7 @@ async def _execute(path: Path, content: str) -> int:
     return await asyncio.to_thread(_write_file, path, content)
 
 
-def _build_results(bytes_written: int, path: Path) -> ToolResult:
+def _build_result(bytes_written: int, path: Path) -> ToolResult:
     """Build a successful write result."""
 
     return ToolResult.text(f"Successfully wrote {bytes_written} bytes to {path}")
