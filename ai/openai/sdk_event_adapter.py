@@ -17,6 +17,7 @@ from openai.types.responses import (
     ResponseReasoningTextDeltaEvent,
     ResponseReasoningSummaryPartDoneEvent,
     ResponseReasoningSummaryTextDeltaEvent,
+    ResponseStreamEvent,
     ResponseRefusalDeltaEvent,
     ResponseTextDeltaEvent,
 )
@@ -41,7 +42,7 @@ from ai.types.tools import JsonObject
 
 
 async def normalize_sdk_events(
-    raw_stream: AsyncIterator[object],
+    raw_stream: AsyncIterator[ResponseStreamEvent],
 ) -> AsyncIterator[NormalizedEvent]:
     async for event in raw_stream:
         normalized_event = _normalize_sdk_event(event)
@@ -49,7 +50,7 @@ async def normalize_sdk_events(
             yield normalized_event
 
 
-def _normalize_sdk_event(event: object) -> NormalizedEvent | None:
+def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
     match event:
         case ResponseCreatedEvent():
             return {

@@ -146,7 +146,7 @@ def _serialize_tool_definition(
             "type": "function",
             "name": tool.name,
             "description": tool.description,
-            "parameters": cast("dict[str, object]", tool.input_schema),
+            "parameters": tool.input_schema,
             "strict": True,
             "defer_loading": tool.defer_loading,
         },

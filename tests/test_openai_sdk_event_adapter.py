@@ -22,6 +22,7 @@ from openai.types.responses import (
     ResponseReasoningSummaryPartDoneEvent,
     ResponseReasoningSummaryTextDeltaEvent,
     ResponseRefusalDeltaEvent,
+    ResponseStreamEvent,
     ResponseTextDeltaEvent,
 )
 
@@ -35,7 +36,7 @@ class NormalizationCase:
     """Defines one raw SDK event and its expected normalized provider event."""
 
     name: str
-    raw_event: object
+    raw_event: ResponseStreamEvent
     expected_event: NormalizedEvent
 
 
@@ -448,7 +449,9 @@ def _build_failure_cases() -> list[NormalizationCase]:
     ]
 
 
-def _collect_normalized_events(raw_events: Sequence[object]) -> list[NormalizedEvent]:
+def _collect_normalized_events(
+    raw_events: Sequence[ResponseStreamEvent],
+) -> list[NormalizedEvent]:
     """Collects normalized provider events from the public async adapter."""
 
     async def _collect() -> list[NormalizedEvent]:
@@ -457,10 +460,12 @@ def _collect_normalized_events(raw_events: Sequence[object]) -> list[NormalizedE
     return asyncio.run(_collect())
 
 
-def _raw_stream(raw_events: Sequence[object]) -> AsyncIterator[object]:
+def _raw_stream(
+    raw_events: Sequence[ResponseStreamEvent],
+) -> AsyncIterator[ResponseStreamEvent]:
     """Yields raw SDK events from a static sequence."""
 
-    async def _iterate() -> AsyncIterator[object]:
+    async def _iterate() -> AsyncIterator[ResponseStreamEvent]:
         for raw_event in raw_events:
             yield raw_event
 

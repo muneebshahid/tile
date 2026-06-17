@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, cast
 
 from openai import AsyncOpenAI
 from openai.types.responses.response_create_params import ResponseCreateParamsStreaming
+from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from ai.openai.client import create_client
 from ai.openai.serialization import serialize_history_items, serialize_tools
@@ -71,7 +72,7 @@ async def stream_subscription(
 async def _create_api_stream(
     client: AsyncOpenAI,
     request_params: ResponseCreateParamsStreaming,
-) -> AsyncIterator[object]:
+) -> AsyncIterator[ResponseStreamEvent]:
     """Create the raw OpenAI SDK event stream for API-based auth."""
 
     return await client.responses.create(**request_params)

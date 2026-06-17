@@ -142,7 +142,7 @@ def _png(width: int, height: int) -> bytes:
     return output.getvalue()
 
 
-def _processed(result: object) -> ProcessedImage:
+def _processed(result: ProcessedImage | ImageProcessingError) -> ProcessedImage:
     """Return a processed image from a pipeline result."""
 
     assert isinstance(result, ProcessedImage)

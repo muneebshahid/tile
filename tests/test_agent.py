@@ -133,12 +133,12 @@ def _expect_assistant_turn(item: ConversationItem) -> AssistantTurn:
     return item
 
 
-def _expect_assistant_message(item: object) -> AssistantMessage:
+def _expect_assistant_message(item: AssistantMessage) -> AssistantMessage:
     assert isinstance(item, AssistantMessage)
     return item
 
 
-def _expect_agent_assistant_turn(item: object) -> AssistantTurn:
+def _expect_agent_assistant_turn(item: AssistantTurn) -> AssistantTurn:
     assert isinstance(item, AssistantTurn)
     return item
 

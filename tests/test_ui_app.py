@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock
 from unittest.mock import patch
 
 from agent.agent import Agent
-from ai.types.conversation import UserMessage
+from ai.types.contracts import Reasoning
+from ai.types.conversation import ConversationItem, UserMessage
 from ai.types.stream import (
     AssistantMessage,
     StreamDoneEvent,
@@ -17,6 +18,7 @@ from ai.types.stream import (
     TextEndEvent,
     TextStartEvent,
 )
+from ai.types.tools import ToolDefinition
 from main import main
 from textual.content import Content
 from textual.widgets import Static
@@ -295,7 +297,15 @@ def test_input_area_expands_for_wrapped_content() -> None:
 
 
 def _build_agent(stream_events: Sequence[StreamEvent]) -> Agent:
-    async def _stream_fn(*_: object, **__: object) -> AsyncIterator[StreamEvent]:
+    async def _stream_fn(
+        history: Sequence[ConversationItem],
+        model: str,
+        *,
+        instructions: str,
+        reasoning: Reasoning | None,
+        tools: Sequence[ToolDefinition] | None,
+    ) -> AsyncIterator[StreamEvent]:
+        _ = history, model, instructions, reasoning, tools
         return _iter_stream_events(stream_events)
 
     return Agent(stream_fn=_stream_fn, model="gpt-5.4")
