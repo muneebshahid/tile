@@ -19,8 +19,8 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
-    participant Hist as Conversation history
+    participant Agent as run_agent
+    participant Hist as Local run history
 
     SDK->>SDKA: OpenAI Python SDK event object
     Sub->>SubA: ChatGPT subscription SSE payload
@@ -44,7 +44,7 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
+    participant Agent as run_agent
 
     Asm->>Stream: StreamStartEvent(message=empty AssistantMessage)
     Stream->>Agent: start
@@ -71,7 +71,7 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
+    participant Agent as run_agent
 
     SDK->>Adapter: ResponseOutputItemAddedEvent(item=reasoning)
     Sub->>Adapter: response.output_item.added(item.type=reasoning)
@@ -124,7 +124,7 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
+    participant Agent as run_agent
 
     SDK->>Adapter: ResponseOutputItemAddedEvent(item=message)
     Sub->>Adapter: response.output_item.added(item.type=message)
@@ -182,7 +182,7 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
+    participant Agent as run_agent
 
     SDK->>Adapter: ResponseOutputItemAddedEvent(item=function_call)
     Sub->>Adapter: response.output_item.added(item.type=function_call)
@@ -228,8 +228,8 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
-    participant Hist as Conversation history
+    participant Agent as run_agent
+    participant Hist as Local run history
 
     SDK->>Adapter: ResponseCompletedEvent
     Sub->>Adapter: response.completed or response.done(status=completed)
@@ -239,10 +239,10 @@ sequenceDiagram
     Asm->>Stream: StreamDoneEvent(message)
     Stream->>Agent: done
     Agent-->>Agent: build AssistantTurn(status=completed)
-    Agent->>Hist: append AssistantTurn
+    Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
-    Agent-->>Agent: emit AgentEndEvent(items=history)
+    Agent-->>Agent: emit AgentEndEvent(new_items=[...])
 ```
 
 ## Completed Turn With Tools
@@ -253,21 +253,21 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
+    participant Agent as run_agent
     participant Tool as Tool execution
-    participant Hist as Conversation history
+    participant Hist as Local run history
 
     Adapter->>Norm: COMPLETED(stop_reason=tool_use)
     Norm->>Asm: COMPLETED
     Asm->>Stream: StreamDoneEvent(message with ToolCallBlock)
     Stream->>Agent: done
-    Agent->>Hist: append AssistantTurn
+    Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent->>Tool: execute tool call
     Agent-->>Agent: emit ToolExecutionStartEvent
     Tool-->>Agent: result
     Agent-->>Agent: emit ToolExecutionEndEvent
-    Agent->>Hist: append ToolResultTurn
+    Agent->>Hist: append ToolResultTurn to run-local history
     Agent-->>Agent: emit TurnEndEvent(tool_results=[...])
     Agent-->>Agent: request follow-up stream
     Note over Agent,Stream: The follow-up stream starts a new turn and repeats the same lifecycle.
@@ -283,8 +283,8 @@ sequenceDiagram
     participant Norm as NormalizedEvent
     participant Asm as assemble_stream
     participant Stream as StreamEvent
-    participant Agent as Agent.run
-    participant Hist as Conversation history
+    participant Agent as run_agent
+    participant Hist as Local run history
 
     SDK->>Adapter: ResponseIncompleteEvent(max_output_tokens)
     Sub->>Adapter: response.incomplete or response.done(status=incomplete)
@@ -292,7 +292,7 @@ sequenceDiagram
     Norm->>Asm: INCOMPLETE(length)
     Asm->>Stream: StreamDoneEvent(message)
     Stream->>Agent: done
-    Agent->>Hist: append AssistantTurn(status=completed, stop_reason=length)
+    Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent
 
@@ -302,7 +302,7 @@ sequenceDiagram
     Norm->>Asm: INCOMPLETE(error)
     Asm->>Stream: StreamErrorEvent(error=message)
     Stream->>Agent: error
-    Agent->>Hist: append AssistantTurn(status=error)
+    Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
 
@@ -312,7 +312,7 @@ sequenceDiagram
     Norm->>Asm: FAILED
     Asm->>Stream: StreamErrorEvent(error=message)
     Stream->>Agent: error
-    Agent->>Hist: append AssistantTurn(status=error)
+    Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
 ```

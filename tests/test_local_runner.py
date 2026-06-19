@@ -5,7 +5,9 @@ import io
 import json
 from collections.abc import AsyncIterator, Sequence
 
-from agent.agent import Agent
+import pytest
+
+from agent.types import StreamFn
 from ai.types.contracts import Reasoning
 from ai.types.conversation import ConversationItem, UserMessage
 from ai.types.stream import (
@@ -15,16 +17,26 @@ from ai.types.stream import (
     StreamStartEvent,
 )
 from ai.types.tools import ToolDefinition
+from examples import local_runner
 from examples.local_runner import run_cli, run_prompt
 
 
 def test_run_prompt_streams_agent_events_as_json_lines() -> None:
     """Run one prompt through the local runner with a deterministic agent."""
 
-    agent = _build_agent([_start_event(), _done_event()])
+    invocations: list[tuple[ConversationItem, ...]] = []
+    stream_fn = _build_stream_fn([_start_event(), _done_event()], invocations)
     output = io.StringIO()
 
-    asyncio.run(run_prompt("Hello from CLI", agent=agent, output=output))
+    asyncio.run(
+        run_prompt(
+            "Hello from CLI",
+            stream_fn=stream_fn,
+            model="gpt-5.4",
+            tools=[],
+            output=output,
+        )
+    )
 
     lines = [json.loads(line) for line in output.getvalue().splitlines()]
     assert [line["type"] for line in lines] == [
@@ -35,8 +47,9 @@ def test_run_prompt_streams_agent_events_as_json_lines() -> None:
         "turn_end",
         "agent_end",
     ]
-    assert len(agent.history) == 2
-    user_message = agent.history[0]
+    assert len(invocations) == 1
+    assert len(invocations[0]) == 1
+    user_message = invocations[0][0]
     assert isinstance(user_message, UserMessage)
     assert user_message.content == "Hello from CLI"
 
@@ -49,8 +62,30 @@ def test_run_cli_rejects_empty_prompt() -> None:
     assert status == 2
 
 
-def _build_agent(stream_events: Sequence[StreamEvent]) -> Agent:
-    """Build an agent whose provider returns static stream events."""
+def test_run_cli_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Read a prompt from standard input when no prompt arguments are supplied."""
+
+    prompts: list[str] = []
+
+    async def _record_prompt(prompt: str) -> None:
+        """Record the prompt passed by the CLI."""
+
+        prompts.append(prompt)
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("Hello from stdin\n"))
+    monkeypatch.setattr(local_runner, "run_prompt", _record_prompt)
+
+    status = asyncio.run(run_cli([]))
+
+    assert status == 0
+    assert prompts == ["Hello from stdin"]
+
+
+def _build_stream_fn(
+    stream_events: Sequence[StreamEvent],
+    invocations: list[tuple[ConversationItem, ...]],
+) -> StreamFn:
+    """Build a provider stream function that records supplied history."""
 
     async def _stream_fn(
         history: Sequence[ConversationItem],
@@ -60,12 +95,13 @@ def _build_agent(stream_events: Sequence[StreamEvent]) -> Agent:
         reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
     ) -> AsyncIterator[StreamEvent]:
-        """Return the static event stream expected by ``Agent``."""
+        """Return the static event stream expected by ``run_agent``."""
 
         _ = history, model, instructions, reasoning, tools
+        invocations.append(tuple(history))
         return _iter_stream_events(stream_events)
 
-    return Agent(stream_fn=_stream_fn, model="gpt-5.4")
+    return _stream_fn
 
 
 def _iter_stream_events(
@@ -74,6 +110,8 @@ def _iter_stream_events(
     """Yield static stream events asynchronously."""
 
     async def _iterate() -> AsyncIterator[StreamEvent]:
+        """Yield each configured stream event."""
+
         for event in stream_events:
             yield event
 

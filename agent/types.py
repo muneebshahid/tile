@@ -54,7 +54,7 @@ class AgentEndEvent(BaseModel):
     """Marks the end of an agent run and returns new conversation items."""
 
     type: Literal["agent_end"] = "agent_end"
-    items: list[ConversationItem]
+    new_items: list[ConversationItem]
 
 
 class TurnStartEvent(BaseModel):

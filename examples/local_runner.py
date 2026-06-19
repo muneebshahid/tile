@@ -6,10 +6,12 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
-from agent.agent import Agent
+from agent.agent import run_agent
 from agent.tools import build_tools
-from agent.types import AgentEvent
+from agent.types import AgentEvent, StreamFn
 from ai.openai.provider import stream_api
+from ai.types.conversation import UserMessage
+from ai.types.tools import ToolDefinition
 from settings import settings
 
 
@@ -34,30 +36,30 @@ async def run_cli(argv: Sequence[str]) -> int:
 async def run_prompt(
     prompt: str,
     *,
-    agent: Agent | None = None,
+    stream_fn: StreamFn = stream_api,
+    model: str | None = None,
+    tools: Sequence[ToolDefinition] | None = None,
+    cwd: Path | str | None = None,
     output: TextIO | None = None,
 ) -> None:
-    """Run one prompt through an agent and write JSON event lines."""
-
-    active_agent = agent or create_agent()
-    event_output = output or sys.stdout
-    active_agent.add_user_message(prompt)
-
-    async for event in active_agent.run():
-        event_output.write(_serialize_event(event))
-        event_output.write("\n")
-
-
-def create_agent(cwd: Path | str | None = None) -> Agent:
-    """Create the default local agent backed by OpenAI and built-in tools."""
+    """Run one prompt through the stateless agent and write JSON event lines."""
 
     working_directory = _resolve_cwd(cwd)
-    return Agent(
-        stream_fn=stream_api,
-        model=settings.openai_model,
-        tools=build_tools(working_directory),
-        cwd=working_directory,
+    active_tools = (
+        tuple(tools) if tools is not None else tuple(build_tools(working_directory))
     )
+    history = [UserMessage(content=prompt)]
+    event_output = output or sys.stdout
+
+    async for event in run_agent(
+        history,
+        stream_fn=stream_fn,
+        model=model or settings.openai_model,
+        tools=active_tools,
+        cwd=working_directory,
+    ):
+        event_output.write(_serialize_event(event))
+        event_output.write("\n")
 
 
 def _read_prompt(argv: Sequence[str], stdin: TextIO) -> str:

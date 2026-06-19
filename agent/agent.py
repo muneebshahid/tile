@@ -1,14 +1,11 @@
+"""Stateless agent run loop for provider streams and tool execution."""
+
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import Literal
 
 from ai.types.contracts import Reasoning
-from ai.types.conversation import (
-    AssistantTurn,
-    ConversationItem,
-    ToolResultTurn,
-    UserMessage,
-)
+from ai.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
 from ai.types.stream import (
     AssistantMessage,
     ReasoningDeltaEvent,
@@ -18,13 +15,13 @@ from ai.types.stream import (
     StreamErrorEvent,
     StreamEvent,
     StreamStartEvent,
-    ToolCallBlock,
-    ToolCallStartEvent,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
+    ToolCallBlock,
     ToolCallDeltaEvent,
     ToolCallEndEvent,
+    ToolCallStartEvent,
 )
 from ai.types.tools import JsonObject, ToolDefinition, ToolFunction, ToolResult
 from agent.prompt import PROMPT, build_system_prompt
@@ -55,206 +52,209 @@ ASSISTANT_MESSAGE_UPDATE_EVENT_TYPES = (
 )
 
 
-class Agent:
-    def __init__(
-        self,
-        stream_fn: StreamFn,
-        model: str,
-        reasoning: Reasoning | None = None,
-        tools: Sequence[ToolDefinition] | None = None,
-        history: Sequence[ConversationItem] | None = None,
-        system_prompt: str | None = None,
-        cwd: Path | str | None = None,
-    ) -> None:
-        self._stream_fn = stream_fn
-        self._model = model
-        self._reasoning = reasoning
-        self._tools = tuple(tools or ())
-        self._history = list(history or [])
-        self._system_prompt = system_prompt or PROMPT
-        self._cwd = _resolve_cwd(cwd)
+async def run_agent(
+    history: Sequence[ConversationItem],
+    *,
+    stream_fn: StreamFn,
+    model: str,
+    reasoning: Reasoning | None = None,
+    tools: Sequence[ToolDefinition] = (),
+    system_prompt: str = PROMPT,
+    cwd: Path | str | None = None,
+) -> AsyncIterator[AgentEvent]:
+    """Run one stateless agent turn from supplied model-visible history."""
 
-    def update_model(self, model: str) -> None:
-        self._model = model
+    run_history = list(history)
+    new_items: list[ConversationItem] = []
+    instructions = build_system_prompt(system_prompt, _resolve_cwd(cwd))
 
-    def update_reasoning(self, reasoning: Reasoning | None) -> None:
-        self._reasoning = reasoning
+    yield AgentStartEvent()
+    async for event in _run_agent_loop(
+        run_history=run_history,
+        new_items=new_items,
+        stream_fn=stream_fn,
+        model=model,
+        instructions=instructions,
+        reasoning=reasoning,
+        tools=tuple(tools),
+    ):
+        yield event
+    yield AgentEndEvent(new_items=new_items)
 
-    @property
-    def history(self) -> Sequence[ConversationItem]:
-        return tuple(self._history)
 
-    def add_user_message(self, text: str) -> UserMessage:
-        message = UserMessage(content=text)
-        self._history.append(message)
-        return message
+async def _run_agent_loop(
+    *,
+    run_history: list[ConversationItem],
+    new_items: list[ConversationItem],
+    stream_fn: StreamFn,
+    model: str,
+    instructions: str,
+    reasoning: Reasoning | None,
+    tools: tuple[ToolDefinition, ...],
+) -> AsyncIterator[AgentEvent]:
+    """Call the provider until the assistant stops requesting tools."""
 
-    def replace_history(self, history: Sequence[ConversationItem]) -> None:
-        self._history = list(history)
+    while True:
+        has_tool_results = False
+        stream = await stream_fn(
+            tuple(run_history),
+            model,
+            instructions=instructions,
+            reasoning=reasoning,
+            tools=tools,
+        )
 
-    def add_item(self, item: ConversationItem) -> None:
-        self._history.append(item)
-
-    async def run(self) -> AsyncIterator[AgentEvent]:
-        yield AgentStartEvent()
-        async for event in self._run():
-            yield event
-        yield AgentEndEvent(items=self._history)
-
-    async def _run(self) -> AsyncIterator[AgentEvent]:
-        while True:
-            has_tool_results = False
-            stream = await self._stream_fn(
-                self._history,
-                self._model,
-                instructions=build_system_prompt(self._system_prompt, self._cwd),
-                reasoning=self._reasoning,
-                tools=self._tools,
-            )
-
-            async for event in stream:
-                async for agent_event in self._handle_stream_event(event):
-                    if (
-                        isinstance(agent_event, TurnEndEvent)
-                        and agent_event.tool_results
-                    ):
-                        has_tool_results = True
-
-                    yield agent_event
-
-            if not has_tool_results:
-                break
-
-    async def _handle_stream_event(
-        self, event: StreamEvent
-    ) -> AsyncIterator[AgentEvent]:
-        if handler := self._select_event_handler(event):
-            async for agent_event in handler:
-                yield agent_event
-
-    def _select_event_handler(
-        self,
-        event: StreamEvent,
-    ) -> AsyncIterator[AgentEvent] | None:
-        match event:
-            case StreamStartEvent():
-                return self._handle_stream_start_event(event)
-            case StreamDoneEvent():
-                return self._handle_stream_done_event(event)
-            case StreamErrorEvent():
-                return self._handle_stream_error_event(event)
-            case _ if isinstance(event, ASSISTANT_MESSAGE_UPDATE_EVENT_TYPES):
-                return self._handle_message_update_event(event)
-
-        return None
-
-    async def _handle_stream_start_event(
-        self,
-        event: StreamStartEvent,
-    ) -> AsyncIterator[AgentEvent]:
-        yield TurnStartEvent()
-        yield MessageStartEvent(message=event.message)
-
-    async def _handle_stream_done_event(
-        self,
-        event: StreamDoneEvent,
-    ) -> AsyncIterator[AgentEvent]:
-        message = _build_assistant_turn(event.message)
-        self._history.append(message)
-        yield MessageEndEvent(message=message)
-        tool_results: list[ToolResultTurn] = []
-
-        for tool_call in _collect_tool_calls(event.message):
-            async for agent_event in self._execute_tool(
-                call_id=tool_call.call_id,
-                tool_name=tool_call.name,
-                arguments=tool_call.arguments,
+        async for event in stream:
+            async for agent_event in _handle_stream_event(
+                event,
+                run_history=run_history,
+                new_items=new_items,
+                tools=tools,
             ):
-                if isinstance(agent_event, ToolExecutionEndEvent):
-                    tool_result = _build_tool_result_turn(agent_event)
-                    self._history.append(tool_result)
-                    tool_results.append(tool_result)
+                if isinstance(agent_event, TurnEndEvent) and agent_event.tool_results:
+                    has_tool_results = True
                 yield agent_event
 
-        yield TurnEndEvent(message=message, tool_results=tool_results)
+        if not has_tool_results:
+            break
 
-    async def _handle_stream_error_event(
-        self,
-        event: StreamErrorEvent,
-    ) -> AsyncIterator[AgentEvent]:
-        message = _build_assistant_turn(event.error)
-        self._history.append(message)
-        yield MessageEndEvent(message=message)
-        yield TurnEndEvent(message=message, tool_results=[])
 
-    async def _handle_message_update_event(
-        self,
-        event: (
-            ReasoningStartEvent
-            | ReasoningDeltaEvent
-            | ReasoningEndEvent
-            | TextStartEvent
-            | TextDeltaEvent
-            | TextEndEvent
-            | ToolCallStartEvent
-            | ToolCallDeltaEvent
-            | ToolCallEndEvent
-        ),
-    ) -> AsyncIterator[AgentEvent]:
-        yield MessageUpdateEvent(message=event.message, stream_event=event)
+async def _handle_stream_event(
+    event: StreamEvent,
+    *,
+    run_history: list[ConversationItem],
+    new_items: list[ConversationItem],
+    tools: tuple[ToolDefinition, ...],
+) -> AsyncIterator[AgentEvent]:
+    """Route one provider stream event into agent-level events."""
 
-    async def _execute_tool(
-        self,
-        call_id: str,
-        tool_name: str,
-        arguments: JsonObject,
-    ) -> AsyncIterator[AgentEvent]:
-        """Emit the full lifecycle for one tool execution."""
+    match event:
+        case StreamStartEvent():
+            yield TurnStartEvent()
+            yield MessageStartEvent(message=event.message)
+        case StreamDoneEvent():
+            async for agent_event in _handle_stream_done_event(
+                event,
+                run_history=run_history,
+                new_items=new_items,
+                tools=tools,
+            ):
+                yield agent_event
+        case StreamErrorEvent():
+            async for agent_event in _handle_stream_error_event(
+                event,
+                run_history=run_history,
+                new_items=new_items,
+            ):
+                yield agent_event
+        case _ if isinstance(event, ASSISTANT_MESSAGE_UPDATE_EVENT_TYPES):
+            yield MessageUpdateEvent(message=event.message, stream_event=event)
 
-        yield ToolExecutionStartEvent(
-            call_id=call_id,
-            tool_name=tool_name,
-            arguments=arguments,
-        )
 
-        result, is_error = await self._call_tool(tool_name, arguments)
-        yield ToolExecutionEndEvent(
-            call_id=call_id,
-            tool_name=tool_name,
-            result=result,
-            is_error=is_error,
-        )
+async def _handle_stream_done_event(
+    event: StreamDoneEvent,
+    *,
+    run_history: list[ConversationItem],
+    new_items: list[ConversationItem],
+    tools: tuple[ToolDefinition, ...],
+) -> AsyncIterator[AgentEvent]:
+    """Finalize an assistant message and execute requested tools."""
 
-    async def _call_tool(
-        self,
-        tool_name: str,
-        arguments: JsonObject,
-    ) -> tuple[ToolResult, bool]:
-        """Resolve and call a tool while normalizing tool failures."""
+    message = _build_assistant_turn(event.message)
+    _append_new_item(message, run_history=run_history, new_items=new_items)
+    yield MessageEndEvent(message=message)
+    tool_results: list[ToolResultTurn] = []
 
-        try:
-            tool = await self._get_tool(tool_name)
-            if tool is None:
-                return ToolResult.text(f"Tool '{tool_name}' not found"), True
-            return await tool(**arguments), False
-        except Exception as error:
-            return ToolResult.text(str(error)), True
+    for tool_call in _collect_tool_calls(event.message):
+        async for agent_event in _execute_tool(
+            call_id=tool_call.call_id,
+            tool_name=tool_call.name,
+            arguments=tool_call.arguments,
+            tools=tools,
+        ):
+            if isinstance(agent_event, ToolExecutionEndEvent):
+                tool_result = _build_tool_result_turn(agent_event)
+                _append_new_item(
+                    tool_result,
+                    run_history=run_history,
+                    new_items=new_items,
+                )
+                tool_results.append(tool_result)
+            yield agent_event
 
-    async def _get_tool(
-        self,
-        tool_name: str,
-    ) -> ToolFunction | None:
-        """Find a registered tool implementation by name."""
-        tool_name = tool_name.lower().strip()
+    yield TurnEndEvent(message=message, tool_results=tool_results)
 
-        for tool in self._tools:
-            if tool.name == tool_name:
-                return tool.fn
 
-        return None
+async def _handle_stream_error_event(
+    event: StreamErrorEvent,
+    *,
+    run_history: list[ConversationItem],
+    new_items: list[ConversationItem],
+) -> AsyncIterator[AgentEvent]:
+    """Finalize a failed assistant message."""
+
+    message = _build_assistant_turn(event.error)
+    _append_new_item(message, run_history=run_history, new_items=new_items)
+    yield MessageEndEvent(message=message)
+    yield TurnEndEvent(message=message, tool_results=[])
+
+
+async def _execute_tool(
+    *,
+    call_id: str,
+    tool_name: str,
+    arguments: JsonObject,
+    tools: tuple[ToolDefinition, ...],
+) -> AsyncIterator[AgentEvent]:
+    """Emit the full lifecycle for one tool execution."""
+
+    yield ToolExecutionStartEvent(
+        call_id=call_id,
+        tool_name=tool_name,
+        arguments=arguments,
+    )
+
+    result, is_error = await _call_tool(tool_name, arguments, tools)
+    yield ToolExecutionEndEvent(
+        call_id=call_id,
+        tool_name=tool_name,
+        result=result,
+        is_error=is_error,
+    )
+
+
+async def _call_tool(
+    tool_name: str,
+    arguments: JsonObject,
+    tools: tuple[ToolDefinition, ...],
+) -> tuple[ToolResult, bool]:
+    """Resolve and call a tool while normalizing tool failures."""
+
+    try:
+        tool = _get_tool(tool_name, tools)
+        if tool is None:
+            return ToolResult.text(f"Tool '{tool_name}' not found"), True
+        return await tool(**arguments), False
+    except Exception as error:
+        return ToolResult.text(str(error)), True
+
+
+def _get_tool(
+    tool_name: str,
+    tools: tuple[ToolDefinition, ...],
+) -> ToolFunction | None:
+    """Find a registered tool implementation by name."""
+
+    normalized_tool_name = tool_name.lower().strip()
+    for tool in tools:
+        if tool.name == normalized_tool_name:
+            return tool.fn
+    return None
 
 
 def _build_assistant_turn(message: AssistantMessage) -> AssistantTurn:
+    """Build a replayable assistant turn from a finalized stream message."""
+
     status: Literal["completed", "aborted", "error"] = "completed"
     if message.stop_reason == "aborted":
         status = "aborted"
@@ -279,6 +279,8 @@ def _resolve_cwd(cwd: Path | str | None) -> Path:
 
 
 def _collect_tool_calls(message: AssistantMessage) -> list[ToolCallBlock]:
+    """Collect tool calls from a finalized assistant message."""
+
     return [
         block.model_copy(deep=True)
         for block in message.blocks
@@ -287,9 +289,23 @@ def _collect_tool_calls(message: AssistantMessage) -> list[ToolCallBlock]:
 
 
 def _build_tool_result_turn(event: ToolExecutionEndEvent) -> ToolResultTurn:
+    """Build a replayable tool result from a tool execution event."""
+
     return ToolResultTurn(
         call_id=event.call_id,
         tool_name=event.tool_name,
         content=event.result.content,
         is_error=event.is_error,
     )
+
+
+def _append_new_item(
+    item: ConversationItem,
+    *,
+    run_history: list[ConversationItem],
+    new_items: list[ConversationItem],
+) -> None:
+    """Append one generated item to local model history and run output."""
+
+    run_history.append(item)
+    new_items.append(item)
