@@ -1,5 +1,7 @@
 """Provider-neutral conversation history models."""
 
+from __future__ import annotations
+
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
@@ -38,7 +40,7 @@ class AssistantTurn(BaseModel):
     def from_stream_done(
         cls,
         event: StreamDoneEvent,
-    ) -> "AssistantTurn":
+    ) -> AssistantTurn:
         """Create a completed assistant turn from a terminal stream event."""
 
         return cls(
@@ -53,7 +55,7 @@ class AssistantTurn(BaseModel):
     def from_stream_error(
         cls,
         event: StreamErrorEvent,
-    ) -> "AssistantTurn":
+    ) -> AssistantTurn:
         """Create a failed assistant turn from a terminal stream event."""
 
         status: TurnStatus = "aborted" if event.stop_reason == "aborted" else "error"
