@@ -2,19 +2,18 @@
 
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
-from typing import Literal
 
 from ai.types.contracts import Reasoning
 from ai.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
-from ai.types.stream import (
-    AssistantMessage,
+from ai.types.stream_events import (
+    AssistantBlock,
     ReasoningDeltaEvent,
     ReasoningEndEvent,
     ReasoningStartEvent,
+    ProviderStreamEvent,
     StreamDoneEvent,
     StreamErrorEvent,
-    StreamEvent,
-    StreamStartEvent,
+    StreamStartedEvent,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
@@ -120,7 +119,7 @@ async def _run_agent_loop(
 
 
 async def _handle_stream_event(
-    event: StreamEvent,
+    event: ProviderStreamEvent,
     *,
     run_history: list[ConversationItem],
     new_items: list[ConversationItem],
@@ -129,9 +128,9 @@ async def _handle_stream_event(
     """Route one provider stream event into agent-level events."""
 
     match event:
-        case StreamStartEvent():
+        case StreamStartedEvent():
             yield TurnStartEvent()
-            yield MessageStartEvent(message=event.message)
+            yield MessageStartEvent(response_id=event.response_id)
         case StreamDoneEvent():
             async for agent_event in _handle_stream_done_event(
                 event,
@@ -148,7 +147,7 @@ async def _handle_stream_event(
             ):
                 yield agent_event
         case _ if isinstance(event, ASSISTANT_MESSAGE_UPDATE_EVENT_TYPES):
-            yield MessageUpdateEvent(message=event.message, stream_event=event)
+            yield MessageUpdateEvent(stream_event=event)
 
 
 async def _handle_stream_done_event(
@@ -160,12 +159,12 @@ async def _handle_stream_done_event(
 ) -> AsyncIterator[AgentEvent]:
     """Finalize an assistant message and execute requested tools."""
 
-    message = _build_assistant_turn(event.message)
+    message = AssistantTurn.from_stream_done(event)
     _append_new_item(message, run_history=run_history, new_items=new_items)
     yield MessageEndEvent(message=message)
     tool_results: list[ToolResultTurn] = []
 
-    for tool_call in _collect_tool_calls(event.message):
+    for tool_call in _collect_tool_calls(event.blocks):
         async for agent_event in _execute_tool(
             call_id=tool_call.call_id,
             tool_name=tool_call.name,
@@ -193,7 +192,7 @@ async def _handle_stream_error_event(
 ) -> AsyncIterator[AgentEvent]:
     """Finalize a failed assistant message."""
 
-    message = _build_assistant_turn(event.error)
+    message = AssistantTurn.from_stream_error(event)
     _append_new_item(message, run_history=run_history, new_items=new_items)
     yield MessageEndEvent(message=message)
     yield TurnEndEvent(message=message, tool_results=[])
@@ -252,24 +251,6 @@ def _get_tool(
     return None
 
 
-def _build_assistant_turn(message: AssistantMessage) -> AssistantTurn:
-    """Build a replayable assistant turn from a finalized stream message."""
-
-    status: Literal["completed", "aborted", "error"] = "completed"
-    if message.stop_reason == "aborted":
-        status = "aborted"
-    elif message.stop_reason == "error":
-        status = "error"
-
-    return AssistantTurn(
-        blocks=[block.model_copy(deep=True) for block in message.blocks],
-        response_id=message.response_id,
-        stop_reason=message.stop_reason,
-        status=status,
-        error_message=message.error_message,
-    )
-
-
 def _resolve_cwd(cwd: Path | str | None) -> Path:
     """Resolve the agent working directory."""
 
@@ -278,12 +259,12 @@ def _resolve_cwd(cwd: Path | str | None) -> Path:
     return Path(cwd).expanduser().resolve()
 
 
-def _collect_tool_calls(message: AssistantMessage) -> list[ToolCallBlock]:
-    """Collect tool calls from a finalized assistant message."""
+def _collect_tool_calls(blocks: Sequence[AssistantBlock]) -> list[ToolCallBlock]:
+    """Collect tool calls from finalized assistant blocks."""
 
     return [
         block.model_copy(deep=True)
-        for block in message.blocks
+        for block in blocks
         if isinstance(block, ToolCallBlock)
     ]
 

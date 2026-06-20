@@ -17,6 +17,7 @@ from ai.openai.subscription_event_adapter import (
 )
 from ai.types.contracts import AsyncEventStream, Reasoning
 from ai.types.conversation import ConversationItem
+from ai.types.stream_events import ProviderSource
 from ai.types.tools import ToolDefinition
 
 if TYPE_CHECKING:
@@ -41,7 +42,10 @@ async def stream_api(
         tools=tools,
     )
     raw_stream = await _create_api_stream(create_client(), request_params)
-    return assemble_stream(normalize_sdk_events(raw_stream))
+    return assemble_stream(
+        normalize_sdk_events(raw_stream),
+        source=ProviderSource(provider="openai", model=model),
+    )
 
 
 async def stream_subscription(
@@ -66,7 +70,10 @@ async def stream_subscription(
         request_params,
         raw_stream=raw_stream,
     )
-    return assemble_stream(normalize_subscription_events(subscription_stream))
+    return assemble_stream(
+        normalize_subscription_events(subscription_stream),
+        source=ProviderSource(provider="openai", model=model),
+    )
 
 
 async def _create_api_stream(

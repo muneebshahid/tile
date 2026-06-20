@@ -1,3 +1,5 @@
+"""Agent run events and provider stream callable contracts."""
+
 from collections.abc import Awaitable, Sequence
 from typing import Literal, Protocol, TypeAlias
 
@@ -5,34 +7,13 @@ from pydantic import BaseModel
 
 from ai.types.contracts import AsyncEventStream, Reasoning
 from ai.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
-from ai.types.stream import (
-    AssistantMessage,
-    ReasoningDeltaEvent,
-    ReasoningEndEvent,
-    ReasoningStartEvent,
-    TextDeltaEvent,
-    TextEndEvent,
-    TextStartEvent,
-    ToolCallDeltaEvent,
-    ToolCallEndEvent,
-    ToolCallStartEvent,
-)
+from ai.types.stream_events import StreamUpdateEvent
 from ai.types.tools import JsonObject, ToolDefinition, ToolResult
-
-AssistantMessageUpdateEvent: TypeAlias = (
-    ReasoningStartEvent
-    | ReasoningDeltaEvent
-    | ReasoningEndEvent
-    | TextStartEvent
-    | TextDeltaEvent
-    | TextEndEvent
-    | ToolCallStartEvent
-    | ToolCallDeltaEvent
-    | ToolCallEndEvent
-)
 
 
 class StreamFn(Protocol):
+    """Callable that starts a provider stream from model-visible history."""
+
     def __call__(
         self,
         history: Sequence[ConversationItem],
@@ -44,26 +25,32 @@ class StreamFn(Protocol):
     ) -> Awaitable[AsyncEventStream]: ...
 
 
-class AgentStartEvent(BaseModel):
+class AgentEvent(BaseModel):
+    """Base event emitted by the stateless agent runner."""
+
+    type: str
+
+
+class AgentStartEvent(AgentEvent):
     """Marks the start of an agent run."""
 
     type: Literal["agent_start"] = "agent_start"
 
 
-class AgentEndEvent(BaseModel):
+class AgentEndEvent(AgentEvent):
     """Marks the end of an agent run and returns new conversation items."""
 
     type: Literal["agent_end"] = "agent_end"
     new_items: list[ConversationItem]
 
 
-class TurnStartEvent(BaseModel):
+class TurnStartEvent(AgentEvent):
     """Marks the start of a single assistant turn."""
 
     type: Literal["turn_start"] = "turn_start"
 
 
-class TurnEndEvent(BaseModel):
+class TurnEndEvent(AgentEvent):
     """Marks the end of a single assistant turn."""
 
     type: Literal["turn_end"] = "turn_end"
@@ -71,29 +58,28 @@ class TurnEndEvent(BaseModel):
     tool_results: list[ToolResultTurn]
 
 
-class MessageStartEvent(BaseModel):
+class MessageStartEvent(AgentEvent):
     """Marks the start of a message lifecycle event."""
 
     type: Literal["message_start"] = "message_start"
-    message: AssistantMessage
+    response_id: str | None = None
 
 
-class MessageUpdateEvent(BaseModel):
+class MessageUpdateEvent(AgentEvent):
     """Carries assistant streaming updates during a message."""
 
     type: Literal["message_update"] = "message_update"
-    message: AssistantMessage
-    stream_event: AssistantMessageUpdateEvent
+    stream_event: StreamUpdateEvent
 
 
-class MessageEndEvent(BaseModel):
+class MessageEndEvent(AgentEvent):
     """Marks the end of a message lifecycle event."""
 
     type: Literal["message_end"] = "message_end"
     message: AssistantTurn
 
 
-class ToolExecutionStartEvent(BaseModel):
+class ToolExecutionStartEvent(AgentEvent):
     """Marks the start of a tool execution."""
 
     type: Literal["tool_execution_start"] = "tool_execution_start"
@@ -102,7 +88,7 @@ class ToolExecutionStartEvent(BaseModel):
     arguments: JsonObject
 
 
-class ToolExecutionEndEvent(BaseModel):
+class ToolExecutionEndEvent(AgentEvent):
     """Marks the end of a tool execution."""
 
     type: Literal["tool_execution_end"] = "tool_execution_end"
@@ -112,7 +98,7 @@ class ToolExecutionEndEvent(BaseModel):
     is_error: bool
 
 
-AgentEvent: TypeAlias = (
+AgentRunEvent: TypeAlias = (
     AgentStartEvent
     | AgentEndEvent
     | TurnStartEvent
@@ -123,3 +109,5 @@ AgentEvent: TypeAlias = (
     | ToolExecutionStartEvent
     | ToolExecutionEndEvent
 )
+
+AgentEventType: TypeAlias = AgentRunEvent

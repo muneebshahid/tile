@@ -10,11 +10,11 @@ import pytest
 from agent.types import StreamFn
 from ai.types.contracts import Reasoning
 from ai.types.conversation import ConversationItem, UserMessage
-from ai.types.stream import (
-    AssistantMessage,
+from ai.types.stream_events import (
+    ProviderSource,
+    ProviderStreamEvent,
     StreamDoneEvent,
-    StreamEvent,
-    StreamStartEvent,
+    StreamStartedEvent,
 )
 from ai.types.tools import ToolDefinition
 from examples import local_runner
@@ -82,7 +82,7 @@ def test_run_cli_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def _build_stream_fn(
-    stream_events: Sequence[StreamEvent],
+    stream_events: Sequence[ProviderStreamEvent],
     invocations: list[tuple[ConversationItem, ...]],
 ) -> StreamFn:
     """Build a provider stream function that records supplied history."""
@@ -94,7 +94,7 @@ def _build_stream_fn(
         instructions: str,
         reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncIterator[ProviderStreamEvent]:
         """Return the static event stream expected by ``run_agent``."""
 
         _ = history, model, instructions, reasoning, tools
@@ -105,11 +105,11 @@ def _build_stream_fn(
 
 
 def _iter_stream_events(
-    stream_events: Sequence[StreamEvent],
-) -> AsyncIterator[StreamEvent]:
+    stream_events: Sequence[ProviderStreamEvent],
+) -> AsyncIterator[ProviderStreamEvent]:
     """Yield static stream events asynchronously."""
 
-    async def _iterate() -> AsyncIterator[StreamEvent]:
+    async def _iterate() -> AsyncIterator[ProviderStreamEvent]:
         """Yield each configured stream event."""
 
         for event in stream_events:
@@ -118,12 +118,12 @@ def _iter_stream_events(
     return _iterate()
 
 
-def _start_event() -> StreamStartEvent:
+def _start_event() -> StreamStartedEvent:
     """Build a deterministic stream start event."""
 
-    return StreamStartEvent(
-        type="start",
-        message=AssistantMessage(response_id="resp_cli"),
+    return StreamStartedEvent(
+        source=_source(),
+        response_id="resp_cli",
     )
 
 
@@ -131,6 +131,13 @@ def _done_event() -> StreamDoneEvent:
     """Build a deterministic stream completion event."""
 
     return StreamDoneEvent(
-        type="done",
-        message=AssistantMessage(response_id="resp_cli"),
+        source=_source(),
+        response_id="resp_cli",
+        stop_reason="stop",
     )
+
+
+def _source() -> ProviderSource:
+    """Build a deterministic provider source for runner tests."""
+
+    return ProviderSource(provider="test", model="gpt-5.4")
