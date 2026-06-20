@@ -121,8 +121,7 @@ def _yield_stream_event(
         case NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA:
             arguments_delta_event = cast(ToolCallArgumentsDeltaNormalizedEvent, event)
             return _append_tool_call_arguments_delta(
-                state,
-                arguments_delta_event["delta"],
+                state, arguments_delta_event["delta"]
             )
         case NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE:
             arguments_done_event = cast(ToolCallArgumentsDoneNormalizedEvent, event)
