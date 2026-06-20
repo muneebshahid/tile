@@ -17,6 +17,7 @@ from ai.openai.normalized_events import (
     NormalizedEventType,
     ReasoningDeltaNormalizedEvent,
     ReasoningDoneNormalizedEvent,
+    TERMINAL_NORMALIZED_EVENT_TYPES,
     TextPartType,
     ToolCallAddedNormalizedEvent,
     ToolCallArgumentsDeltaNormalizedEvent,
@@ -44,14 +45,6 @@ from ai.types.stream_events import (
     ToolCallDeltaEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
-)
-
-TERMINAL_NORMALIZED_EVENT_TYPES: frozenset[NormalizedEventType] = frozenset(
-    {
-        NormalizedEventType.COMPLETED,
-        NormalizedEventType.INCOMPLETE,
-        NormalizedEventType.FAILED,
-    }
 )
 
 

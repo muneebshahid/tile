@@ -27,6 +27,14 @@ class NormalizedEventType(StrEnum):
     FAILED = "failed"
 
 
+TERMINAL_NORMALIZED_EVENT_TYPES: frozenset[NormalizedEventType] = frozenset(
+    {
+        NormalizedEventType.COMPLETED,
+        NormalizedEventType.INCOMPLETE,
+        NormalizedEventType.FAILED,
+    }
+)
+
 TextPartType: TypeAlias = Literal["output_text", "refusal"]
 
 
