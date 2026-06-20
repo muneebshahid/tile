@@ -259,7 +259,6 @@ def _start_tool_call_block(
         call_id=event["call_id"],
         name=event["name"],
         arguments=event["arguments"],
-        provider_metadata=_build_metadata(provider_item_id=event["provider_item_id"]),
     )
     state.active_text_part_type = None
     content_index = _append_active_block(state, block)
