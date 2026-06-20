@@ -74,8 +74,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.added(item.type=reasoning)
     Adapter->>Norm: REASONING_ADDED(item_id)
     Norm->>Asm: REASONING_ADDED
-    Asm-->>Asm: create ReasoningBlock and set active_block=ReasoningBlock
-    Asm->>Stream: ReasoningStartEvent(message)
+    Asm-->>Asm: append ReasoningBlock and set active_block_index
+    Asm->>Stream: ReasoningStartEvent(content_index)
     Stream->>Agent: reasoning_start
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -86,7 +86,7 @@ sequenceDiagram
     Adapter->>Norm: REASONING_DELTA(delta)
     Norm->>Asm: REASONING_DELTA
     Asm-->>Asm: append delta to ReasoningBlock.summary_text
-    Asm->>Stream: ReasoningDeltaEvent(delta, message)
+    Asm->>Stream: ReasoningDeltaEvent(content_index, delta)
     Stream->>Agent: reasoning_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -95,7 +95,7 @@ sequenceDiagram
     Adapter->>Norm: REASONING_DELTA(delta="\\n\\n")
     Norm->>Asm: REASONING_DELTA
     Asm-->>Asm: append paragraph separator
-    Asm->>Stream: ReasoningDeltaEvent(delta, message)
+    Asm->>Stream: ReasoningDeltaEvent(content_index, delta)
     Stream->>Agent: reasoning_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -103,8 +103,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.done(item.type=reasoning)
     Adapter->>Norm: REASONING_DONE(summary_text, reasoning_signature)
     Norm->>Asm: REASONING_DONE
-    Asm-->>Asm: finalize ReasoningBlock and set active_block=None
-    Asm->>Stream: ReasoningEndEvent(message)
+    Asm-->>Asm: finalize ReasoningBlock, copy block, and clear active block
+    Asm->>Stream: ReasoningEndEvent(content_index, block)
     Stream->>Agent: reasoning_end
     Agent-->>Agent: emit MessageUpdateEvent
 ```
@@ -127,24 +127,23 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.added(item.type=message)
     Adapter->>Norm: MESSAGE_ADDED(item_id, phase)
     Norm->>Asm: MESSAGE_ADDED
-    Asm-->>Asm: create TextBlock and set active_text_part_type=None
-    Asm->>Stream: TextStartEvent(message)
-    Stream->>Agent: text_start
-    Agent-->>Agent: emit MessageUpdateEvent
+    Asm-->>Asm: record message metadata; wait for text part
 
     SDK->>Adapter: ResponseContentPartAddedEvent
     Sub->>Adapter: response.content_part.added
     Adapter->>Norm: MESSAGE_TEXT_PART(output_text | refusal | None)
     Norm->>Asm: MESSAGE_TEXT_PART
-    Asm-->>Asm: set active_text_part_type
-    Note over Asm: No StreamEvent is emitted for content-part activation.
+    Asm-->>Asm: set active_text_part_type and append TextBlock for supported parts
+    Asm->>Stream: TextStartEvent(content_index, text_part)
+    Stream->>Agent: text_start
+    Agent-->>Agent: emit MessageUpdateEvent
 
     SDK->>Adapter: ResponseTextDeltaEvent
     Sub->>Adapter: response.output_text.delta
     Adapter->>Norm: MESSAGE_TEXT_DELTA(part_type=output_text)
     Norm->>Asm: MESSAGE_TEXT_DELTA
     Asm-->>Asm: append only if active_text_part_type=output_text
-    Asm->>Stream: TextDeltaEvent(delta, message)
+    Asm->>Stream: TextDeltaEvent(content_index, delta)
     Stream->>Agent: text_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -153,7 +152,7 @@ sequenceDiagram
     Adapter->>Norm: MESSAGE_TEXT_DELTA(part_type=refusal)
     Norm->>Asm: MESSAGE_TEXT_DELTA
     Asm-->>Asm: append only if active_text_part_type=refusal
-    Asm->>Stream: TextDeltaEvent(delta, message)
+    Asm->>Stream: TextDeltaEvent(content_index, delta)
     Stream->>Agent: text_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -161,8 +160,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.done(item.type=message)
     Adapter->>Norm: MESSAGE_DONE(text, phase)
     Norm->>Asm: MESSAGE_DONE
-    Asm-->>Asm: finalize TextBlock and clear active_block and active_text_part_type
-    Asm->>Stream: TextEndEvent(message)
+    Asm-->>Asm: finalize TextBlock, copy block, and clear active text state
+    Asm->>Stream: TextEndEvent(content_index, block)
     Stream->>Agent: text_end
     Agent-->>Agent: emit MessageUpdateEvent
 ```
@@ -185,8 +184,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.added(item.type=function_call)
     Adapter->>Norm: TOOL_CALL_ADDED(provider_item_id, call_id, name, arguments)
     Norm->>Asm: TOOL_CALL_ADDED
-    Asm-->>Asm: create ToolCallBlock and set active_block=ToolCallBlock
-    Asm->>Stream: ToolCallStartEvent(message)
+    Asm-->>Asm: append ToolCallBlock and set active_block_index
+    Asm->>Stream: ToolCallStartEvent(content_index, call_id, name)
     Stream->>Agent: tool_call_start
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -194,7 +193,7 @@ sequenceDiagram
     Sub->>Adapter: response.function_call_arguments.delta
     Adapter->>Norm: TOOL_CALL_ARGUMENTS_DELTA(delta)
     Norm->>Asm: TOOL_CALL_ARGUMENTS_DELTA
-    Asm->>Stream: ToolCallDeltaEvent(delta, message)
+    Asm->>Stream: ToolCallDeltaEvent(content_index, delta)
     Stream->>Agent: tool_call_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -209,8 +208,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.done(item.type=function_call)
     Adapter->>Norm: TOOL_CALL_DONE(final tool call data)
     Norm->>Asm: TOOL_CALL_DONE
-    Asm-->>Asm: finalize ToolCallBlock and set active_block=None
-    Asm->>Stream: ToolCallEndEvent(message)
+    Asm-->>Asm: finalize ToolCallBlock, copy block, and clear active block
+    Asm->>Stream: ToolCallEndEvent(content_index, block)
     Stream->>Agent: tool_call_end
     Agent-->>Agent: emit MessageUpdateEvent
 ```
