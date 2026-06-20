@@ -216,7 +216,9 @@ def _activate_text_part(
     if part_type is None:
         return None
 
-    _clear_active_block(state)
+    if isinstance(state.active_block, TextBlock):
+        return None
+
     block = TextBlock(
         text="",
         text_part=part_type,
