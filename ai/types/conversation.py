@@ -1,9 +1,19 @@
+"""Provider-neutral conversation history models."""
+
 from typing import Literal, TypeAlias
 
 from pydantic import BaseModel, Field
 
-from ai.types.stream import AssistantBlock, StopReason
+from ai.types.stream_events import (
+    AssistantBlock,
+    ProviderSource,
+    StopReason,
+    StreamDoneEvent,
+    StreamErrorEvent,
+)
 from ai.types.tools import ToolResultContent
+
+TurnStatus: TypeAlias = Literal["completed", "aborted", "error"]
 
 
 class UserMessage(BaseModel):
@@ -17,11 +27,44 @@ class AssistantTurn(BaseModel):
     """A finalized assistant turn that can be replayed to a provider."""
 
     role: Literal["assistant"] = "assistant"
+    source: ProviderSource | None = None
     blocks: list[AssistantBlock] = Field(default_factory=list)
     response_id: str | None = None
     stop_reason: StopReason = "stop"
-    status: Literal["completed", "aborted", "error"] = "completed"
+    status: TurnStatus = "completed"
     error_message: str | None = None
+
+    @classmethod
+    def from_stream_done(
+        cls,
+        event: StreamDoneEvent,
+    ) -> "AssistantTurn":
+        """Create a completed assistant turn from a terminal stream event."""
+
+        return cls(
+            source=event.source,
+            blocks=[block.model_copy(deep=True) for block in event.blocks],
+            response_id=event.response_id,
+            stop_reason=event.stop_reason,
+            status="completed",
+        )
+
+    @classmethod
+    def from_stream_error(
+        cls,
+        event: StreamErrorEvent,
+    ) -> "AssistantTurn":
+        """Create a failed assistant turn from a terminal stream event."""
+
+        status: TurnStatus = "aborted" if event.stop_reason == "aborted" else "error"
+        return cls(
+            source=event.source,
+            blocks=[block.model_copy(deep=True) for block in event.blocks],
+            response_id=event.response_id,
+            stop_reason=event.stop_reason,
+            status=status,
+            error_message=event.error_message,
+        )
 
 
 class ToolResultTurn(BaseModel):

@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal, TypeAlias, TypedDict
 
-from ai.types.stream import Phase, StopReason
+from ai.types.stream_events import Phase, StopReason
 from ai.types.tools import JsonObject
 
 

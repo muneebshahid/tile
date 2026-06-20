@@ -16,7 +16,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
-from typing import TypeAlias, TypeVar, cast
+from typing import TypeAlias, TypeVar
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -25,17 +25,18 @@ from ai.types.conversation import UserMessage
 from ai.openai.provider import stream_api, stream_subscription
 from ai.openai.subscription_event_adapter import SubscriptionEventPayload
 from ai.openai.serialization import serialize_history_items
-from ai.types.stream import (
-    ReasoningDeltaEvent,
+from ai.types.stream_events import (
+    ProviderStreamEvent,
     ReasoningBlock,
+    ReasoningDeltaEvent,
     ReasoningEndEvent,
     ReasoningStartEvent,
     StreamDoneEvent,
     StreamErrorEvent,
     StreamEvent,
-    StreamStartEvent,
-    TextDeltaEvent,
+    StreamStartedEvent,
     TextBlock,
+    TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
     ToolCallBlock,
@@ -564,7 +565,7 @@ def _function_tool_call_done_event(
 
 def _expect_event_type(event: StreamEvent, event_type: type[TEvent]) -> TEvent:
     assert isinstance(event, event_type)
-    return cast(TEvent, event)
+    return event
 
 
 def _expect_reasoning_block(
@@ -591,8 +592,8 @@ def _expect_tool_call_block(
 def _collect_events(
     client: FakeOpenAIClient,
     tools: Sequence[ToolDefinition] | None = None,
-) -> list[StreamEvent]:
-    async def _collect() -> list[StreamEvent]:
+) -> list[ProviderStreamEvent]:
+    async def _collect() -> list[ProviderStreamEvent]:
         event_stream = await stream_api(
             history=[UserMessage(content="hello")],
             model="gpt-5.4",
@@ -643,7 +644,7 @@ async def _sample_tool_fn(city: str) -> ToolResult:
     return ToolResult.text(f"city={city}")
 
 
-def test_stream_maps_raw_events_with_shared_message_state() -> None:
+def test_stream_maps_raw_events_into_block_stream() -> None:
     raw_events = [
         _created_event(1, "resp_success"),
         _reasoning_added_event(2, "rs_123", output_index=0),
@@ -733,7 +734,7 @@ def test_stream_maps_raw_events_with_shared_message_state() -> None:
     client = _build_client(raw_events)
     events = _collect_events(client)
 
-    start = _expect_event_type(events[0], StreamStartEvent)
+    start = _expect_event_type(events[0], StreamStartedEvent)
     reasoning_start = _expect_event_type(events[1], ReasoningStartEvent)
     reasoning_delta_one = _expect_event_type(events[2], ReasoningDeltaEvent)
     reasoning_delta_two = _expect_event_type(events[3], ReasoningDeltaEvent)
@@ -746,14 +747,13 @@ def test_stream_maps_raw_events_with_shared_message_state() -> None:
     text_delta_two = _expect_event_type(events[10], TextDeltaEvent)
     text_end = _expect_event_type(events[11], TextEndEvent)
     done = _expect_event_type(events[12], StreamDoneEvent)
-    shared_message = reasoning_start.message
-    final_reasoning_block = _expect_reasoning_block(shared_message.blocks[0])
-    final_text_block = _expect_text_block(shared_message.blocks[1])
-    done_reasoning_block = _expect_reasoning_block(done.message.blocks[0])
-    done_text_block = _expect_text_block(done.message.blocks[1])
+    final_reasoning_block = _expect_reasoning_block(reasoning_end.block)
+    final_text_block = _expect_text_block(text_end.block)
+    done_reasoning_block = _expect_reasoning_block(done.blocks[0])
+    done_text_block = _expect_text_block(done.blocks[1])
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "reasoning_start",
         "reasoning_delta",
         "reasoning_delta",
@@ -765,23 +765,22 @@ def test_stream_maps_raw_events_with_shared_message_state() -> None:
         "text_delta",
         "text_delta",
         "text_end",
-        "done",
+        "stream_done",
     ]
-    assert start.message.response_id == "resp_success"
-    assert reasoning_start.message.response_id == "resp_success"
-
-    assert start.message is shared_message
-    assert reasoning_delta_one.message is shared_message
-    assert reasoning_delta_two.message is shared_message
-    assert reasoning_delta_separator.message is shared_message
-    assert reasoning_delta_three.message is shared_message
-    assert reasoning_delta_four.message is shared_message
-    assert reasoning_end.message is shared_message
-    assert text_start.message is shared_message
-    assert text_delta_one.message is shared_message
-    assert text_delta_two.message is shared_message
-    assert text_end.message is shared_message
-    assert done.message is shared_message
+    assert start.response_id == "resp_success"
+    assert start.source.provider == "openai"
+    assert start.source.model == "gpt-5.4"
+    assert reasoning_start.content_index == 0
+    assert reasoning_delta_one.content_index == 0
+    assert reasoning_delta_two.content_index == 0
+    assert reasoning_delta_separator.content_index == 0
+    assert reasoning_delta_three.content_index == 0
+    assert reasoning_delta_four.content_index == 0
+    assert reasoning_end.content_index == 0
+    assert text_start.content_index == 1
+    assert text_delta_one.content_index == 1
+    assert text_delta_two.content_index == 1
+    assert text_end.content_index == 1
 
     assert reasoning_delta_one.delta == "Exploring "
     assert reasoning_delta_two.delta == "reasoning traces"
@@ -795,7 +794,9 @@ def test_stream_maps_raw_events_with_shared_message_state() -> None:
     assert text_delta_one.delta == "Hello"
     assert text_delta_two.delta == " world"
     assert final_text_block.text == "Hello world"
-    assert done.message.response_id == "resp_success"
+    assert done.response_id == "resp_success"
+    assert done.source.provider == "openai"
+    assert done.source.model == "gpt-5.4"
 
     assert (
         done_reasoning_block.summary_text
@@ -844,15 +845,15 @@ def test_stream_preserves_reasoning_deltas_when_done_summary_is_empty() -> None:
     events = _collect_events(client)
     reasoning_end = _expect_event_type(events[3], ReasoningEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
-    reasoning_block = _expect_reasoning_block(reasoning_end.message.blocks[0])
-    done_reasoning_block = _expect_reasoning_block(done.message.blocks[0])
+    reasoning_block = _expect_reasoning_block(reasoning_end.block)
+    done_reasoning_block = _expect_reasoning_block(done.blocks[0])
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "reasoning_start",
         "reasoning_delta",
         "reasoning_end",
-        "done",
+        "stream_done",
     ]
     assert reasoning_block.summary_text == "Draft summary"
     assert done_reasoning_block.summary_text == "Draft summary"
@@ -892,7 +893,7 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
     )
 
 
-def test_stream_maps_refusal_deltas_with_shared_message_state() -> None:
+def test_stream_maps_refusal_deltas() -> None:
     raw_events = [
         _created_event(1, "resp_refusal"),
         _message_added_event(2, "msg_refusal", output_index=0),
@@ -925,27 +926,25 @@ def test_stream_maps_refusal_deltas_with_shared_message_state() -> None:
     text_delta = _expect_event_type(events[2], TextDeltaEvent)
     text_end = _expect_event_type(events[3], TextEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
-    shared_message = text_start.message
-    text_block = _expect_text_block(shared_message.blocks[0])
-    done_text_block = _expect_text_block(done.message.blocks[0])
+    text_block = _expect_text_block(text_end.block)
+    done_text_block = _expect_text_block(done.blocks[0])
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "text_start",
         "text_delta",
         "text_end",
-        "done",
+        "stream_done",
     ]
-    assert text_start.message is shared_message
-    assert text_delta.message is shared_message
-    assert text_end.message is shared_message
+    assert text_start.content_index == 0
+    assert text_delta.content_index == 0
+    assert text_end.content_index == 0
     assert text_delta.delta == "No"
     assert text_block.text == "No thanks"
-    assert done.message is shared_message
     assert done_text_block.text == "No thanks"
 
 
-def test_stream_maps_function_tool_call_events_with_shared_message_state() -> None:
+def test_stream_maps_function_tool_call_events() -> None:
     raw_events = [
         _created_event(1, "resp_tool_call"),
         _function_tool_call_added_event(
@@ -1004,30 +1003,28 @@ def test_stream_maps_function_tool_call_events_with_shared_message_state() -> No
     tool_call_delta_two = _expect_event_type(events[3], ToolCallDeltaEvent)
     tool_call_end = _expect_event_type(events[4], ToolCallEndEvent)
     done = _expect_event_type(events[5], StreamDoneEvent)
-    shared_message = tool_call_start.message
-    tool_call_block = _expect_tool_call_block(shared_message.blocks[0])
-    done_tool_call_block = _expect_tool_call_block(done.message.blocks[0])
+    tool_call_block = _expect_tool_call_block(tool_call_end.block)
+    done_tool_call_block = _expect_tool_call_block(done.blocks[0])
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "tool_call_start",
         "tool_call_delta",
         "tool_call_delta",
         "tool_call_end",
-        "done",
+        "stream_done",
     ]
-    assert tool_call_start.message is shared_message
-    assert tool_call_delta_one.message is shared_message
-    assert tool_call_delta_two.message is shared_message
-    assert tool_call_end.message is shared_message
+    assert tool_call_start.content_index == 0
+    assert tool_call_delta_one.content_index == 0
+    assert tool_call_delta_two.content_index == 0
+    assert tool_call_end.content_index == 0
     assert tool_call_delta_one.delta == '{"'
     assert tool_call_delta_two.delta == 'city":"Munich"}'
     assert tool_call_block.call_id == "call_123"
     assert tool_call_block.name == "get_weather"
     assert tool_call_block.provider_item_id == "fc_123"
     assert tool_call_block.arguments == {"city": "Munich"}
-    assert done.message.stop_reason == "tool_use"
-    assert done.message is shared_message
+    assert done.stop_reason == "tool_use"
     assert done_tool_call_block.arguments == {"city": "Munich"}
 
 
@@ -1079,16 +1076,16 @@ def test_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:
     done = _expect_event_type(events[5], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "text_start",
         "text_delta",
         "text_delta",
         "text_end",
-        "done",
+        "stream_done",
     ]
     assert text_delta_one.delta == "No"
     assert text_delta_two.delta == " thanks"
-    assert _expect_text_block(done.message.blocks[0]).text == "No thanks"
+    assert _expect_text_block(done.blocks[0]).text == "No thanks"
 
 
 def test_stream_clears_active_text_mode_for_unsupported_content_parts() -> None:
@@ -1130,13 +1127,13 @@ def test_stream_clears_active_text_mode_for_unsupported_content_parts() -> None:
     done = _expect_event_type(events[3], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "text_start",
         "text_end",
-        "done",
+        "stream_done",
     ]
-    assert _expect_text_block(text_end.message.blocks[0]).text == ""
-    assert _expect_text_block(done.message.blocks[0]).text == ""
+    assert _expect_text_block(text_end.block).text == ""
+    assert _expect_text_block(done.blocks[0]).text == ""
 
 
 def test_stream_maps_failed_response_into_error_event() -> None:
@@ -1149,10 +1146,10 @@ def test_stream_maps_failed_response_into_error_event() -> None:
     events = _collect_events(client)
     error = _expect_event_type(events[1], StreamErrorEvent)
 
-    assert [event.type for event in events] == ["start", "error"]
-    assert error.error.error_message == "Model overloaded"
-    assert error.error.stop_reason == "error"
-    assert error.error.response_id == "resp_failed"
+    assert [event.type for event in events] == ["stream_started", "stream_error"]
+    assert error.error_message == "Model overloaded"
+    assert error.stop_reason == "error"
+    assert error.response_id == "resp_failed"
 
 
 def test_stream_maps_error_event_into_error_event() -> None:
@@ -1165,10 +1162,10 @@ def test_stream_maps_error_event_into_error_event() -> None:
     events = _collect_events(client)
     error = _expect_event_type(events[1], StreamErrorEvent)
 
-    assert [event.type for event in events] == ["start", "error"]
-    assert error.error.error_message == "Socket closed"
-    assert error.error.stop_reason == "error"
-    assert error.error.response_id == "resp_error"
+    assert [event.type for event in events] == ["stream_started", "stream_error"]
+    assert error.error_message == "Socket closed"
+    assert error.stop_reason == "error"
+    assert error.response_id == "resp_error"
 
 
 def test_stream_maps_incomplete_max_output_tokens_into_length_done() -> None:
@@ -1203,14 +1200,14 @@ def test_stream_maps_incomplete_max_output_tokens_into_length_done() -> None:
     done = _expect_event_type(events[-1], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "text_start",
         "text_delta",
         "text_end",
-        "done",
+        "stream_done",
     ]
-    assert done.message.stop_reason == "length"
-    assert _expect_text_block(done.message.blocks[0]).text == "Partial answer"
+    assert done.stop_reason == "length"
+    assert _expect_text_block(done.blocks[0]).text == "Partial answer"
 
 
 def test_stream_maps_incomplete_content_filter_into_error_event() -> None:
@@ -1223,12 +1220,9 @@ def test_stream_maps_incomplete_content_filter_into_error_event() -> None:
     events = _collect_events(client)
     error = _expect_event_type(events[1], StreamErrorEvent)
 
-    assert [event.type for event in events] == ["start", "error"]
-    assert (
-        error.error.error_message
-        == "OpenAI response was truncated by the content filter."
-    )
-    assert error.error.stop_reason == "error"
+    assert [event.type for event in events] == ["stream_started", "stream_error"]
+    assert error.error_message == "OpenAI response was truncated by the content filter."
+    assert error.stop_reason == "error"
 
 
 def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
@@ -1287,7 +1281,7 @@ def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
         },
     ]
 
-    async def _collect() -> list[StreamEvent]:
+    async def _collect() -> list[ProviderStreamEvent]:
         event_stream = await stream_subscription(
             history=[UserMessage(content="hello")],
             model="gpt-5.4",
@@ -1298,26 +1292,24 @@ def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
         return [event async for event in event_stream]
 
     events = asyncio.run(_collect())
-    start = _expect_event_type(events[0], StreamStartEvent)
+    start = _expect_event_type(events[0], StreamStartedEvent)
     text_start = _expect_event_type(events[1], TextStartEvent)
     text_delta = _expect_event_type(events[2], TextDeltaEvent)
     text_end = _expect_event_type(events[3], TextEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "start",
+        "stream_started",
         "text_start",
         "text_delta",
         "text_end",
-        "done",
+        "stream_done",
     ]
-    assert start.message.response_id == "resp_subscription"
-    assert text_start.message is start.message
+    assert start.response_id == "resp_subscription"
+    assert text_start.content_index == 0
     assert text_delta.delta == "Hello from subscription"
-    assert (
-        _expect_text_block(text_end.message.blocks[0]).text == "Hello from subscription"
-    )
-    assert done.message.response_id == "resp_subscription"
+    assert _expect_text_block(text_end.block).text == "Hello from subscription"
+    assert done.response_id == "resp_subscription"
 
 
 def test_stream_subscription_raises_until_transport_is_implemented() -> None:

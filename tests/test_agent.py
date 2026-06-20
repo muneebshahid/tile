@@ -11,7 +11,7 @@ import json
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeVar, cast
+from typing import TypeVar
 from agent.agent import run_agent
 from agent.types import (
     AgentEndEvent,
@@ -33,8 +33,11 @@ from ai.types.conversation import (
     ToolResultTurn,
     UserMessage,
 )
-from ai.types.stream import (
-    AssistantMessage,
+from ai.types.stream_events import (
+    AssistantBlock,
+    ProviderMetadata,
+    ProviderSource,
+    ProviderStreamEvent,
     ReasoningBlock,
     ReasoningDeltaEvent,
     ReasoningEndEvent,
@@ -42,7 +45,8 @@ from ai.types.stream import (
     StreamDoneEvent,
     StreamErrorEvent,
     StreamEvent,
-    StreamStartEvent,
+    StreamStartedEvent,
+    StopReason,
     TextBlock,
     TextDeltaEvent,
     TextEndEvent,
@@ -69,10 +73,12 @@ class StreamInvocation:
     tools: tuple[ToolDefinition, ...] | None
 
 
-def _iter_events(events: Sequence[StreamEvent]) -> AsyncIterator[StreamEvent]:
+def _iter_events(
+    events: Sequence[ProviderStreamEvent],
+) -> AsyncIterator[ProviderStreamEvent]:
     """Yield static stream events asynchronously."""
 
-    async def _iterate() -> AsyncIterator[StreamEvent]:
+    async def _iterate() -> AsyncIterator[ProviderStreamEvent]:
         """Yield each provided stream event."""
 
         for event in events:
@@ -82,7 +88,7 @@ def _iter_events(events: Sequence[StreamEvent]) -> AsyncIterator[StreamEvent]:
 
 
 def _build_stream_fn(
-    streams: Sequence[Sequence[StreamEvent]],
+    streams: Sequence[Sequence[ProviderStreamEvent]],
     invocations: list[StreamInvocation],
 ) -> StreamFn:
     """Build a provider stream function that records each invocation."""
@@ -96,7 +102,7 @@ def _build_stream_fn(
         instructions: str,
         reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
-    ) -> AsyncIterator[StreamEvent]:
+    ) -> AsyncIterator[ProviderStreamEvent]:
         """Return the next queued provider event stream."""
 
         invocations.append(
@@ -148,7 +154,7 @@ def _expect_event_type(event: AgentEvent, event_type: type[TEvent]) -> TEvent:
     """Assert and return an agent event with a precise type."""
 
     assert isinstance(event, event_type)
-    return cast(TEvent, event)
+    return event
 
 
 def _expect_stream_event_type(
@@ -157,7 +163,7 @@ def _expect_stream_event_type(
     """Assert and return a stream event with a precise type."""
 
     assert isinstance(event, event_type)
-    return cast(TStreamEvent, event)
+    return event
 
 
 def _expect_user_message(item: ConversationItem) -> UserMessage:
@@ -171,13 +177,6 @@ def _expect_assistant_turn(item: ConversationItem) -> AssistantTurn:
     """Assert and return an assistant conversation item."""
 
     assert isinstance(item, AssistantTurn)
-    return item
-
-
-def _expect_assistant_message(item: AssistantMessage) -> AssistantMessage:
-    """Assert and return an assistant stream message."""
-
-    assert isinstance(item, AssistantMessage)
     return item
 
 
@@ -241,54 +240,104 @@ async def _raise_tool_error(city: str) -> ToolResult:
     raise RuntimeError("boom")
 
 
+def _source() -> ProviderSource:
+    """Build a deterministic provider source for agent tests."""
+
+    return ProviderSource(provider="test", model="gpt-5.4")
+
+
+def _metadata(**values: str | None) -> ProviderMetadata | None:
+    """Build provider metadata from non-empty string values."""
+
+    data: JsonObject = {
+        key: value for key, value in values.items() if value is not None
+    }
+    if not data:
+        return None
+    return ProviderMetadata(data=data)
+
+
+def _stream_started(response_id: str) -> StreamStartedEvent:
+    """Build a deterministic stream started event."""
+
+    return StreamStartedEvent(source=_source(), response_id=response_id)
+
+
+def _stream_done(
+    response_id: str,
+    *,
+    stop_reason: StopReason = "stop",
+    blocks: Sequence[AssistantBlock] = (),
+) -> StreamDoneEvent:
+    """Build a deterministic stream done event."""
+
+    return StreamDoneEvent(
+        source=_source(),
+        response_id=response_id,
+        stop_reason=stop_reason,
+        blocks=list(blocks),
+    )
+
+
+def _stream_error(response_id: str, error_message: str) -> StreamErrorEvent:
+    """Build a deterministic stream error event."""
+
+    return StreamErrorEvent(
+        source=_source(),
+        response_id=response_id,
+        error_message=error_message,
+    )
+
+
+def _tool_call_block(
+    *,
+    call_id: str,
+    name: str,
+    arguments: JsonObject,
+    provider_item_id: str | None = None,
+) -> ToolCallBlock:
+    """Build a tool call block with provider replay metadata."""
+
+    return ToolCallBlock(
+        call_id=call_id,
+        name=name,
+        arguments=arguments,
+        provider_metadata=_metadata(provider_item_id=provider_item_id),
+    )
+
+
 def _tool_call_stream(
     *,
     response_id: str,
     call_id: str,
     tool_name: str,
     arguments: JsonObject,
-) -> list[StreamEvent]:
+) -> list[ProviderStreamEvent]:
     """Build a minimal assistant stream that requests one tool call."""
 
     return [
-        StreamStartEvent(
-            type="start",
-            message=AssistantMessage(response_id=response_id),
-        ),
-        StreamDoneEvent(
-            type="done",
-            message=AssistantMessage(
-                response_id=response_id,
-                stop_reason="tool_use",
-                blocks=[
-                    ToolCallBlock(
-                        call_id=call_id,
-                        name=tool_name,
-                        arguments=arguments,
-                        provider_item_id=f"fc_{call_id}",
-                    )
-                ],
-            ),
+        _stream_started(response_id),
+        _stream_done(
+            response_id,
+            stop_reason="tool_use",
+            blocks=[
+                _tool_call_block(
+                    call_id=call_id,
+                    name=tool_name,
+                    arguments=arguments,
+                    provider_item_id=f"fc_{call_id}",
+                )
+            ],
         ),
     ]
 
 
-def _final_text_stream(*, response_id: str, text: str) -> list[StreamEvent]:
+def _final_text_stream(*, response_id: str, text: str) -> list[ProviderStreamEvent]:
     """Build a minimal assistant stream that returns final text."""
 
     return [
-        StreamStartEvent(
-            type="start",
-            message=AssistantMessage(response_id=response_id),
-        ),
-        StreamDoneEvent(
-            type="done",
-            message=AssistantMessage(
-                response_id=response_id,
-                stop_reason="stop",
-                blocks=[TextBlock(text=text)],
-            ),
-        ),
+        _stream_started(response_id),
+        _stream_done(response_id, blocks=[TextBlock(text=text)]),
     ]
 
 
@@ -299,14 +348,8 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_done"),
-                ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(response_id="resp_done"),
-                ),
+                _stream_started("resp_done"),
+                _stream_done("resp_done"),
             ]
         ],
         invocations=invocations,
@@ -326,101 +369,60 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
 
     tools = _sample_tools()
     invocations: list[StreamInvocation] = []
-    tool_call_start_message = AssistantMessage(
-        response_id="resp_tool_call",
-        blocks=[
-            ReasoningBlock(summary_text="Thinking about weather"),
-            ToolCallBlock(
-                call_id="call_123",
-                name="get_weather",
-                arguments={"city": "Munich"},
-                provider_item_id="fc_123",
-            ),
-        ],
+    reasoning_block = ReasoningBlock(summary_text="Thinking about weather")
+    tool_call_block = _tool_call_block(
+        call_id="call_123",
+        name="get_weather",
+        arguments={"city": "Munich"},
+        provider_item_id="fc_123",
     )
-    reasoning_message = AssistantMessage(
-        response_id="resp_tool_call",
-        blocks=[ReasoningBlock(summary_text="Thinking about weather")],
-    )
-    text_message = AssistantMessage(
-        response_id="resp_follow_up",
-        blocks=[TextBlock(text="It is sunny in Munich.")],
-    )
+    text_block = TextBlock(text="It is sunny in Munich.")
     stream_fn = _build_stream_fn(
         streams=[
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_tool_call"),
-                ),
-                ReasoningStartEvent(
-                    type="reasoning_start",
-                    message=reasoning_message,
-                ),
+                _stream_started("resp_tool_call"),
+                ReasoningStartEvent(content_index=0),
                 ReasoningDeltaEvent(
-                    type="reasoning_delta",
+                    content_index=0,
                     delta="Thinking about weather",
-                    message=reasoning_message,
                 ),
                 ReasoningEndEvent(
-                    type="reasoning_end",
-                    message=reasoning_message,
+                    content_index=0,
+                    block=reasoning_block,
                 ),
                 ToolCallStartEvent(
-                    type="tool_call_start",
-                    message=tool_call_start_message,
+                    content_index=1,
+                    call_id="call_123",
+                    name="get_weather",
                 ),
                 ToolCallDeltaEvent(
-                    type="tool_call_delta",
+                    content_index=1,
                     delta='{"city":"Munich"}',
-                    message=tool_call_start_message,
                 ),
                 ToolCallEndEvent(
-                    type="tool_call_end",
-                    message=tool_call_start_message,
+                    content_index=1,
+                    block=tool_call_block,
                 ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(
-                        response_id="resp_tool_call",
-                        stop_reason="tool_use",
-                        blocks=[
-                            ToolCallBlock(
-                                call_id="call_123",
-                                name="get_weather",
-                                arguments={"city": "Munich"},
-                                provider_item_id="fc_123",
-                            )
-                        ],
-                    ),
+                _stream_done(
+                    "resp_tool_call",
+                    stop_reason="tool_use",
+                    blocks=[tool_call_block],
                 ),
             ],
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_follow_up"),
-                ),
+                _stream_started("resp_follow_up"),
                 TextStartEvent(
-                    type="text_start",
-                    message=text_message,
+                    content_index=0,
                 ),
                 TextDeltaEvent(
-                    type="text_delta",
+                    content_index=0,
                     delta="It is sunny in Munich.",
-                    message=text_message,
                 ),
                 TextEndEvent(
-                    type="text_end",
-                    message=text_message,
+                    content_index=0,
+                    block=text_block,
                 ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(
-                        response_id="resp_follow_up",
-                        stop_reason="stop",
-                        blocks=[TextBlock(text="It is sunny in Munich.")],
-                    ),
-                ),
+                _stream_done("resp_follow_up", blocks=[text_block]),
             ],
         ],
         invocations=invocations,
@@ -475,17 +477,14 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     second_message_end = _expect_event_type(events[18], MessageEndEvent)
     second_turn_end = _expect_event_type(events[19], TurnEndEvent)
     agent_end = _expect_event_type(events[20], AgentEndEvent)
-    first_stream_message = _expect_assistant_message(first_message_start.message)
-    second_stream_message = _expect_assistant_message(second_message_start.message)
     first_final_message = _expect_agent_assistant_turn(first_message_end.message)
     second_final_message = _expect_agent_assistant_turn(second_message_end.message)
 
     assert isinstance(events[0], AgentStartEvent)
     assert first_turn_start.type == "turn_start"
-    assert first_stream_message.response_id == "resp_tool_call"
-    assert first_stream_message.blocks == []
+    assert first_message_start.response_id == "resp_tool_call"
     assert first_reasoning_start.stream_event.type == "reasoning_start"
-    assert first_reasoning_start.message is reasoning_message
+    assert first_reasoning_start.stream_event.content_index == 0
     assert first_reasoning_delta.stream_event.type == "reasoning_delta"
     assert (
         _expect_stream_event_type(
@@ -493,11 +492,15 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         ).delta
         == "Thinking about weather"
     )
-    assert first_reasoning_delta.message is reasoning_message
     assert first_reasoning_end.stream_event.type == "reasoning_end"
-    assert first_reasoning_end.message is reasoning_message
+    assert (
+        _expect_stream_event_type(
+            first_reasoning_end.stream_event, ReasoningEndEvent
+        ).block
+        == reasoning_block
+    )
     assert first_tool_call_start.stream_event.type == "tool_call_start"
-    assert first_tool_call_start.message is tool_call_start_message
+    assert first_tool_call_start.stream_event.content_index == 1
     assert first_tool_call_delta.stream_event.type == "tool_call_delta"
     assert (
         _expect_stream_event_type(
@@ -505,9 +508,13 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         ).delta
         == '{"city":"Munich"}'
     )
-    assert first_tool_call_delta.message is tool_call_start_message
     assert first_tool_call_end.stream_event.type == "tool_call_end"
-    assert first_tool_call_end.message is tool_call_start_message
+    assert (
+        _expect_stream_event_type(
+            first_tool_call_end.stream_event, ToolCallEndEvent
+        ).block
+        == tool_call_block
+    )
     assert first_final_message.response_id == "resp_tool_call"
     assert first_final_message.stop_reason == "tool_use"
     assert tool_execution_start.call_id == "call_123"
@@ -522,30 +529,24 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_turn_end.message.response_id == "resp_tool_call"
     assert first_turn_end.message.stop_reason == "tool_use"
     assert first_turn_end.message.status == "completed"
-    assert first_turn_end.message.blocks == [
-        ToolCallBlock(
-            call_id="call_123",
-            name="get_weather",
-            arguments={"city": "Munich"},
-            provider_item_id="fc_123",
-        )
-    ]
+    assert first_turn_end.message.blocks == [tool_call_block]
     assert first_turn_end.tool_results[0].call_id == "call_123"
     assert first_turn_end.tool_results[0].tool_name == "get_weather"
     assert first_turn_end.tool_results[0].content == tool_execution_end.result.content
     assert first_turn_end.tool_results[0].is_error is False
     assert second_turn_start.type == "turn_start"
-    assert second_stream_message.response_id == "resp_follow_up"
-    assert second_stream_message.blocks == []
+    assert second_message_start.response_id == "resp_follow_up"
     assert second_text_start.stream_event.type == "text_start"
-    assert second_text_start.message is text_message
+    assert second_text_start.stream_event.content_index == 0
     assert second_text_delta.stream_event.type == "text_delta"
     assert _expect_stream_event_type(
         second_text_delta.stream_event, TextDeltaEvent
     ).delta == ("It is sunny in Munich.")
-    assert second_text_delta.message is text_message
     assert second_text_end.stream_event.type == "text_end"
-    assert second_text_end.message is text_message
+    assert (
+        _expect_stream_event_type(second_text_end.stream_event, TextEndEvent).block
+        == text_block
+    )
     assert second_final_message.response_id == "resp_follow_up"
     assert second_final_message.stop_reason == "stop"
     assert second_turn_end.message.response_id == "resp_follow_up"
@@ -579,38 +580,23 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_tool_call"),
-                ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(
-                        response_id="resp_tool_call",
-                        stop_reason="tool_use",
-                        blocks=[
-                            ToolCallBlock(
-                                call_id="call_123",
-                                name="get_weather",
-                                arguments={"city": "Munich"},
-                                provider_item_id="fc_123",
-                            )
-                        ],
-                    ),
+                _stream_started("resp_tool_call"),
+                _stream_done(
+                    "resp_tool_call",
+                    stop_reason="tool_use",
+                    blocks=[
+                        _tool_call_block(
+                            call_id="call_123",
+                            name="get_weather",
+                            arguments={"city": "Munich"},
+                            provider_item_id="fc_123",
+                        )
+                    ],
                 ),
             ],
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_follow_up"),
-                ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(
-                        response_id="resp_follow_up",
-                        stop_reason="stop",
-                    ),
-                ),
+                _stream_started("resp_follow_up"),
+                _stream_done("resp_follow_up"),
             ],
         ],
         invocations=invocations,
@@ -729,14 +715,8 @@ def test_agent_includes_cwd_in_stream_instructions(tmp_path: Path) -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_done"),
-                ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(response_id="resp_done"),
-                ),
+                _stream_started("resp_done"),
+                _stream_done("resp_done"),
             ]
         ],
         invocations=invocations,
@@ -760,14 +740,8 @@ def test_agent_formats_cwd_prompt_variable(tmp_path: Path) -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_done"),
-                ),
-                StreamDoneEvent(
-                    type="done",
-                    message=AssistantMessage(response_id="resp_done"),
-                ),
+                _stream_started("resp_done"),
+                _stream_done("resp_done"),
             ]
         ],
         invocations=invocations,
@@ -791,18 +765,8 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                StreamStartEvent(
-                    type="start",
-                    message=AssistantMessage(response_id="resp_error"),
-                ),
-                StreamErrorEvent(
-                    type="error",
-                    error=AssistantMessage(
-                        response_id="resp_error",
-                        stop_reason="error",
-                        error_message="Socket closed",
-                    ),
-                ),
+                _stream_started("resp_error"),
+                _stream_error("resp_error", "Socket closed"),
             ]
         ],
         invocations=invocations,
@@ -824,13 +788,11 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     message_end = _expect_event_type(events[3], MessageEndEvent)
     turn_end = _expect_event_type(events[4], TurnEndEvent)
     agent_end = _expect_event_type(events[5], AgentEndEvent)
-    stream_message = _expect_assistant_message(message_start.message)
     final_message = _expect_agent_assistant_turn(message_end.message)
 
     assert isinstance(events[0], AgentStartEvent)
     assert isinstance(events[1], TurnStartEvent)
-    assert stream_message.response_id == "resp_error"
-    assert stream_message.blocks == []
+    assert message_start.response_id == "resp_error"
     assert final_message.response_id == "resp_error"
     assert final_message.status == "error"
     assert turn_end.message.response_id == "resp_error"

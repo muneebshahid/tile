@@ -34,7 +34,7 @@ sequenceDiagram
 
 ## Stream Start And Created
 
-`assemble_stream` emits a start event before it consumes provider events. The later `CREATED` event mutates the same shared assistant message with the provider response id.
+`assemble_stream` emits `StreamStartedEvent` when it consumes the provider `CREATED` event. The event carries the provider source and response id; assistant blocks are accumulated privately until terminal events.
 
 ```mermaid
 sequenceDiagram
@@ -46,17 +46,14 @@ sequenceDiagram
     participant Stream as StreamEvent
     participant Agent as run_agent
 
-    Asm->>Stream: StreamStartEvent(message=empty AssistantMessage)
-    Stream->>Agent: start
-    Agent-->>Agent: emit TurnStartEvent
-    Agent-->>Agent: emit MessageStartEvent(message)
-
     SDK->>Adapter: ResponseCreatedEvent
     Sub->>Adapter: response.created
     Adapter->>Norm: CREATED(response_id)
     Norm->>Asm: CREATED
-    Asm-->>Asm: message.response_id = response_id
-    Note over Asm,Agent: No new StreamEvent is emitted. The shared message is mutated.
+    Asm->>Stream: StreamStartedEvent(source, response_id)
+    Stream->>Agent: stream_started
+    Agent-->>Agent: emit TurnStartEvent
+    Agent-->>Agent: emit MessageStartEvent(response_id)
 ```
 
 ## Reasoning Item
@@ -235,10 +232,9 @@ sequenceDiagram
     Sub->>Adapter: response.completed or response.done(status=completed)
     Adapter->>Norm: COMPLETED(stop_reason=stop)
     Norm->>Asm: COMPLETED
-    Asm-->>Asm: message.stop_reason=stop
-    Asm->>Stream: StreamDoneEvent(message)
-    Stream->>Agent: done
-    Agent-->>Agent: build AssistantTurn(status=completed)
+    Asm->>Stream: StreamDoneEvent(source, response_id, stop_reason, blocks)
+    Stream->>Agent: stream_done
+    Agent-->>Agent: build AssistantTurn.from_stream_done(...)
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
@@ -259,8 +255,8 @@ sequenceDiagram
 
     Adapter->>Norm: COMPLETED(stop_reason=tool_use)
     Norm->>Asm: COMPLETED
-    Asm->>Stream: StreamDoneEvent(message with ToolCallBlock)
-    Stream->>Agent: done
+    Asm->>Stream: StreamDoneEvent(blocks include ToolCallBlock)
+    Stream->>Agent: stream_done
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent->>Tool: execute tool call
@@ -290,8 +286,8 @@ sequenceDiagram
     Sub->>Adapter: response.incomplete or response.done(status=incomplete)
     Adapter->>Norm: INCOMPLETE(stop_reason=length)
     Norm->>Asm: INCOMPLETE(length)
-    Asm->>Stream: StreamDoneEvent(message)
-    Stream->>Agent: done
+    Asm->>Stream: StreamDoneEvent(stop_reason=length, blocks)
+    Stream->>Agent: stream_done
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent
@@ -300,8 +296,8 @@ sequenceDiagram
     Sub->>Adapter: response.incomplete or response.done(status=incomplete)
     Adapter->>Norm: INCOMPLETE(stop_reason=error)
     Norm->>Asm: INCOMPLETE(error)
-    Asm->>Stream: StreamErrorEvent(error=message)
-    Stream->>Agent: error
+    Asm->>Stream: StreamErrorEvent(error_message, blocks)
+    Stream->>Agent: stream_error
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
@@ -310,8 +306,8 @@ sequenceDiagram
     Sub->>Adapter: response.failed or error
     Adapter->>Norm: FAILED(message)
     Norm->>Asm: FAILED
-    Asm->>Stream: StreamErrorEvent(error=message)
-    Stream->>Agent: error
+    Asm->>Stream: StreamErrorEvent(error_message, blocks)
+    Stream->>Agent: stream_error
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
@@ -321,14 +317,14 @@ sequenceDiagram
 
 | Raw SDK event | Raw subscription event | Normalized event | Stream assembler effect | Agent effect |
 | --- | --- | --- | --- | --- |
-| `ResponseCreatedEvent` | `response.created` | `CREATED` | Mutates `message.response_id`; no new stream event | Shared message already referenced by `MessageStartEvent` |
+| `ResponseCreatedEvent` | `response.created` | `CREATED` | `StreamStartedEvent` | `TurnStartEvent`, `MessageStartEvent(response_id)` |
 | `ResponseOutputItemAddedEvent` with reasoning item | `response.output_item.added` with `item.type=reasoning` | `REASONING_ADDED` | `ReasoningStartEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningSummaryTextDeltaEvent` | `response.reasoning_summary_text.delta` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningTextDeltaEvent` | `response.reasoning_text.delta` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningSummaryPartDoneEvent` | `response.reasoning_summary_part.done` | `REASONING_DELTA` with paragraph separator | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseOutputItemDoneEvent` with reasoning item | `response.output_item.done` with `item.type=reasoning` | `REASONING_DONE` | `ReasoningEndEvent` | `MessageUpdateEvent` |
-| `ResponseOutputItemAddedEvent` with message item | `response.output_item.added` with `item.type=message` | `MESSAGE_ADDED` | `TextStartEvent` | `MessageUpdateEvent` |
-| `ResponseContentPartAddedEvent` | `response.content_part.added` | `MESSAGE_TEXT_PART` | Sets active text part; no new stream event | No direct event |
+| `ResponseOutputItemAddedEvent` with message item | `response.output_item.added` with `item.type=message` | `MESSAGE_ADDED` | Records provider message metadata | No direct event |
+| `ResponseContentPartAddedEvent` | `response.content_part.added` | `MESSAGE_TEXT_PART` | `TextStartEvent` for supported text parts | `MessageUpdateEvent` |
 | `ResponseTextDeltaEvent` | `response.output_text.delta` | `MESSAGE_TEXT_DELTA(output_text)` | `TextDeltaEvent` if output text is active | `MessageUpdateEvent` |
 | `ResponseRefusalDeltaEvent` | `response.refusal.delta` | `MESSAGE_TEXT_DELTA(refusal)` | `TextDeltaEvent` if refusal is active | `MessageUpdateEvent` |
 | `ResponseOutputItemDoneEvent` with message item | `response.output_item.done` with `item.type=message` | `MESSAGE_DONE` | `TextEndEvent` | `MessageUpdateEvent` |
