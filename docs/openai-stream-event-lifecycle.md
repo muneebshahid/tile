@@ -237,7 +237,7 @@ sequenceDiagram
     Agent-->>Agent: build AssistantTurn.from_stream_done(...)
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
-    Agent-->>Agent: emit TurnEndEvent(tool_results=[])
+    Agent-->>Agent: emit TurnEndEvent(tool_executions=[])
     Agent-->>Agent: emit AgentEndEvent
 ```
 
@@ -263,8 +263,8 @@ sequenceDiagram
     Agent-->>Agent: emit ToolExecutionStartEvent
     Tool-->>Agent: result
     Agent->>Hist: append ToolResultTurn to run-local history
-    Agent-->>Agent: emit ToolExecutionEndEvent(tool_result_turn)
-    Agent-->>Agent: emit TurnEndEvent(tool_results=[...])
+    Agent-->>Agent: emit ToolExecutionEndEvent(outcome)
+    Agent-->>Agent: emit TurnEndEvent(tool_executions=[...])
     Agent-->>Agent: request follow-up stream
     Note over Agent,Stream: The follow-up stream starts a new turn and repeats the same lifecycle.
 ```
@@ -300,7 +300,7 @@ sequenceDiagram
     Stream->>Agent: stream_error
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
-    Agent-->>Agent: emit TurnEndEvent(tool_results=[])
+    Agent-->>Agent: emit TurnEndEvent(tool_executions=[])
 
     SDK->>Adapter: ResponseFailedEvent or ResponseErrorEvent
     Sub->>Adapter: response.failed or error
@@ -310,7 +310,7 @@ sequenceDiagram
     Stream->>Agent: stream_error
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
-    Agent-->>Agent: emit TurnEndEvent(tool_results=[])
+    Agent-->>Agent: emit TurnEndEvent(tool_executions=[])
 ```
 
 ## Raw Event Mapping

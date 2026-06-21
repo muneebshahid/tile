@@ -56,7 +56,14 @@ from ai.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from ai.types.tools import JsonObject, ToolDefinition, ToolResult, ToolTextContent
+from ai.types.tools import (
+    JsonObject,
+    ReadDetails,
+    ToolDefinition,
+    ToolOutputDetails,
+    ToolResult,
+    ToolTextContent,
+)
 from tests.support.agent_streams import StreamInvocation, build_stream_fn
 
 TEvent = TypeVar("TEvent", bound=AgentEvent)
@@ -182,6 +189,32 @@ async def _raise_tool_error(city: str) -> ToolResult:
 
     _ = city
     raise RuntimeError("boom")
+
+
+async def _read_file() -> ToolResult:
+    """Return a deterministic file read result with runtime metadata."""
+
+    return ToolResult.text(
+        "file contents",
+        details=ReadDetails(output=_tool_output_details()),
+    )
+
+
+def _tool_output_details() -> ToolOutputDetails:
+    """Build deterministic bounded-output metadata for tool tests."""
+
+    return ToolOutputDetails(
+        truncated=False,
+        truncated_by=None,
+        keep="head",
+        total_lines=1,
+        total_bytes=13,
+        output_lines=1,
+        output_bytes=13,
+        edge_line_exceeds_limit=False,
+        max_lines=100,
+        max_bytes=1024,
+    )
 
 
 def _source() -> ProviderSource:
@@ -457,28 +490,24 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert tool_execution_start.call_id == "call_123"
     assert tool_execution_start.tool_name == "get_weather"
     assert tool_execution_start.arguments == {"city": "Munich"}
-    assert tool_execution_end.call_id == "call_123"
-    assert tool_execution_end.tool_name == "get_weather"
-    assert _tool_text(tool_execution_end.result) == (
+    tool_execution_outcome = tool_execution_end.outcome
+    tool_result_turn = tool_execution_outcome.tool_result_turn
+    assert tool_result_turn.call_id == "call_123"
+    assert tool_result_turn.tool_name == "get_weather"
+    assert _tool_text(tool_execution_outcome.result) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
-    assert tool_execution_end.is_error is False
-    assert tool_execution_end.tool_result_turn.call_id == "call_123"
-    assert tool_execution_end.tool_result_turn.tool_name == "get_weather"
-    assert (
-        tool_execution_end.tool_result_turn.content == tool_execution_end.result.content
-    )
-    assert tool_execution_end.tool_result_turn.is_error is False
+    assert tool_result_turn.content == tool_execution_outcome.result.content
+    assert tool_result_turn.is_error is False
     assert first_turn_end.assistant_turn.response_id == "resp_tool_call"
     assert first_turn_end.assistant_turn.stop_reason == "tool_use"
     assert first_turn_end.assistant_turn.status == "completed"
     assert first_turn_end.assistant_turn.blocks == [tool_call_block]
-    assert first_turn_end.tool_result_turns[0].call_id == "call_123"
-    assert first_turn_end.tool_result_turns[0].tool_name == "get_weather"
-    assert (
-        first_turn_end.tool_result_turns[0].content == tool_execution_end.result.content
-    )
-    assert first_turn_end.tool_result_turns[0].is_error is False
+    first_turn_outcome = first_turn_end.tool_executions[0]
+    assert first_turn_outcome.tool_result_turn.call_id == "call_123"
+    assert first_turn_outcome.tool_result_turn.tool_name == "get_weather"
+    assert first_turn_outcome.result.content == tool_execution_outcome.result.content
+    assert first_turn_outcome.tool_result_turn.is_error is False
     assert second_turn_start.type == "turn_start"
     assert second_message_start.response_id == "resp_follow_up"
     assert second_text_start.stream_event.type == "text_start"
@@ -499,7 +528,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert second_turn_end.assistant_turn.blocks == [
         TextBlock(text="It is sunny in Munich.")
     ]
-    assert second_turn_end.tool_result_turns == []
+    assert second_turn_end.tool_executions == []
     assert len(invocations) == 2
     assert invocations[0].model == "gpt-5.4"
     assert invocations[0].tools == tuple(tools)
@@ -546,10 +575,57 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    assert _tool_text(tool_execution_end.result) == (
+    assert _tool_text(tool_execution_end.outcome.result) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
-    assert tool_execution_end.is_error is False
+    assert tool_execution_end.outcome.tool_result_turn.is_error is False
+
+
+def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
+    """Expose non-replay tool details through execution outcomes."""
+
+    tools = [
+        ToolDefinition(
+            name="read_file",
+            description="Read a deterministic file.",
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            fn=_read_file,
+        )
+    ]
+    invocations: list[StreamInvocation] = []
+    stream_fn = build_stream_fn(
+        streams=[
+            _tool_call_stream(
+                response_id="resp_tool_call",
+                call_id="call_read",
+                tool_name="read_file",
+                arguments={},
+            ),
+            _final_text_stream(
+                response_id="resp_follow_up",
+                text="I read the file.",
+            ),
+        ],
+        invocations=invocations,
+    )
+    history = [UserMessage(content="Read a file")]
+
+    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
+
+    tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
+    turn_end = _expect_event_type(events[6], TurnEndEvent)
+    tool_result_turn = _expect_tool_result_turn(invocations[1].history[2])
+    outcome = tool_execution_end.outcome
+    turn_outcome = turn_end.tool_executions[0]
+    assert outcome.details == ReadDetails(output=_tool_output_details())
+    assert outcome.result.details == outcome.details
+    assert turn_outcome.details == outcome.details
+    assert tool_result_turn == outcome.tool_result_turn
+    assert "details" not in ToolResultTurn.model_fields
 
 
 def test_agent_run_continues_after_tool_execution_error() -> None:
@@ -589,10 +665,9 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     second_request_tool_result = _expect_tool_result_turn(invocations[1].history[2])
     _expect_event_type(events[-1], AgentEndEvent)
-    assert tool_execution_end.is_error is True
-    assert _tool_text(tool_execution_end.result) == "boom"
-    assert tool_execution_end.tool_result_turn.is_error is True
-    assert tool_execution_end.tool_result_turn.tool_name == "fail_weather"
+    assert tool_execution_end.outcome.tool_result_turn.is_error is True
+    assert _tool_text(tool_execution_end.outcome.result) == "boom"
+    assert tool_execution_end.outcome.tool_result_turn.tool_name == "fail_weather"
     assert second_request_tool_result.is_error is True
     assert second_request_tool_result.tool_name == "fail_weather"
 
@@ -729,7 +804,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     assert turn_end.assistant_turn.stop_reason == "error"
     assert turn_end.assistant_turn.status == "error"
     assert turn_end.assistant_turn.error_message == "Socket closed"
-    assert turn_end.tool_result_turns == []
+    assert turn_end.tool_executions == []
     assert len(invocations) == 1
     first_request_user = _expect_user_message(invocations[0].history[0])
     assert first_request_user.content == "Say hello"

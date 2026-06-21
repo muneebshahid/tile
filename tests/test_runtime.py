@@ -427,7 +427,7 @@ def test_session_prompt_persists_tool_result_at_execution_end() -> None:
     assert _expect_user_message(session.history[0]).content == "check weather"
     assert _expect_assistant_turn(session.history[1]).response_id == "resp_tool"
     assert _expect_tool_result_turn(session.history[2]).call_id == "call_weather"
-    assert tool_execution_end.tool_result_turn == session.history[2]
+    assert tool_execution_end.outcome.tool_result_turn == session.history[2]
 
 
 def test_runtime_keeps_session_histories_independent() -> None:

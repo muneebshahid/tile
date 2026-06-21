@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
 from ai.types.contracts import Reasoning
-from ai.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
+from ai.types.conversation import AssistantTurn, ConversationItem
 from ai.types.stream_events import (
     AssistantBlock,
     ReasoningDeltaEvent,
@@ -33,6 +33,7 @@ from agent.types import (
     MessageUpdateEvent,
     StreamFn,
     ToolExecutionEndEvent,
+    ToolExecutionOutcome,
     ToolExecutionStartEvent,
     TurnEndEvent,
     TurnStartEvent,
@@ -91,7 +92,7 @@ async def _run_agent_loop(
     """Call the provider until the assistant stops requesting tools."""
 
     while True:
-        has_tool_results = False
+        has_tool_executions = False
         stream = await stream_fn(
             tuple(run_history),
             model,
@@ -108,12 +109,12 @@ async def _run_agent_loop(
             ):
                 if (
                     isinstance(agent_event, TurnEndEvent)
-                    and agent_event.tool_result_turns
+                    and agent_event.tool_executions
                 ):
-                    has_tool_results = True
+                    has_tool_executions = True
                 yield agent_event
 
-        if not has_tool_results:
+        if not has_tool_executions:
             break
 
 
@@ -157,7 +158,7 @@ async def _handle_stream_done_event(
     turn = AssistantTurn.from_stream_done(event)
     run_history.append(turn)
     yield MessageEndEvent(assistant_turn=turn)
-    tool_results: list[ToolResultTurn] = []
+    tool_executions: list[ToolExecutionOutcome] = []
 
     for tool_call in _collect_tool_calls(turn.blocks):
         async for agent_event in _execute_tool(
@@ -167,12 +168,12 @@ async def _handle_stream_done_event(
             tools=tools,
         ):
             if isinstance(agent_event, ToolExecutionEndEvent):
-                tool_result = agent_event.tool_result_turn
-                run_history.append(tool_result)
-                tool_results.append(tool_result)
+                outcome = agent_event.outcome
+                run_history.append(outcome.tool_result_turn)
+                tool_executions.append(outcome)
             yield agent_event
 
-    yield TurnEndEvent(assistant_turn=turn, tool_result_turns=tool_results)
+    yield TurnEndEvent(assistant_turn=turn, tool_executions=tool_executions)
 
 
 async def _handle_stream_error_event(
@@ -185,7 +186,7 @@ async def _handle_stream_error_event(
     turn = AssistantTurn.from_stream_error(event)
     run_history.append(turn)
     yield MessageEndEvent(assistant_turn=turn)
-    yield TurnEndEvent(assistant_turn=turn, tool_result_turns=[])
+    yield TurnEndEvent(assistant_turn=turn, tool_executions=[])
 
 
 async def _execute_tool(
@@ -204,19 +205,13 @@ async def _execute_tool(
     )
 
     result, is_error = await _call_tool(tool_name, arguments, tools)
-    tool_result_turn = ToolResultTurn(
-        call_id=call_id,
-        tool_name=tool_name,
-        content=result.content,
-        is_error=is_error,
-    )
-    yield ToolExecutionEndEvent(
+    outcome = ToolExecutionOutcome.from_result(
         call_id=call_id,
         tool_name=tool_name,
         result=result,
         is_error=is_error,
-        tool_result_turn=tool_result_turn,
     )
+    yield ToolExecutionEndEvent(outcome=outcome)
 
 
 async def _call_tool(

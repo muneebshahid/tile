@@ -107,7 +107,10 @@ class AgentRuntime:
         if isinstance(event, MessageEndEvent):
             self._history_store.append_history(session_id, [event.assistant_turn])
         if isinstance(event, ToolExecutionEndEvent):
-            self._history_store.append_history(session_id, [event.tool_result_turn])
+            self._history_store.append_history(
+                session_id,
+                [event.outcome.tool_result_turn],
+            )
 
     def _build_session(self, record: SessionRecord) -> Session:
         """Build a session handle from a stored record."""

@@ -8,7 +8,12 @@ from pydantic import BaseModel
 from ai.types.contracts import AsyncEventStream, Reasoning
 from ai.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
 from ai.types.stream_events import StreamUpdateEvent
-from ai.types.tools import JsonObject, ToolDefinition, ToolResult
+from ai.types.tools import (
+    JsonObject,
+    ToolDefinition,
+    ToolResult,
+    ToolResultDetails,
+)
 
 
 class StreamFn(Protocol):
@@ -49,12 +54,55 @@ class TurnStartEvent(AgentEvent):
     type: Literal["turn_start"] = "turn_start"
 
 
+class ToolExecutionOutcome(BaseModel):
+    """Full runtime outcome for a tool execution."""
+
+    tool_result_turn: ToolResultTurn
+    details: ToolResultDetails | None = None
+
+    @property
+    def result(self) -> ToolResult:
+        """Return the full tool result including non-replay metadata."""
+
+        return ToolResult(
+            content=self.tool_result_turn.content,
+            details=self.details,
+        )
+
+    @classmethod
+    def from_result(
+        cls,
+        *,
+        call_id: str,
+        tool_name: str,
+        result: ToolResult,
+        is_error: bool,
+    ) -> "ToolExecutionOutcome":
+        """Build an execution outcome from a raw tool result."""
+
+        return cls(
+            tool_result_turn=ToolResultTurn(
+                call_id=call_id,
+                tool_name=tool_name,
+                content=result.content,
+                is_error=is_error,
+            ),
+            details=result.details,
+        )
+
+
 class TurnEndEvent(AgentEvent):
     """Marks the end of a single assistant turn."""
 
     type: Literal["turn_end"] = "turn_end"
     assistant_turn: AssistantTurn
-    tool_result_turns: list[ToolResultTurn]
+    tool_executions: list[ToolExecutionOutcome]
+
+    @property
+    def tool_result_turns(self) -> list[ToolResultTurn]:
+        """Return replayable tool result projections for this turn."""
+
+        return [execution.tool_result_turn for execution in self.tool_executions]
 
 
 class MessageStartEvent(AgentEvent):
@@ -91,11 +139,7 @@ class ToolExecutionEndEvent(AgentEvent):
     """Marks the end of a tool execution."""
 
     type: Literal["tool_execution_end"] = "tool_execution_end"
-    call_id: str
-    tool_name: str
-    result: ToolResult
-    is_error: bool
-    tool_result_turn: ToolResultTurn
+    outcome: ToolExecutionOutcome
 
 
 AgentRunEvent: TypeAlias = (
