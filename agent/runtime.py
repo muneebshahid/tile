@@ -75,6 +75,22 @@ class AgentRuntime:
 
         return self._history_store.get_history(session_id)
 
+    def fork_session(
+        self,
+        *,
+        source_session_id: str,
+        target_session_id: str | None = None,
+        name: str | None = None,
+    ) -> Session:
+        """Fork an existing session into a new session handle."""
+
+        record = self._history_store.copy_history(
+            source_session_id=source_session_id,
+            target_session_id=self._resolve_session_id(target_session_id),
+            target_name=name,
+        )
+        return self._build_session(record)
+
     async def _prompt_session(
         self,
         session_id: str,
@@ -155,3 +171,17 @@ class Session:
 
         async for event in self._runtime._prompt_session(self.id, content):
             yield event
+
+    def fork(
+        self,
+        *,
+        session_id: str | None = None,
+        name: str | None = None,
+    ) -> Session:
+        """Fork this session into a new independently diverging session."""
+
+        return self._runtime.fork_session(
+            source_session_id=self.id,
+            target_session_id=session_id,
+            name=name,
+        )

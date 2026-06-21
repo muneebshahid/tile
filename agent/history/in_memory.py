@@ -4,7 +4,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from ai.types.conversation import ConversationItem
-from agent.history.base import SessionNotFoundError, SessionRecord
+from agent.history.base import (
+    SessionAlreadyExistsError,
+    SessionNotFoundError,
+    SessionRecord,
+)
 
 
 @dataclass
@@ -58,11 +62,35 @@ class InMemoryHistoryStore:
         self._require_session(session_id)
         self._items_by_session[session_id].extend(_copy_history_items(items))
 
+    def copy_history(
+        self,
+        *,
+        source_session_id: str,
+        target_session_id: str,
+        target_name: str | None = None,
+    ) -> SessionRecord:
+        """Create a target session with copied source history."""
+
+        self._require_session(source_session_id)
+        self._reject_existing_session(target_session_id)
+        record = SessionRecord(session_id=target_session_id, name=target_name)
+        self._sessions[target_session_id] = record
+        self._items_by_session[target_session_id] = _copy_history_items(
+            self._items_by_session[source_session_id]
+        )
+        return record
+
     def _require_session(self, session_id: str) -> None:
         """Raise a clear error when a session id is unknown."""
 
         if session_id not in self._sessions:
             raise SessionNotFoundError(f"Unknown session: {session_id}")
+
+    def _reject_existing_session(self, session_id: str) -> None:
+        """Raise a clear error when a session id already exists."""
+
+        if session_id in self._sessions:
+            raise SessionAlreadyExistsError(f"Session already exists: {session_id}")
 
 
 def _copy_history_items(

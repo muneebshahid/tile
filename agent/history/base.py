@@ -19,6 +19,10 @@ class SessionNotFoundError(KeyError):
     """Raised when a history operation references an unknown session."""
 
 
+class SessionAlreadyExistsError(ValueError):
+    """Raised when creating a session that already exists."""
+
+
 class HistoryStore(Protocol):
     """Stores session records and completed conversation history."""
 
@@ -49,4 +53,14 @@ class HistoryStore(Protocol):
         items: Sequence[ConversationItem],
     ) -> None:
         """Append completed conversation items to a session."""
+        ...
+
+    def copy_history(
+        self,
+        *,
+        source_session_id: str,
+        target_session_id: str,
+        target_name: str | None = None,
+    ) -> SessionRecord:
+        """Create a target session with copied source history."""
         ...

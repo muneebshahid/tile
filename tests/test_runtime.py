@@ -5,7 +5,11 @@ from collections.abc import Sequence
 
 import pytest
 
-from agent.history import InMemoryHistoryStore, SessionNotFoundError
+from agent.history import (
+    InMemoryHistoryStore,
+    SessionAlreadyExistsError,
+    SessionNotFoundError,
+)
 from agent.runtime import AgentRuntime
 from agent.types import (
     AgentEndEvent,
@@ -453,3 +457,107 @@ def test_runtime_keeps_session_histories_independent() -> None:
     assert _expect_assistant_turn(docs.history[1]).response_id == "resp_docs"
     assert _expect_user_message(invocations[0].history[0]).content == "fix tests"
     assert _expect_user_message(invocations[1].history[0]).content == "update docs"
+
+
+def test_session_fork_copies_history_to_new_session() -> None:
+    """Fork a session into a named target with copied completed history."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams(
+        [_final_text_stream("resp_first", "first answer")],
+        invocations,
+    )
+    source = runtime.session(session_id="source", name="source session")
+
+    _collect_prompt_events(runtime, source.id, "first")
+    forked = source.fork(session_id="fork", name="forked session")
+
+    assert forked.id == "fork"
+    assert forked.name == "forked session"
+    assert forked.history == source.history
+    assert [session.id for session in runtime.sessions] == ["source", "fork"]
+
+
+def test_session_fork_generates_target_session_id_by_default() -> None:
+    """Generate a fork target id when one is not supplied."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams([], invocations)
+    source = runtime.session(session_id="source")
+
+    forked = source.fork(name="generated fork")
+
+    assert forked.id != source.id
+    assert forked.name == "generated fork"
+    assert forked.history == source.history
+    assert {session.id for session in runtime.sessions} == {"source", forked.id}
+
+
+def test_session_fork_histories_diverge_independently() -> None:
+    """Allow source and fork histories to diverge after sharing a prefix."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams(
+        [
+            _final_text_stream("resp_first", "first answer"),
+            _final_text_stream("resp_source", "source answer"),
+            _final_text_stream("resp_fork", "fork answer"),
+        ],
+        invocations,
+    )
+    source = runtime.session(session_id="source")
+
+    _collect_prompt_events(runtime, source.id, "first")
+    forked = source.fork(session_id="fork")
+    _collect_prompt_events(runtime, source.id, "source path")
+    _collect_prompt_events(runtime, forked.id, "fork path")
+
+    assert source.history[:2] == forked.history[:2]
+    assert _expect_user_message(source.history[2]).content == "source path"
+    assert _expect_user_message(forked.history[2]).content == "fork path"
+    assert _expect_assistant_turn(source.history[3]).response_id == "resp_source"
+    assert _expect_assistant_turn(forked.history[3]).response_id == "resp_fork"
+    assert source.history != forked.history
+
+
+def test_session_fork_history_copy_is_defensive() -> None:
+    """Keep source and fork stored histories isolated from copied snapshots."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams(
+        [_final_text_stream("resp_first", "first answer")],
+        invocations,
+    )
+    source = runtime.session(session_id="source")
+
+    _collect_prompt_events(runtime, source.id, "first")
+    forked = source.fork(session_id="fork")
+    source_snapshot = source.history
+    fork_snapshot = forked.history
+    _expect_user_message(source_snapshot[0]).content = "mutated source snapshot"
+    _expect_user_message(fork_snapshot[0]).content = "mutated fork snapshot"
+
+    assert _expect_user_message(source.history[0]).content == "first"
+    assert _expect_user_message(forked.history[0]).content == "first"
+
+
+def test_session_fork_rejects_duplicate_target_session_id() -> None:
+    """Reject fork targets that would overwrite an existing session."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams([], invocations)
+    source = runtime.session(session_id="source")
+    runtime.session(session_id="existing")
+
+    with pytest.raises(SessionAlreadyExistsError, match="existing"):
+        source.fork(session_id="existing")
+
+
+def test_runtime_fork_session_rejects_missing_source_session() -> None:
+    """Reject forks from unknown source sessions."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams([], invocations)
+
+    with pytest.raises(SessionNotFoundError, match="missing"):
+        runtime.fork_session(source_session_id="missing", target_session_id="fork")
