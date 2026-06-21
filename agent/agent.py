@@ -159,12 +159,12 @@ async def _handle_stream_done_event(
 ) -> AsyncIterator[AgentEvent]:
     """Finalize an assistant message and execute requested tools."""
 
-    message = AssistantTurn.from_stream_done(event)
-    _append_new_item(message, run_history=run_history, new_items=new_items)
-    yield MessageEndEvent(message=message)
+    turn = AssistantTurn.from_stream_done(event)
+    _append_new_item(turn, run_history=run_history, new_items=new_items)
+    yield MessageEndEvent(assistant_turn=turn)
     tool_results: list[ToolResultTurn] = []
 
-    for tool_call in _collect_tool_calls(event.blocks):
+    for tool_call in _collect_tool_calls(turn.blocks):
         async for agent_event in _execute_tool(
             call_id=tool_call.call_id,
             tool_name=tool_call.name,
@@ -181,7 +181,7 @@ async def _handle_stream_done_event(
                 tool_results.append(tool_result)
             yield agent_event
 
-    yield TurnEndEvent(message=message, tool_results=tool_results)
+    yield TurnEndEvent(assistant_turn=turn, tool_results=tool_results)
 
 
 async def _handle_stream_error_event(
@@ -192,10 +192,10 @@ async def _handle_stream_error_event(
 ) -> AsyncIterator[AgentEvent]:
     """Finalize a failed assistant message."""
 
-    message = AssistantTurn.from_stream_error(event)
-    _append_new_item(message, run_history=run_history, new_items=new_items)
-    yield MessageEndEvent(message=message)
-    yield TurnEndEvent(message=message, tool_results=[])
+    turn = AssistantTurn.from_stream_error(event)
+    _append_new_item(turn, run_history=run_history, new_items=new_items)
+    yield MessageEndEvent(assistant_turn=turn)
+    yield TurnEndEvent(assistant_turn=turn, tool_results=[])
 
 
 async def _execute_tool(

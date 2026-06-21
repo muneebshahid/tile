@@ -477,8 +477,10 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     second_message_end = _expect_event_type(events[18], MessageEndEvent)
     second_turn_end = _expect_event_type(events[19], TurnEndEvent)
     agent_end = _expect_event_type(events[20], AgentEndEvent)
-    first_final_message = _expect_agent_assistant_turn(first_message_end.message)
-    second_final_message = _expect_agent_assistant_turn(second_message_end.message)
+    first_final_message = _expect_agent_assistant_turn(first_message_end.assistant_turn)
+    second_final_message = _expect_agent_assistant_turn(
+        second_message_end.assistant_turn
+    )
 
     assert isinstance(events[0], AgentStartEvent)
     assert first_turn_start.type == "turn_start"
@@ -526,10 +528,10 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
     assert tool_execution_end.is_error is False
-    assert first_turn_end.message.response_id == "resp_tool_call"
-    assert first_turn_end.message.stop_reason == "tool_use"
-    assert first_turn_end.message.status == "completed"
-    assert first_turn_end.message.blocks == [tool_call_block]
+    assert first_turn_end.assistant_turn.response_id == "resp_tool_call"
+    assert first_turn_end.assistant_turn.stop_reason == "tool_use"
+    assert first_turn_end.assistant_turn.status == "completed"
+    assert first_turn_end.assistant_turn.blocks == [tool_call_block]
     assert first_turn_end.tool_results[0].call_id == "call_123"
     assert first_turn_end.tool_results[0].tool_name == "get_weather"
     assert first_turn_end.tool_results[0].content == tool_execution_end.result.content
@@ -549,9 +551,11 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     )
     assert second_final_message.response_id == "resp_follow_up"
     assert second_final_message.stop_reason == "stop"
-    assert second_turn_end.message.response_id == "resp_follow_up"
-    assert second_turn_end.message.stop_reason == "stop"
-    assert second_turn_end.message.blocks == [TextBlock(text="It is sunny in Munich.")]
+    assert second_turn_end.assistant_turn.response_id == "resp_follow_up"
+    assert second_turn_end.assistant_turn.stop_reason == "stop"
+    assert second_turn_end.assistant_turn.blocks == [
+        TextBlock(text="It is sunny in Munich.")
+    ]
     assert second_turn_end.tool_results == []
     assert len(invocations) == 2
     assert invocations[0].model == "gpt-5.4"
@@ -788,17 +792,17 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     message_end = _expect_event_type(events[3], MessageEndEvent)
     turn_end = _expect_event_type(events[4], TurnEndEvent)
     agent_end = _expect_event_type(events[5], AgentEndEvent)
-    final_message = _expect_agent_assistant_turn(message_end.message)
+    final_message = _expect_agent_assistant_turn(message_end.assistant_turn)
 
     assert isinstance(events[0], AgentStartEvent)
     assert isinstance(events[1], TurnStartEvent)
     assert message_start.response_id == "resp_error"
     assert final_message.response_id == "resp_error"
     assert final_message.status == "error"
-    assert turn_end.message.response_id == "resp_error"
-    assert turn_end.message.stop_reason == "error"
-    assert turn_end.message.status == "error"
-    assert turn_end.message.error_message == "Socket closed"
+    assert turn_end.assistant_turn.response_id == "resp_error"
+    assert turn_end.assistant_turn.stop_reason == "error"
+    assert turn_end.assistant_turn.status == "error"
+    assert turn_end.assistant_turn.error_message == "Socket closed"
     assert turn_end.tool_results == []
     assert len(invocations) == 1
     first_request_user = _expect_user_message(invocations[0].history[0])

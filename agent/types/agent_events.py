@@ -54,7 +54,7 @@ class TurnEndEvent(AgentEvent):
     """Marks the end of a single assistant turn."""
 
     type: Literal["turn_end"] = "turn_end"
-    message: AssistantTurn
+    assistant_turn: AssistantTurn
     tool_results: list[ToolResultTurn]
 
 
@@ -76,7 +76,7 @@ class MessageEndEvent(AgentEvent):
     """Marks the end of a message lifecycle event."""
 
     type: Literal["message_end"] = "message_end"
-    message: AssistantTurn
+    assistant_turn: AssistantTurn
 
 
 class ToolExecutionStartEvent(AgentEvent):
