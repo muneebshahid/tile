@@ -36,7 +36,7 @@ from ai.types.stream_events import (
     StopReason,
     StreamDoneEvent,
     StreamErrorEvent,
-    StreamStartedEvent,
+    StreamStartEvent,
     TextBlock,
     TextDeltaEvent,
     TextEndEvent,
@@ -136,11 +136,11 @@ def _yield_stream_event(
 def _record_created_event(
     state: StreamAssemblyState,
     event: CreatedNormalizedEvent,
-) -> StreamStartedEvent:
+) -> StreamStartEvent:
     """Record provider response identity."""
 
     state.response_id = event["response_id"]
-    return StreamStartedEvent(source=state.source, response_id=state.response_id)
+    return StreamStartEvent(source=state.source, response_id=state.response_id)
 
 
 def _start_reasoning_block(state: StreamAssemblyState) -> ReasoningStartEvent:

@@ -34,7 +34,7 @@ sequenceDiagram
 
 ## Stream Start And Created
 
-`assemble_stream` emits `StreamStartedEvent` when it consumes the provider `CREATED` event. The event carries the provider source and response id; assistant blocks are accumulated privately until terminal events.
+`assemble_stream` emits `StreamStartEvent` when it consumes the provider `CREATED` event. The event carries the provider source and response id; assistant blocks are accumulated privately until terminal events.
 
 ```mermaid
 sequenceDiagram
@@ -50,8 +50,8 @@ sequenceDiagram
     Sub->>Adapter: response.created
     Adapter->>Norm: CREATED(response_id)
     Norm->>Asm: CREATED
-    Asm->>Stream: StreamStartedEvent(source, response_id)
-    Stream->>Agent: stream_started
+    Asm->>Stream: StreamStartEvent(source, response_id)
+    Stream->>Agent: stream_start
     Agent-->>Agent: emit TurnStartEvent
     Agent-->>Agent: emit MessageStartEvent(response_id)
 ```
@@ -317,7 +317,7 @@ sequenceDiagram
 
 | Raw SDK event | Raw subscription event | Normalized event | Stream assembler effect | Agent effect |
 | --- | --- | --- | --- | --- |
-| `ResponseCreatedEvent` | `response.created` | `CREATED` | `StreamStartedEvent` | `TurnStartEvent`, `MessageStartEvent(response_id)` |
+| `ResponseCreatedEvent` | `response.created` | `CREATED` | `StreamStartEvent` | `TurnStartEvent`, `MessageStartEvent(response_id)` |
 | `ResponseOutputItemAddedEvent` with reasoning item | `response.output_item.added` with `item.type=reasoning` | `REASONING_ADDED` | `ReasoningStartEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningSummaryTextDeltaEvent` | `response.reasoning_summary_text.delta` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningTextDeltaEvent` | `response.reasoning_text.delta` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |

@@ -45,7 +45,7 @@ from ai.types.stream_events import (
     StreamDoneEvent,
     StreamErrorEvent,
     StreamEvent,
-    StreamStartedEvent,
+    StreamStartEvent,
     StopReason,
     TextBlock,
     TextDeltaEvent,
@@ -257,10 +257,10 @@ def _metadata(**values: str | None) -> ProviderMetadata | None:
     return ProviderMetadata(data=data)
 
 
-def _stream_started(response_id: str) -> StreamStartedEvent:
+def _stream_start(response_id: str) -> StreamStartEvent:
     """Build a deterministic stream started event."""
 
-    return StreamStartedEvent(source=_source(), response_id=response_id)
+    return StreamStartEvent(source=_source(), response_id=response_id)
 
 
 def _stream_done(
@@ -316,7 +316,7 @@ def _tool_call_stream(
     """Build a minimal assistant stream that requests one tool call."""
 
     return [
-        _stream_started(response_id),
+        _stream_start(response_id),
         _stream_done(
             response_id,
             stop_reason="tool_use",
@@ -336,7 +336,7 @@ def _final_text_stream(*, response_id: str, text: str) -> list[ProviderStreamEve
     """Build a minimal assistant stream that returns final text."""
 
     return [
-        _stream_started(response_id),
+        _stream_start(response_id),
         _stream_done(response_id, blocks=[TextBlock(text=text)]),
     ]
 
@@ -348,7 +348,7 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                _stream_started("resp_done"),
+                _stream_start("resp_done"),
                 _stream_done("resp_done"),
             ]
         ],
@@ -380,7 +380,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                _stream_started("resp_tool_call"),
+                _stream_start("resp_tool_call"),
                 ReasoningStartEvent(content_index=0),
                 ReasoningDeltaEvent(
                     content_index=0,
@@ -410,7 +410,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
                 ),
             ],
             [
-                _stream_started("resp_follow_up"),
+                _stream_start("resp_follow_up"),
                 TextStartEvent(
                     content_index=0,
                 ),
@@ -580,7 +580,7 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                _stream_started("resp_tool_call"),
+                _stream_start("resp_tool_call"),
                 _stream_done(
                     "resp_tool_call",
                     stop_reason="tool_use",
@@ -595,7 +595,7 @@ def test_agent_run_executes_registered_tool_definition() -> None:
                 ),
             ],
             [
-                _stream_started("resp_follow_up"),
+                _stream_start("resp_follow_up"),
                 _stream_done("resp_follow_up"),
             ],
         ],
@@ -715,7 +715,7 @@ def test_agent_includes_cwd_in_stream_instructions(tmp_path: Path) -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                _stream_started("resp_done"),
+                _stream_start("resp_done"),
                 _stream_done("resp_done"),
             ]
         ],
@@ -740,7 +740,7 @@ def test_agent_formats_cwd_prompt_variable(tmp_path: Path) -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                _stream_started("resp_done"),
+                _stream_start("resp_done"),
                 _stream_done("resp_done"),
             ]
         ],
@@ -765,7 +765,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     stream_fn = _build_stream_fn(
         streams=[
             [
-                _stream_started("resp_error"),
+                _stream_start("resp_error"),
                 _stream_error("resp_error", "Socket closed"),
             ]
         ],

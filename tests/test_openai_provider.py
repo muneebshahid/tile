@@ -34,7 +34,7 @@ from ai.types.stream_events import (
     StreamDoneEvent,
     StreamErrorEvent,
     StreamEvent,
-    StreamStartedEvent,
+    StreamStartEvent,
     TextBlock,
     TextDeltaEvent,
     TextEndEvent,
@@ -734,7 +734,7 @@ def test_stream_maps_raw_events_into_block_stream() -> None:
     client = _build_client(raw_events)
     events = _collect_events(client)
 
-    start = _expect_event_type(events[0], StreamStartedEvent)
+    start = _expect_event_type(events[0], StreamStartEvent)
     reasoning_start = _expect_event_type(events[1], ReasoningStartEvent)
     reasoning_delta_one = _expect_event_type(events[2], ReasoningDeltaEvent)
     reasoning_delta_two = _expect_event_type(events[3], ReasoningDeltaEvent)
@@ -753,7 +753,7 @@ def test_stream_maps_raw_events_into_block_stream() -> None:
     done_text_block = _expect_text_block(done.blocks[1])
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "reasoning_start",
         "reasoning_delta",
         "reasoning_delta",
@@ -849,7 +849,7 @@ def test_stream_preserves_reasoning_deltas_when_done_summary_is_empty() -> None:
     done_reasoning_block = _expect_reasoning_block(done.blocks[0])
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "reasoning_start",
         "reasoning_delta",
         "reasoning_end",
@@ -930,7 +930,7 @@ def test_stream_maps_refusal_deltas() -> None:
     done_text_block = _expect_text_block(done.blocks[0])
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "text_start",
         "text_delta",
         "text_end",
@@ -1007,7 +1007,7 @@ def test_stream_maps_function_tool_call_events() -> None:
     done_tool_call_block = _expect_tool_call_block(done.blocks[0])
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "tool_call_start",
         "tool_call_delta",
         "tool_call_delta",
@@ -1076,7 +1076,7 @@ def test_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:
     done = _expect_event_type(events[5], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "text_start",
         "text_delta",
         "text_delta",
@@ -1127,7 +1127,7 @@ def test_stream_clears_active_text_mode_for_unsupported_content_parts() -> None:
     done = _expect_event_type(events[3], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "text_start",
         "text_end",
         "stream_done",
@@ -1146,7 +1146,7 @@ def test_stream_maps_failed_response_into_error_event() -> None:
     events = _collect_events(client)
     error = _expect_event_type(events[1], StreamErrorEvent)
 
-    assert [event.type for event in events] == ["stream_started", "stream_error"]
+    assert [event.type for event in events] == ["stream_start", "stream_error"]
     assert error.error_message == "Model overloaded"
     assert error.stop_reason == "error"
     assert error.response_id == "resp_failed"
@@ -1162,7 +1162,7 @@ def test_stream_maps_error_event_into_error_event() -> None:
     events = _collect_events(client)
     error = _expect_event_type(events[1], StreamErrorEvent)
 
-    assert [event.type for event in events] == ["stream_started", "stream_error"]
+    assert [event.type for event in events] == ["stream_start", "stream_error"]
     assert error.error_message == "Socket closed"
     assert error.stop_reason == "error"
     assert error.response_id == "resp_error"
@@ -1200,7 +1200,7 @@ def test_stream_maps_incomplete_max_output_tokens_into_length_done() -> None:
     done = _expect_event_type(events[-1], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "text_start",
         "text_delta",
         "text_end",
@@ -1220,7 +1220,7 @@ def test_stream_maps_incomplete_content_filter_into_error_event() -> None:
     events = _collect_events(client)
     error = _expect_event_type(events[1], StreamErrorEvent)
 
-    assert [event.type for event in events] == ["stream_started", "stream_error"]
+    assert [event.type for event in events] == ["stream_start", "stream_error"]
     assert error.error_message == "OpenAI response was truncated by the content filter."
     assert error.stop_reason == "error"
 
@@ -1292,14 +1292,14 @@ def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
         return [event async for event in event_stream]
 
     events = asyncio.run(_collect())
-    start = _expect_event_type(events[0], StreamStartedEvent)
+    start = _expect_event_type(events[0], StreamStartEvent)
     text_start = _expect_event_type(events[1], TextStartEvent)
     text_delta = _expect_event_type(events[2], TextDeltaEvent)
     text_end = _expect_event_type(events[3], TextEndEvent)
     done = _expect_event_type(events[4], StreamDoneEvent)
 
     assert [event.type for event in events] == [
-        "stream_started",
+        "stream_start",
         "text_start",
         "text_delta",
         "text_end",

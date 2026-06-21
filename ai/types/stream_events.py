@@ -93,10 +93,10 @@ class BlockStreamEvent(StreamEvent):
     content_index: int
 
 
-class StreamStartedEvent(StreamEvent):
+class StreamStartEvent(StreamEvent):
     """Marks creation of a provider response stream."""
 
-    type: Literal["stream_started"] = "stream_started"
+    type: Literal["stream_start"] = "stream_start"
     source: ProviderSource
     response_id: str
 
@@ -201,7 +201,7 @@ class StreamErrorEvent(StreamEvent):
 
 StreamTerminalEvent: TypeAlias = StreamDoneEvent | StreamErrorEvent
 ProviderStreamEvent: TypeAlias = (
-    StreamStartedEvent | StreamUpdateEvent | StreamDoneEvent | StreamErrorEvent
+    StreamStartEvent | StreamUpdateEvent | StreamDoneEvent | StreamErrorEvent
 )
 
 

@@ -21,7 +21,7 @@ Any violations must be flagged and fixed
 
 ## Skill Loop
 
-- Run the following skills in order. Load only one skill at a time, and wait for its results before running the next skill.
+- ONLY when asked, run the following skills in order. Load only one skill at a time, and wait for its results before running the next skill.
   - Run DDD SOLID Enforcer to review code for SOLID principles and modular structure.
   - Run Clean Architecture Review Skill to ensure proper layering and separation of concerns.
   - Run Code Reviewer Skill to find potential bugs, code smells, and areas for improvement.

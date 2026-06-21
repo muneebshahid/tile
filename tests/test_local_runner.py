@@ -14,7 +14,7 @@ from ai.types.stream_events import (
     ProviderSource,
     ProviderStreamEvent,
     StreamDoneEvent,
-    StreamStartedEvent,
+    StreamStartEvent,
 )
 from ai.types.tools import ToolDefinition
 from examples import local_runner
@@ -118,10 +118,10 @@ def _iter_stream_events(
     return _iterate()
 
 
-def _start_event() -> StreamStartedEvent:
+def _start_event() -> StreamStartEvent:
     """Build a deterministic stream start event."""
 
-    return StreamStartedEvent(
+    return StreamStartEvent(
         source=_source(),
         response_id="resp_cli",
     )

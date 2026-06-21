@@ -13,7 +13,7 @@ from ai.types.stream_events import (
     ProviderStreamEvent,
     StreamDoneEvent,
     StreamErrorEvent,
-    StreamStartedEvent,
+    StreamStartEvent,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
@@ -128,7 +128,7 @@ async def _handle_stream_event(
     """Route one provider stream event into agent-level events."""
 
     match event:
-        case StreamStartedEvent():
+        case StreamStartEvent():
             yield TurnStartEvent()
             yield MessageStartEvent(response_id=event.response_id)
         case StreamDoneEvent():
