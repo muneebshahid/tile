@@ -11,27 +11,27 @@ from openai.types.responses import ResponseStreamEvent
 from ai.openai.normalized_events import NormalizedEvent, NormalizedEventType
 from ai.openai.sdk_event_adapter import normalize_sdk_events
 from tests.support.openai_response_events import (
-    content_part_added_event as _content_part_added_raw_event,
-    function_tool_call_added_event as _tool_call_added_raw_event,
-    function_tool_call_arguments_delta_event as _tool_call_arguments_delta_raw_event,
-    function_tool_call_arguments_done_event as _tool_call_arguments_done_raw_event,
-    function_tool_call_done_event as _tool_call_done_raw_event,
-    message_added_event as _message_added_raw_event,
-    message_done_event as _message_done_raw_event,
+    content_part_added_event,
+    function_tool_call_added_event,
+    function_tool_call_arguments_delta_event,
+    function_tool_call_arguments_done_event,
+    function_tool_call_done_event,
+    message_added_event,
+    message_done_event,
     raw_response_stream,
-    reasoning_added_event as _reasoning_added_raw_event,
-    reasoning_done_event as _reasoning_done_raw_event,
-    reasoning_summary_delta_event as _reasoning_delta_raw_event,
-    reasoning_summary_part_added_event as _reasoning_summary_part_added_raw_event,
-    reasoning_summary_part_done_event as _reasoning_part_done_raw_event,
-    reasoning_text_delta_event as _reasoning_text_delta_raw_event,
-    refusal_delta_event as _refusal_delta_raw_event,
-    response_completed_event as _completed_raw_event,
-    response_created_event as _created_raw_event,
-    response_error_event as _stream_error_raw_event,
-    response_failed_event as _failed_raw_event,
-    response_incomplete_event as _incomplete_raw_event,
-    text_delta_event as _text_delta_raw_event,
+    reasoning_added_event,
+    reasoning_done_event,
+    reasoning_summary_delta_event,
+    reasoning_summary_part_added_event,
+    reasoning_summary_part_done_event,
+    reasoning_text_delta_event,
+    refusal_delta_event,
+    response_completed_event,
+    response_created_event,
+    response_error_event,
+    response_failed_event,
+    response_incomplete_event,
+    text_delta_event,
 )
 
 
@@ -62,7 +62,9 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
     return [
         NormalizationCase(
             name="response.created",
-            raw_event=_created_raw_event(sequence_number=1, response_id="resp_created"),
+            raw_event=response_created_event(
+                sequence_number=1, response_id="resp_created"
+            ),
             expected_event={
                 "type": NormalizedEventType.CREATED,
                 "response_id": "resp_created",
@@ -70,7 +72,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.completed.stop",
-            raw_event=_completed_raw_event(
+            raw_event=response_completed_event(
                 sequence_number=2,
                 response_id="resp_completed",
             ),
@@ -81,7 +83,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.completed.tool_use",
-            raw_event=_completed_raw_event(
+            raw_event=response_completed_event(
                 sequence_number=3,
                 response_id="resp_tool_use",
                 output=[
@@ -102,7 +104,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.incomplete.length",
-            raw_event=_incomplete_raw_event(
+            raw_event=response_incomplete_event(
                 sequence_number=4,
                 response_id="resp_incomplete",
                 reason="max_output_tokens",
@@ -115,7 +117,7 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.incomplete.content_filter",
-            raw_event=_incomplete_raw_event(
+            raw_event=response_incomplete_event(
                 sequence_number=5,
                 response_id="resp_filtered",
                 reason="content_filter",
@@ -135,7 +137,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
     return [
         NormalizationCase(
             name="response.output_item.added.reasoning",
-            raw_event=_reasoning_added_raw_event(
+            raw_event=reasoning_added_event(
                 sequence_number=6,
                 item_id="rs_added",
             ),
@@ -146,7 +148,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.reasoning_summary_text.delta",
-            raw_event=_reasoning_delta_raw_event(
+            raw_event=reasoning_summary_delta_event(
                 sequence_number=7,
                 item_id="rs_delta",
                 summary_index=0,
@@ -159,7 +161,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.reasoning_text.delta",
-            raw_event=_reasoning_text_delta_raw_event(
+            raw_event=reasoning_text_delta_event(
                 sequence_number=8,
                 item_id="rs_delta",
                 content_index=0,
@@ -172,7 +174,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.reasoning_summary_part.done",
-            raw_event=_reasoning_part_done_raw_event(
+            raw_event=reasoning_summary_part_done_event(
                 sequence_number=9,
                 item_id="rs_done_part",
                 summary_index=0,
@@ -185,7 +187,7 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.output_item.done.reasoning",
-            raw_event=_reasoning_done_raw_event(
+            raw_event=reasoning_done_event(
                 sequence_number=9,
                 item_id="rs_done",
                 summary_texts=["step one", "step two"],
@@ -216,7 +218,7 @@ def _build_message_cases() -> list[NormalizationCase]:
     return [
         NormalizationCase(
             name="response.output_item.added.message",
-            raw_event=_message_added_raw_event(
+            raw_event=message_added_event(
                 sequence_number=10,
                 item_id="msg_added",
                 output_index=0,
@@ -230,7 +232,7 @@ def _build_message_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.content_part.added.output_text",
-            raw_event=_content_part_added_raw_event(
+            raw_event=content_part_added_event(
                 sequence_number=11,
                 item_id="msg_output_text",
                 part_type="output_text",
@@ -243,7 +245,7 @@ def _build_message_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.content_part.added.refusal",
-            raw_event=_content_part_added_raw_event(
+            raw_event=content_part_added_event(
                 sequence_number=12,
                 item_id="msg_refusal",
                 part_type="refusal",
@@ -256,7 +258,7 @@ def _build_message_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.content_part.added.unsupported",
-            raw_event=_content_part_added_raw_event(
+            raw_event=content_part_added_event(
                 sequence_number=13,
                 item_id="msg_unknown",
                 part_type="reasoning_text",
@@ -269,7 +271,7 @@ def _build_message_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.output_text.delta",
-            raw_event=_text_delta_raw_event(
+            raw_event=text_delta_event(
                 sequence_number=14,
                 item_id="msg_text_delta",
                 delta="Hello",
@@ -283,7 +285,7 @@ def _build_message_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.refusal.delta",
-            raw_event=_refusal_delta_raw_event(
+            raw_event=refusal_delta_event(
                 sequence_number=15,
                 item_id="msg_refusal_delta",
                 delta="No",
@@ -297,7 +299,7 @@ def _build_message_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.output_item.done.message",
-            raw_event=_message_done_raw_event(
+            raw_event=message_done_event(
                 sequence_number=16,
                 item_id="msg_done",
                 output_index=0,
@@ -323,7 +325,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
     return [
         NormalizationCase(
             name="response.output_item.added.function_call",
-            raw_event=_tool_call_added_raw_event(
+            raw_event=function_tool_call_added_event(
                 sequence_number=17,
                 item_id="fc_added",
                 call_id="call_added",
@@ -341,7 +343,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.output_item.added.function_call.blank_arguments",
-            raw_event=_tool_call_added_raw_event(
+            raw_event=function_tool_call_added_event(
                 sequence_number=18,
                 item_id="fc_added_blank",
                 call_id="call_added_blank",
@@ -359,7 +361,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.function_call_arguments.delta",
-            raw_event=_tool_call_arguments_delta_raw_event(
+            raw_event=function_tool_call_arguments_delta_event(
                 sequence_number=19,
                 item_id="fc_delta",
                 delta='{"city"',
@@ -372,7 +374,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.function_call_arguments.done",
-            raw_event=_tool_call_arguments_done_raw_event(
+            raw_event=function_tool_call_arguments_done_event(
                 sequence_number=20,
                 item_id="fc_args_done",
                 name="get_weather",
@@ -386,7 +388,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.function_call_arguments.done.malformed_arguments",
-            raw_event=_tool_call_arguments_done_raw_event(
+            raw_event=function_tool_call_arguments_done_event(
                 sequence_number=21,
                 item_id="fc_args_done_malformed",
                 name="get_weather",
@@ -400,7 +402,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.output_item.done.function_call",
-            raw_event=_tool_call_done_raw_event(
+            raw_event=function_tool_call_done_event(
                 sequence_number=22,
                 item_id="fc_done",
                 call_id="call_done",
@@ -418,7 +420,7 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.output_item.done.function_call.non_object_arguments",
-            raw_event=_tool_call_done_raw_event(
+            raw_event=function_tool_call_done_event(
                 sequence_number=23,
                 item_id="fc_done_non_object",
                 call_id="call_done_non_object",
@@ -443,7 +445,7 @@ def _build_failure_cases() -> list[NormalizationCase]:
     return [
         NormalizationCase(
             name="error",
-            raw_event=_stream_error_raw_event(
+            raw_event=response_error_event(
                 sequence_number=24,
                 message="Socket closed",
             ),
@@ -454,7 +456,7 @@ def _build_failure_cases() -> list[NormalizationCase]:
         ),
         NormalizationCase(
             name="response.failed",
-            raw_event=_failed_raw_event(
+            raw_event=response_failed_event(
                 sequence_number=25,
                 response_id="resp_failed",
                 message="Model overloaded",
@@ -497,7 +499,7 @@ def test_normalize_sdk_events_maps_each_supported_raw_event(
 def test_normalize_sdk_events_skips_unmapped_raw_events() -> None:
     """Skips raw SDK events that the adapter does not currently map."""
 
-    ignored_event = _reasoning_summary_part_added_raw_event(
+    ignored_event = reasoning_summary_part_added_event(
         sequence_number=1,
         item_id="rs_ignored",
         summary_index=0,
