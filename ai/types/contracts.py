@@ -1,11 +1,13 @@
 from collections.abc import AsyncIterator
 from typing import Literal, Protocol, TypedDict
 
-from ai.types.stream import StreamEvent
+from ai.types.stream_events import ProviderStreamEvent
 
 
 class AsyncEventStream(Protocol):
-    def __aiter__(self) -> AsyncIterator[StreamEvent]: ...
+    """Async stream of provider-originated assistant events."""
+
+    def __aiter__(self) -> AsyncIterator[ProviderStreamEvent]: ...
 
 
 class Reasoning(TypedDict, total=False):

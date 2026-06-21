@@ -3,8 +3,8 @@
 This document maps raw OpenAI stream events from both supported transports to the final agent-facing events. The executable source of truth is still the test suite:
 
 - `tests/test_openai_provider.py` covers raw SDK and subscription payloads through provider stream events.
-- `tests/test_openai_stream_assembler.py` covers normalized events through app stream events.
-- `tests/test_agent.py` covers app stream events through agent events.
+- `tests/test_openai_stream_assembler.py` covers normalized events through provider stream events.
+- `tests/test_agent.py` covers provider stream events through agent events.
 
 The diagrams below use actor-style Mermaid sequence diagrams. Columns are stages in the pipeline, and time flows from top to bottom.
 
@@ -34,7 +34,7 @@ sequenceDiagram
 
 ## Stream Start And Created
 
-`assemble_stream` emits a start event before it consumes provider events. The later `CREATED` event mutates the same shared assistant message with the provider response id.
+`assemble_stream` emits `StreamStartEvent` when it consumes the provider `CREATED` event. The event carries the provider source and response id; assistant blocks are accumulated privately until terminal events.
 
 ```mermaid
 sequenceDiagram
@@ -46,17 +46,14 @@ sequenceDiagram
     participant Stream as StreamEvent
     participant Agent as run_agent
 
-    Asm->>Stream: StreamStartEvent(message=empty AssistantMessage)
-    Stream->>Agent: start
-    Agent-->>Agent: emit TurnStartEvent
-    Agent-->>Agent: emit MessageStartEvent(message)
-
     SDK->>Adapter: ResponseCreatedEvent
     Sub->>Adapter: response.created
     Adapter->>Norm: CREATED(response_id)
     Norm->>Asm: CREATED
-    Asm-->>Asm: message.response_id = response_id
-    Note over Asm,Agent: No new StreamEvent is emitted. The shared message is mutated.
+    Asm->>Stream: StreamStartEvent(source, response_id)
+    Stream->>Agent: stream_start
+    Agent-->>Agent: emit TurnStartEvent
+    Agent-->>Agent: emit MessageStartEvent(response_id)
 ```
 
 ## Reasoning Item
@@ -77,8 +74,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.added(item.type=reasoning)
     Adapter->>Norm: REASONING_ADDED(item_id)
     Norm->>Asm: REASONING_ADDED
-    Asm-->>Asm: create ReasoningBlock and set active_block=ReasoningBlock
-    Asm->>Stream: ReasoningStartEvent(message)
+    Asm-->>Asm: append ReasoningBlock and set active_block_index
+    Asm->>Stream: ReasoningStartEvent(content_index)
     Stream->>Agent: reasoning_start
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -89,7 +86,7 @@ sequenceDiagram
     Adapter->>Norm: REASONING_DELTA(delta)
     Norm->>Asm: REASONING_DELTA
     Asm-->>Asm: append delta to ReasoningBlock.summary_text
-    Asm->>Stream: ReasoningDeltaEvent(delta, message)
+    Asm->>Stream: ReasoningDeltaEvent(content_index, delta)
     Stream->>Agent: reasoning_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -98,7 +95,7 @@ sequenceDiagram
     Adapter->>Norm: REASONING_DELTA(delta="\\n\\n")
     Norm->>Asm: REASONING_DELTA
     Asm-->>Asm: append paragraph separator
-    Asm->>Stream: ReasoningDeltaEvent(delta, message)
+    Asm->>Stream: ReasoningDeltaEvent(content_index, delta)
     Stream->>Agent: reasoning_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -106,8 +103,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.done(item.type=reasoning)
     Adapter->>Norm: REASONING_DONE(summary_text, reasoning_signature)
     Norm->>Asm: REASONING_DONE
-    Asm-->>Asm: finalize ReasoningBlock and set active_block=None
-    Asm->>Stream: ReasoningEndEvent(message)
+    Asm-->>Asm: finalize ReasoningBlock, copy block, and clear active block
+    Asm->>Stream: ReasoningEndEvent(content_index, block)
     Stream->>Agent: reasoning_end
     Agent-->>Agent: emit MessageUpdateEvent
 ```
@@ -130,8 +127,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.added(item.type=message)
     Adapter->>Norm: MESSAGE_ADDED(item_id, phase)
     Norm->>Asm: MESSAGE_ADDED
-    Asm-->>Asm: create TextBlock and set active_text_part_type=None
-    Asm->>Stream: TextStartEvent(message)
+    Asm-->>Asm: append TextBlock and set active_block_index
+    Asm->>Stream: TextStartEvent(content_index)
     Stream->>Agent: text_start
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -139,7 +136,7 @@ sequenceDiagram
     Sub->>Adapter: response.content_part.added
     Adapter->>Norm: MESSAGE_TEXT_PART(output_text | refusal | None)
     Norm->>Asm: MESSAGE_TEXT_PART
-    Asm-->>Asm: set active_text_part_type
+    Asm-->>Asm: set active_text_part_type for subsequent deltas
     Note over Asm: No StreamEvent is emitted for content-part activation.
 
     SDK->>Adapter: ResponseTextDeltaEvent
@@ -147,7 +144,7 @@ sequenceDiagram
     Adapter->>Norm: MESSAGE_TEXT_DELTA(part_type=output_text)
     Norm->>Asm: MESSAGE_TEXT_DELTA
     Asm-->>Asm: append only if active_text_part_type=output_text
-    Asm->>Stream: TextDeltaEvent(delta, message)
+    Asm->>Stream: TextDeltaEvent(content_index, delta)
     Stream->>Agent: text_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -156,7 +153,7 @@ sequenceDiagram
     Adapter->>Norm: MESSAGE_TEXT_DELTA(part_type=refusal)
     Norm->>Asm: MESSAGE_TEXT_DELTA
     Asm-->>Asm: append only if active_text_part_type=refusal
-    Asm->>Stream: TextDeltaEvent(delta, message)
+    Asm->>Stream: TextDeltaEvent(content_index, delta)
     Stream->>Agent: text_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -164,8 +161,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.done(item.type=message)
     Adapter->>Norm: MESSAGE_DONE(text, phase)
     Norm->>Asm: MESSAGE_DONE
-    Asm-->>Asm: finalize TextBlock and clear active_block and active_text_part_type
-    Asm->>Stream: TextEndEvent(message)
+    Asm-->>Asm: finalize TextBlock, copy block, and clear active text state
+    Asm->>Stream: TextEndEvent(content_index, block)
     Stream->>Agent: text_end
     Agent-->>Agent: emit MessageUpdateEvent
 ```
@@ -188,8 +185,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.added(item.type=function_call)
     Adapter->>Norm: TOOL_CALL_ADDED(provider_item_id, call_id, name, arguments)
     Norm->>Asm: TOOL_CALL_ADDED
-    Asm-->>Asm: create ToolCallBlock and set active_block=ToolCallBlock
-    Asm->>Stream: ToolCallStartEvent(message)
+    Asm-->>Asm: append ToolCallBlock and set active_block_index
+    Asm->>Stream: ToolCallStartEvent(content_index, call_id, name)
     Stream->>Agent: tool_call_start
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -197,7 +194,7 @@ sequenceDiagram
     Sub->>Adapter: response.function_call_arguments.delta
     Adapter->>Norm: TOOL_CALL_ARGUMENTS_DELTA(delta)
     Norm->>Asm: TOOL_CALL_ARGUMENTS_DELTA
-    Asm->>Stream: ToolCallDeltaEvent(delta, message)
+    Asm->>Stream: ToolCallDeltaEvent(content_index, delta)
     Stream->>Agent: tool_call_delta
     Agent-->>Agent: emit MessageUpdateEvent
 
@@ -212,8 +209,8 @@ sequenceDiagram
     Sub->>Adapter: response.output_item.done(item.type=function_call)
     Adapter->>Norm: TOOL_CALL_DONE(final tool call data)
     Norm->>Asm: TOOL_CALL_DONE
-    Asm-->>Asm: finalize ToolCallBlock and set active_block=None
-    Asm->>Stream: ToolCallEndEvent(message)
+    Asm-->>Asm: finalize ToolCallBlock, copy block, and clear active block
+    Asm->>Stream: ToolCallEndEvent(content_index, block)
     Stream->>Agent: tool_call_end
     Agent-->>Agent: emit MessageUpdateEvent
 ```
@@ -235,10 +232,9 @@ sequenceDiagram
     Sub->>Adapter: response.completed or response.done(status=completed)
     Adapter->>Norm: COMPLETED(stop_reason=stop)
     Norm->>Asm: COMPLETED
-    Asm-->>Asm: message.stop_reason=stop
-    Asm->>Stream: StreamDoneEvent(message)
-    Stream->>Agent: done
-    Agent-->>Agent: build AssistantTurn(status=completed)
+    Asm->>Stream: StreamDoneEvent(source, response_id, stop_reason, blocks)
+    Stream->>Agent: stream_done
+    Agent-->>Agent: build AssistantTurn.from_stream_done(...)
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
@@ -259,8 +255,8 @@ sequenceDiagram
 
     Adapter->>Norm: COMPLETED(stop_reason=tool_use)
     Norm->>Asm: COMPLETED
-    Asm->>Stream: StreamDoneEvent(message with ToolCallBlock)
-    Stream->>Agent: done
+    Asm->>Stream: StreamDoneEvent(blocks include ToolCallBlock)
+    Stream->>Agent: stream_done
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent->>Tool: execute tool call
@@ -290,8 +286,8 @@ sequenceDiagram
     Sub->>Adapter: response.incomplete or response.done(status=incomplete)
     Adapter->>Norm: INCOMPLETE(stop_reason=length)
     Norm->>Asm: INCOMPLETE(length)
-    Asm->>Stream: StreamDoneEvent(message)
-    Stream->>Agent: done
+    Asm->>Stream: StreamDoneEvent(stop_reason=length, blocks)
+    Stream->>Agent: stream_done
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent
@@ -300,8 +296,8 @@ sequenceDiagram
     Sub->>Adapter: response.incomplete or response.done(status=incomplete)
     Adapter->>Norm: INCOMPLETE(stop_reason=error)
     Norm->>Asm: INCOMPLETE(error)
-    Asm->>Stream: StreamErrorEvent(error=message)
-    Stream->>Agent: error
+    Asm->>Stream: StreamErrorEvent(error_message, blocks)
+    Stream->>Agent: stream_error
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
@@ -310,8 +306,8 @@ sequenceDiagram
     Sub->>Adapter: response.failed or error
     Adapter->>Norm: FAILED(message)
     Norm->>Asm: FAILED
-    Asm->>Stream: StreamErrorEvent(error=message)
-    Stream->>Agent: error
+    Asm->>Stream: StreamErrorEvent(error_message, blocks)
+    Stream->>Agent: stream_error
     Agent->>Hist: append AssistantTurn to run-local history
     Agent-->>Agent: emit MessageEndEvent
     Agent-->>Agent: emit TurnEndEvent(tool_results=[])
@@ -321,14 +317,14 @@ sequenceDiagram
 
 | Raw SDK event | Raw subscription event | Normalized event | Stream assembler effect | Agent effect |
 | --- | --- | --- | --- | --- |
-| `ResponseCreatedEvent` | `response.created` | `CREATED` | Mutates `message.response_id`; no new stream event | Shared message already referenced by `MessageStartEvent` |
+| `ResponseCreatedEvent` | `response.created` | `CREATED` | `StreamStartEvent` | `TurnStartEvent`, `MessageStartEvent(response_id)` |
 | `ResponseOutputItemAddedEvent` with reasoning item | `response.output_item.added` with `item.type=reasoning` | `REASONING_ADDED` | `ReasoningStartEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningSummaryTextDeltaEvent` | `response.reasoning_summary_text.delta` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningTextDeltaEvent` | `response.reasoning_text.delta` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningSummaryPartDoneEvent` | `response.reasoning_summary_part.done` | `REASONING_DELTA` with paragraph separator | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseOutputItemDoneEvent` with reasoning item | `response.output_item.done` with `item.type=reasoning` | `REASONING_DONE` | `ReasoningEndEvent` | `MessageUpdateEvent` |
-| `ResponseOutputItemAddedEvent` with message item | `response.output_item.added` with `item.type=message` | `MESSAGE_ADDED` | `TextStartEvent` | `MessageUpdateEvent` |
-| `ResponseContentPartAddedEvent` | `response.content_part.added` | `MESSAGE_TEXT_PART` | Sets active text part; no new stream event | No direct event |
+| `ResponseOutputItemAddedEvent` with message item | `response.output_item.added` with `item.type=message` | `MESSAGE_ADDED` | Starts the text block | `TextStartEvent` |
+| `ResponseContentPartAddedEvent` | `response.content_part.added` | `MESSAGE_TEXT_PART` | Sets active text part for subsequent deltas | No direct event |
 | `ResponseTextDeltaEvent` | `response.output_text.delta` | `MESSAGE_TEXT_DELTA(output_text)` | `TextDeltaEvent` if output text is active | `MessageUpdateEvent` |
 | `ResponseRefusalDeltaEvent` | `response.refusal.delta` | `MESSAGE_TEXT_DELTA(refusal)` | `TextDeltaEvent` if refusal is active | `MessageUpdateEvent` |
 | `ResponseOutputItemDoneEvent` with message item | `response.output_item.done` with `item.type=message` | `MESSAGE_DONE` | `TextEndEvent` | `MessageUpdateEvent` |

@@ -37,7 +37,7 @@ from ai.openai.normalized_events import (
     NormalizedEventType,
     TextPartType,
 )
-from ai.types.stream import Phase, StopReason
+from ai.types.stream_events import Phase, StopReason
 from ai.types.tools import JsonObject
 
 

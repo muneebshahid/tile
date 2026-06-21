@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Literal, TypeAlias, TypedDict
 
-from ai.types.stream import Phase, StopReason
+from ai.types.stream_events import Phase, StopReason
 from ai.types.tools import JsonObject
 
 
@@ -26,6 +26,14 @@ class NormalizedEventType(StrEnum):
     INCOMPLETE = "incomplete"
     FAILED = "failed"
 
+
+TERMINAL_NORMALIZED_EVENT_TYPES: frozenset[NormalizedEventType] = frozenset(
+    {
+        NormalizedEventType.COMPLETED,
+        NormalizedEventType.INCOMPLETE,
+        NormalizedEventType.FAILED,
+    }
+)
 
 TextPartType: TypeAlias = Literal["output_text", "refusal"]
 

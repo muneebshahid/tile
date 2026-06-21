@@ -33,7 +33,12 @@ from ai.types.conversation import (
     ToolResultTurn,
     UserMessage,
 )
-from ai.types.stream import ReasoningBlock, TextBlock, ToolCallBlock
+from ai.types.stream_events import (
+    Phase,
+    ReasoningBlock,
+    TextBlock,
+    ToolCallBlock,
+)
 from ai.types.tools import (
     ToolDefinition,
     ToolImageContent,
@@ -119,10 +124,11 @@ def _serialize_assistant_turn(
 
     for block_index, block in enumerate(turn.blocks):
         match block:
-            case ReasoningBlock(reasoning_signature=reasoning_signature) if (
-                reasoning_signature is not None
-            ):
-                items.append(_serialize_assistant_reasoning_block(reasoning_signature))
+            case ReasoningBlock():
+                if reasoning_signature := block.metadata_string("reasoning_signature"):
+                    items.append(
+                        _serialize_assistant_reasoning_block(reasoning_signature)
+                    )
             case TextBlock():
                 items.append(
                     _serialize_assistant_text_block(
@@ -174,12 +180,12 @@ def _serialize_assistant_text_block(
         "type": "message",
         "role": "assistant",
         "status": "completed",
-        "id": block.message_id
+        "id": block.metadata_string("message_id")
         or _build_fallback_message_id(assistant_turn_index, block_index),
         "content": [output_text],
     }
-    if block.phase is not None:
-        message["phase"] = block.phase
+    if phase := _read_provider_phase(block):
+        message["phase"] = phase
     return message
 
 
@@ -188,7 +194,7 @@ def _serialize_assistant_tool_call_block(
 ) -> ResponseFunctionToolCallParam:
     return {
         "type": "function_call",
-        "id": block.provider_item_id or block.call_id,
+        "id": block.metadata_string("provider_item_id") or block.call_id,
         "call_id": block.call_id,
         "name": block.name,
         "arguments": json.dumps(block.arguments),
@@ -266,6 +272,17 @@ def _build_fallback_message_id(
     block_index: int,
 ) -> str:
     return f"msg_{assistant_turn_index}_{block_index}"
+
+
+def _read_provider_phase(block: TextBlock) -> Phase | None:
+    """Read an OpenAI message phase from provider metadata."""
+
+    value = block.metadata_string("phase")
+    if value == "commentary":
+        return "commentary"
+    if value == "final_answer":
+        return "final_answer"
+    return None
 
 
 def _deserialize_reasoning_signature(
