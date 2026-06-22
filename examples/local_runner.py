@@ -6,12 +6,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
-from agent.agent import run_agent
-from agent.tool_executor import ToolExecutor
+from agent.history import HistoryStore
+from agent.runtime import AgentRuntime
 from agent.tools import build_tools
 from agent.types import AgentEvent, StreamFn
 from ai.openai.provider import stream_api
-from ai.types.conversation import UserMessage
 from ai.types.tools import ToolDefinition
 from settings import settings
 
@@ -40,26 +39,27 @@ async def run_prompt(
     stream_fn: StreamFn = stream_api,
     model: str | None = None,
     tools: Sequence[ToolDefinition] | None = None,
+    history_store: HistoryStore | None = None,
     cwd: Path | str | None = None,
     output: TextIO | None = None,
 ) -> None:
-    """Run one prompt through the stateless agent and write JSON event lines."""
+    """Run one prompt through a runtime session and write JSON event lines."""
 
     working_directory = _resolve_cwd(cwd)
     active_tools = (
         tuple(tools) if tools is not None else tuple(build_tools(working_directory))
     )
-    tool_executor = ToolExecutor(active_tools)
-    history = [UserMessage(content=prompt)]
-    event_output = output or sys.stdout
-
-    async for event in run_agent(
-        history,
+    runtime = AgentRuntime(
         stream_fn=stream_fn,
         model=model or settings.openai_model,
-        tool_executor=tool_executor,
+        history_store=history_store,
+        tools=active_tools,
         cwd=working_directory,
-    ):
+    )
+    session = runtime.session(name="local-runner")
+    event_output = output or sys.stdout
+
+    async for event in session.prompt(prompt):
         event_output.write(_serialize_event(event))
         event_output.write("\n")
 
