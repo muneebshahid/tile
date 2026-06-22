@@ -18,22 +18,22 @@ from agent.types import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-from ai.types.conversation import (
-    AssistantTurn,
-    ConversationItem,
-    ToolResultTurn,
-    UserMessage,
-)
+from ai.types.conversation import UserMessage
 from ai.types.stream_events import (
-    ProviderSource,
     ProviderStreamEvent,
-    StreamDoneEvent,
-    StreamStartEvent,
-    TextBlock,
-    ToolCallBlock,
 )
-from ai.types.tools import JsonObject, ToolDefinition, ToolResult
-from tests.support.agent_streams import StreamInvocation, build_stream_fn
+from ai.types.tools import ToolDefinition, ToolResult
+from tests.support.agent_streams import (
+    StreamInvocation,
+    build_stream_fn,
+    final_text_stream,
+    tool_call_stream,
+)
+from tests.support.conversation_assertions import (
+    expect_assistant_turn,
+    expect_tool_result_turn,
+    expect_user_message,
+)
 
 
 def _collect_prompt_events(
@@ -115,48 +115,6 @@ def _collect_until_tool_execution_end(
     return asyncio.run(_collect())
 
 
-def _final_text_stream(response_id: str, text: str) -> list[ProviderStreamEvent]:
-    """Build a minimal provider stream that completes with text."""
-
-    source = ProviderSource(provider="test", model="gpt-5.4")
-    return [
-        StreamStartEvent(source=source, response_id=response_id),
-        StreamDoneEvent(
-            source=source,
-            response_id=response_id,
-            stop_reason="stop",
-            blocks=[TextBlock(text=text)],
-        ),
-    ]
-
-
-def _tool_call_stream(
-    *,
-    response_id: str,
-    call_id: str,
-    tool_name: str,
-    arguments: JsonObject,
-) -> list[ProviderStreamEvent]:
-    """Build a minimal provider stream that requests one tool call."""
-
-    source = ProviderSource(provider="test", model="gpt-5.4")
-    return [
-        StreamStartEvent(source=source, response_id=response_id),
-        StreamDoneEvent(
-            source=source,
-            response_id=response_id,
-            stop_reason="tool_use",
-            blocks=[
-                ToolCallBlock(
-                    call_id=call_id,
-                    name=tool_name,
-                    arguments=arguments,
-                )
-            ],
-        ),
-    ]
-
-
 def _runtime_with_streams(
     streams: Sequence[Sequence[ProviderStreamEvent]],
     invocations: list[StreamInvocation],
@@ -167,27 +125,6 @@ def _runtime_with_streams(
 
     stream_fn: StreamFn = build_stream_fn(streams, invocations)
     return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4", tools=tools)
-
-
-def _expect_user_message(item: ConversationItem) -> UserMessage:
-    """Assert and return a user conversation item."""
-
-    assert isinstance(item, UserMessage)
-    return item
-
-
-def _expect_assistant_turn(item: ConversationItem) -> AssistantTurn:
-    """Assert and return an assistant conversation item."""
-
-    assert isinstance(item, AssistantTurn)
-    return item
-
-
-def _expect_tool_result_turn(item: ConversationItem) -> ToolResultTurn:
-    """Assert and return a tool result conversation item."""
-
-    assert isinstance(item, ToolResultTurn)
-    return item
 
 
 class FalsyHistoryStore(InMemoryHistoryStore):
@@ -257,7 +194,7 @@ def test_session_history_is_read_only_snapshot() -> None:
     store.append_history("snapshot", [user_message])
     user_message.content = "mutated original"
     history = session.history
-    first_item = _expect_user_message(history[0])
+    first_item = expect_user_message(history[0])
 
     assert isinstance(history, tuple)
     assert first_item.content == "hello"
@@ -295,7 +232,7 @@ def test_session_prompt_persists_assistant_turn_at_message_end() -> None:
 
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
-        [_final_text_stream("resp_one", "hello back")],
+        [final_text_stream("resp_one", "hello back")],
         invocations,
     )
     session = runtime.session(session_id="repo-debug", name="debug")
@@ -306,9 +243,9 @@ def test_session_prompt_persists_assistant_turn_at_message_end() -> None:
 
     agent_end = events[-1]
     assert isinstance(agent_end, MessageEndEvent)
-    assert _expect_user_message(session.history[0]).content == "hello"
-    assert _expect_assistant_turn(session.history[1]).response_id == "resp_one"
-    assert _expect_user_message(invocations[0].history[0]).content == "hello"
+    assert expect_user_message(session.history[0]).content == "hello"
+    assert expect_assistant_turn(session.history[1]).response_id == "resp_one"
+    assert expect_user_message(invocations[0].history[0]).content == "hello"
 
 
 def test_session_prompt_persists_agent_end_before_consumer_stops() -> None:
@@ -316,7 +253,7 @@ def test_session_prompt_persists_agent_end_before_consumer_stops() -> None:
 
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
-        [_final_text_stream("resp_one", "hello back")],
+        [final_text_stream("resp_one", "hello back")],
         invocations,
     )
     session = runtime.session(session_id="early-stop")
@@ -324,8 +261,8 @@ def test_session_prompt_persists_agent_end_before_consumer_stops() -> None:
     events = _collect_until_agent_end(session.id, runtime, "hello")
 
     assert isinstance(events[-1], AgentEndEvent)
-    assert _expect_user_message(session.history[0]).content == "hello"
-    assert _expect_assistant_turn(session.history[1]).response_id == "resp_one"
+    assert expect_user_message(session.history[0]).content == "hello"
+    assert expect_assistant_turn(session.history[1]).response_id == "resp_one"
 
 
 def test_session_prompt_replays_prior_history_on_next_prompt() -> None:
@@ -334,8 +271,8 @@ def test_session_prompt_replays_prior_history_on_next_prompt() -> None:
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
         [
-            _final_text_stream("resp_first", "first answer"),
-            _final_text_stream("resp_second", "second answer"),
+            final_text_stream("resp_first", "first answer"),
+            final_text_stream("resp_second", "second answer"),
         ],
         invocations,
     )
@@ -347,18 +284,18 @@ def test_session_prompt_replays_prior_history_on_next_prompt() -> None:
     first_invocation_history = invocations[0].history
     second_invocation_history = invocations[1].history
     assert len(first_invocation_history) == 1
-    assert _expect_user_message(first_invocation_history[0]).content == "first"
+    assert expect_user_message(first_invocation_history[0]).content == "first"
     assert len(second_invocation_history) == 3
-    assert _expect_user_message(second_invocation_history[0]).content == "first"
-    assert _expect_assistant_turn(second_invocation_history[1]).response_id == (
+    assert expect_user_message(second_invocation_history[0]).content == "first"
+    assert expect_assistant_turn(second_invocation_history[1]).response_id == (
         "resp_first"
     )
-    assert _expect_user_message(second_invocation_history[2]).content == "second"
+    assert expect_user_message(second_invocation_history[2]).content == "second"
     assert len(session.history) == 4
-    assert _expect_user_message(session.history[0]).content == "first"
-    assert _expect_assistant_turn(session.history[1]).response_id == "resp_first"
-    assert _expect_user_message(session.history[2]).content == "second"
-    assert _expect_assistant_turn(session.history[3]).response_id == "resp_second"
+    assert expect_user_message(session.history[0]).content == "first"
+    assert expect_assistant_turn(session.history[1]).response_id == "resp_first"
+    assert expect_user_message(session.history[2]).content == "second"
+    assert expect_assistant_turn(session.history[3]).response_id == "resp_second"
 
 
 def test_session_prompt_persists_tool_result_history() -> None:
@@ -367,14 +304,14 @@ def test_session_prompt_persists_tool_result_history() -> None:
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
         [
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_tool",
                 call_id="call_weather",
                 tool_name="get_weather",
                 arguments={"city": "Munich"},
             ),
-            _final_text_stream("resp_final", "Munich is sunny."),
-            _final_text_stream("resp_next", "I remember the tool result."),
+            final_text_stream("resp_final", "Munich is sunny."),
+            final_text_stream("resp_next", "I remember the tool result."),
         ],
         invocations,
         tools=_sample_tools(),
@@ -385,23 +322,23 @@ def test_session_prompt_persists_tool_result_history() -> None:
     _collect_prompt_events(runtime, session.id, "what happened?")
 
     assert len(session.history) == 6
-    assert _expect_user_message(session.history[0]).content == "check weather"
-    assert _expect_assistant_turn(session.history[1]).response_id == "resp_tool"
-    tool_result = _expect_tool_result_turn(session.history[2])
+    assert expect_user_message(session.history[0]).content == "check weather"
+    assert expect_assistant_turn(session.history[1]).response_id == "resp_tool"
+    tool_result = expect_tool_result_turn(session.history[2])
     assert tool_result.call_id == "call_weather"
     assert tool_result.tool_name == "get_weather"
     assert tool_result.is_error is False
-    assert _expect_assistant_turn(session.history[3]).response_id == "resp_final"
-    assert _expect_user_message(session.history[4]).content == "what happened?"
-    assert _expect_assistant_turn(session.history[5]).response_id == "resp_next"
-    assert _expect_tool_result_turn(invocations[1].history[2]).call_id == (
+    assert expect_assistant_turn(session.history[3]).response_id == "resp_final"
+    assert expect_user_message(session.history[4]).content == "what happened?"
+    assert expect_assistant_turn(session.history[5]).response_id == "resp_next"
+    assert expect_tool_result_turn(invocations[1].history[2]).call_id == (
         "call_weather"
     )
-    assert _expect_tool_result_turn(invocations[2].history[2]).tool_name == (
+    assert expect_tool_result_turn(invocations[2].history[2]).tool_name == (
         "get_weather"
     )
-    assert _expect_assistant_turn(invocations[2].history[3]).response_id == "resp_final"
-    assert _expect_user_message(invocations[2].history[4]).content == "what happened?"
+    assert expect_assistant_turn(invocations[2].history[3]).response_id == "resp_final"
+    assert expect_user_message(invocations[2].history[4]).content == "what happened?"
 
 
 def test_session_prompt_persists_tool_result_at_execution_end() -> None:
@@ -410,13 +347,13 @@ def test_session_prompt_persists_tool_result_at_execution_end() -> None:
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
         [
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_tool",
                 call_id="call_weather",
                 tool_name="get_weather",
                 arguments={"city": "Munich"},
             ),
-            _final_text_stream("resp_final", "Munich is sunny."),
+            final_text_stream("resp_final", "Munich is sunny."),
         ],
         invocations,
         tools=_sample_tools(),
@@ -428,9 +365,9 @@ def test_session_prompt_persists_tool_result_at_execution_end() -> None:
     tool_execution_end = events[-1]
     assert isinstance(tool_execution_end, ToolExecutionEndEvent)
     assert len(session.history) == 3
-    assert _expect_user_message(session.history[0]).content == "check weather"
-    assert _expect_assistant_turn(session.history[1]).response_id == "resp_tool"
-    assert _expect_tool_result_turn(session.history[2]).call_id == "call_weather"
+    assert expect_user_message(session.history[0]).content == "check weather"
+    assert expect_assistant_turn(session.history[1]).response_id == "resp_tool"
+    assert expect_tool_result_turn(session.history[2]).call_id == "call_weather"
     assert tool_execution_end.outcome.tool_result_turn == session.history[2]
 
 
@@ -440,8 +377,8 @@ def test_runtime_keeps_session_histories_independent() -> None:
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
         [
-            _final_text_stream("resp_repo", "repo answer"),
-            _final_text_stream("resp_docs", "docs answer"),
+            final_text_stream("resp_repo", "repo answer"),
+            final_text_stream("resp_docs", "docs answer"),
         ],
         invocations,
     )
@@ -451,12 +388,12 @@ def test_runtime_keeps_session_histories_independent() -> None:
     _collect_prompt_events(runtime, repo.id, "fix tests")
     _collect_prompt_events(runtime, docs.id, "update docs")
 
-    assert [_expect_user_message(repo.history[0]).content] == ["fix tests"]
-    assert [_expect_user_message(docs.history[0]).content] == ["update docs"]
-    assert _expect_assistant_turn(repo.history[1]).response_id == "resp_repo"
-    assert _expect_assistant_turn(docs.history[1]).response_id == "resp_docs"
-    assert _expect_user_message(invocations[0].history[0]).content == "fix tests"
-    assert _expect_user_message(invocations[1].history[0]).content == "update docs"
+    assert [expect_user_message(repo.history[0]).content] == ["fix tests"]
+    assert [expect_user_message(docs.history[0]).content] == ["update docs"]
+    assert expect_assistant_turn(repo.history[1]).response_id == "resp_repo"
+    assert expect_assistant_turn(docs.history[1]).response_id == "resp_docs"
+    assert expect_user_message(invocations[0].history[0]).content == "fix tests"
+    assert expect_user_message(invocations[1].history[0]).content == "update docs"
 
 
 def test_session_fork_copies_history_to_new_session() -> None:
@@ -464,7 +401,7 @@ def test_session_fork_copies_history_to_new_session() -> None:
 
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
-        [_final_text_stream("resp_first", "first answer")],
+        [final_text_stream("resp_first", "first answer")],
         invocations,
     )
     source = runtime.session(session_id="source", name="source session")
@@ -499,9 +436,9 @@ def test_session_fork_histories_diverge_independently() -> None:
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
         [
-            _final_text_stream("resp_first", "first answer"),
-            _final_text_stream("resp_source", "source answer"),
-            _final_text_stream("resp_fork", "fork answer"),
+            final_text_stream("resp_first", "first answer"),
+            final_text_stream("resp_source", "source answer"),
+            final_text_stream("resp_fork", "fork answer"),
         ],
         invocations,
     )
@@ -513,10 +450,10 @@ def test_session_fork_histories_diverge_independently() -> None:
     _collect_prompt_events(runtime, forked.id, "fork path")
 
     assert source.history[:2] == forked.history[:2]
-    assert _expect_user_message(source.history[2]).content == "source path"
-    assert _expect_user_message(forked.history[2]).content == "fork path"
-    assert _expect_assistant_turn(source.history[3]).response_id == "resp_source"
-    assert _expect_assistant_turn(forked.history[3]).response_id == "resp_fork"
+    assert expect_user_message(source.history[2]).content == "source path"
+    assert expect_user_message(forked.history[2]).content == "fork path"
+    assert expect_assistant_turn(source.history[3]).response_id == "resp_source"
+    assert expect_assistant_turn(forked.history[3]).response_id == "resp_fork"
     assert source.history != forked.history
 
 
@@ -525,7 +462,7 @@ def test_session_fork_history_copy_is_defensive() -> None:
 
     invocations: list[StreamInvocation] = []
     runtime = _runtime_with_streams(
-        [_final_text_stream("resp_first", "first answer")],
+        [final_text_stream("resp_first", "first answer")],
         invocations,
     )
     source = runtime.session(session_id="source")
@@ -534,11 +471,11 @@ def test_session_fork_history_copy_is_defensive() -> None:
     forked = source.fork(session_id="fork")
     source_snapshot = source.history
     fork_snapshot = forked.history
-    _expect_user_message(source_snapshot[0]).content = "mutated source snapshot"
-    _expect_user_message(fork_snapshot[0]).content = "mutated fork snapshot"
+    expect_user_message(source_snapshot[0]).content = "mutated source snapshot"
+    expect_user_message(fork_snapshot[0]).content = "mutated fork snapshot"
 
-    assert _expect_user_message(source.history[0]).content == "first"
-    assert _expect_user_message(forked.history[0]).content == "first"
+    assert expect_user_message(source.history[0]).content == "first"
+    assert expect_user_message(forked.history[0]).content == "first"
 
 
 def test_session_fork_rejects_duplicate_target_session_id() -> None:

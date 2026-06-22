@@ -29,46 +29,48 @@ from agent.types import (
 )
 from ai.types.contracts import Reasoning
 from ai.types.conversation import (
-    AssistantTurn,
     ConversationItem,
     ToolResultTurn,
     UserMessage,
 )
 from ai.types.stream_events import (
-    AssistantBlock,
-    ProviderMetadata,
-    ProviderSource,
-    ProviderStreamEvent,
     ReasoningBlock,
     ReasoningDeltaEvent,
     ReasoningEndEvent,
     ReasoningStartEvent,
-    StreamDoneEvent,
-    StreamErrorEvent,
-    StreamEvent,
-    StreamStartEvent,
-    StopReason,
     TextBlock,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
-    ToolCallBlock,
     ToolCallDeltaEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
 from ai.types.tools import (
-    JsonObject,
     ReadDetails,
     ToolDefinition,
     ToolOutputDetails,
     ToolResult,
     ToolTextContent,
 )
-from tests.support.agent_streams import StreamInvocation, build_stream_fn
+from tests.support.agent_streams import (
+    StreamInvocation,
+    build_stream_fn,
+    final_text_stream,
+    stream_done,
+    stream_error,
+    stream_start,
+    tool_call_block,
+    tool_call_stream,
+)
+from tests.support.conversation_assertions import (
+    expect_assistant_turn,
+    expect_tool_result_turn,
+    expect_user_message,
+)
+from tests.support.stream_assertions import expect_stream_event
 
 TEvent = TypeVar("TEvent", bound=AgentEvent)
-TStreamEvent = TypeVar("TStreamEvent", bound=StreamEvent)
 
 
 def _collect_run_events(
@@ -107,43 +109,6 @@ def _expect_event_type(event: AgentEvent, event_type: type[TEvent]) -> TEvent:
 
     assert isinstance(event, event_type)
     return event
-
-
-def _expect_stream_event_type(
-    event: StreamEvent, event_type: type[TStreamEvent]
-) -> TStreamEvent:
-    """Assert and return a stream event with a precise type."""
-
-    assert isinstance(event, event_type)
-    return event
-
-
-def _expect_user_message(item: ConversationItem) -> UserMessage:
-    """Assert and return a user conversation item."""
-
-    assert isinstance(item, UserMessage)
-    return item
-
-
-def _expect_assistant_turn(item: ConversationItem) -> AssistantTurn:
-    """Assert and return an assistant conversation item."""
-
-    assert isinstance(item, AssistantTurn)
-    return item
-
-
-def _expect_agent_assistant_turn(item: AssistantTurn) -> AssistantTurn:
-    """Assert and return an agent assistant turn."""
-
-    assert isinstance(item, AssistantTurn)
-    return item
-
-
-def _expect_tool_result_turn(item: ConversationItem) -> ToolResultTurn:
-    """Assert and return a tool result conversation item."""
-
-    assert isinstance(item, ToolResultTurn)
-    return item
 
 
 def _tool_text(result: ToolResult) -> str:
@@ -218,98 +183,6 @@ def _tool_output_details() -> ToolOutputDetails:
     )
 
 
-def _source() -> ProviderSource:
-    """Build a deterministic provider source for agent tests."""
-
-    return ProviderSource(provider="test", model="gpt-5.4")
-
-
-def _stream_start(response_id: str) -> StreamStartEvent:
-    """Build a deterministic stream started event."""
-
-    return StreamStartEvent(source=_source(), response_id=response_id)
-
-
-def _stream_done(
-    response_id: str,
-    *,
-    stop_reason: StopReason = "stop",
-    blocks: Sequence[AssistantBlock] = (),
-) -> StreamDoneEvent:
-    """Build a deterministic stream done event."""
-
-    return StreamDoneEvent(
-        source=_source(),
-        response_id=response_id,
-        stop_reason=stop_reason,
-        blocks=list(blocks),
-    )
-
-
-def _stream_error(response_id: str, error_message: str) -> StreamErrorEvent:
-    """Build a deterministic stream error event."""
-
-    return StreamErrorEvent(
-        source=_source(),
-        response_id=response_id,
-        error_message=error_message,
-    )
-
-
-def _tool_call_block(
-    *,
-    call_id: str,
-    name: str,
-    arguments: JsonObject,
-    provider_item_id: str | None = None,
-) -> ToolCallBlock:
-    """Build a tool call block with provider replay metadata."""
-
-    return ToolCallBlock(
-        call_id=call_id,
-        name=name,
-        arguments=arguments,
-        provider_metadata=ProviderMetadata.from_values(
-            provider_item_id=provider_item_id
-        ),
-    )
-
-
-def _tool_call_stream(
-    *,
-    response_id: str,
-    call_id: str,
-    tool_name: str,
-    arguments: JsonObject,
-) -> list[ProviderStreamEvent]:
-    """Build a minimal assistant stream that requests one tool call."""
-
-    return [
-        _stream_start(response_id),
-        _stream_done(
-            response_id,
-            stop_reason="tool_use",
-            blocks=[
-                _tool_call_block(
-                    call_id=call_id,
-                    name=tool_name,
-                    arguments=arguments,
-                    provider_item_id=f"fc_{call_id}",
-                )
-            ],
-        ),
-    ]
-
-
-def _final_text_stream(*, response_id: str, text: str) -> list[ProviderStreamEvent]:
-    """Build a minimal assistant stream that returns final text."""
-
-    return [
-        _stream_start(response_id),
-        _stream_done(response_id, blocks=[TextBlock(text=text)]),
-    ]
-
-
 def test_run_agent_does_not_mutate_supplied_history() -> None:
     """Keep caller-owned history unchanged while emitting stable events."""
 
@@ -317,8 +190,8 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
     stream_fn = build_stream_fn(
         streams=[
             [
-                _stream_start("resp_done"),
-                _stream_done("resp_done"),
+                stream_start("resp_done"),
+                stream_done("resp_done"),
             ]
         ],
         invocations=invocations,
@@ -339,7 +212,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     tools = _sample_tools()
     invocations: list[StreamInvocation] = []
     reasoning_block = ReasoningBlock(summary_text="Thinking about weather")
-    tool_call_block = _tool_call_block(
+    weather_tool_call_block = tool_call_block(
         call_id="call_123",
         name="get_weather",
         arguments={"city": "Munich"},
@@ -349,7 +222,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     stream_fn = build_stream_fn(
         streams=[
             [
-                _stream_start("resp_tool_call"),
+                stream_start("resp_tool_call"),
                 ReasoningStartEvent(content_index=0),
                 ReasoningDeltaEvent(
                     content_index=0,
@@ -370,16 +243,16 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
                 ),
                 ToolCallEndEvent(
                     content_index=1,
-                    block=tool_call_block,
+                    block=weather_tool_call_block,
                 ),
-                _stream_done(
+                stream_done(
                     "resp_tool_call",
                     stop_reason="tool_use",
-                    blocks=[tool_call_block],
+                    blocks=[weather_tool_call_block],
                 ),
             ],
             [
-                _stream_start("resp_follow_up"),
+                stream_start("resp_follow_up"),
                 TextStartEvent(
                     content_index=0,
                 ),
@@ -391,7 +264,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
                     content_index=0,
                     block=text_block,
                 ),
-                _stream_done("resp_follow_up", blocks=[text_block]),
+                stream_done("resp_follow_up", blocks=[text_block]),
             ],
         ],
         invocations=invocations,
@@ -446,10 +319,8 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     second_message_end = _expect_event_type(events[18], MessageEndEvent)
     second_turn_end = _expect_event_type(events[19], TurnEndEvent)
     _expect_event_type(events[20], AgentEndEvent)
-    first_final_message = _expect_agent_assistant_turn(first_message_end.assistant_turn)
-    second_final_message = _expect_agent_assistant_turn(
-        second_message_end.assistant_turn
-    )
+    first_final_message = first_message_end.assistant_turn
+    second_final_message = second_message_end.assistant_turn
 
     assert isinstance(events[0], AgentStartEvent)
     assert first_turn_start.type == "turn_start"
@@ -458,33 +329,29 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_reasoning_start.stream_event.content_index == 0
     assert first_reasoning_delta.stream_event.type == "reasoning_delta"
     assert (
-        _expect_stream_event_type(
+        expect_stream_event(
             first_reasoning_delta.stream_event, ReasoningDeltaEvent
         ).delta
         == "Thinking about weather"
     )
     assert first_reasoning_end.stream_event.type == "reasoning_end"
     assert (
-        _expect_stream_event_type(
-            first_reasoning_end.stream_event, ReasoningEndEvent
-        ).block
+        expect_stream_event(first_reasoning_end.stream_event, ReasoningEndEvent).block
         == reasoning_block
     )
     assert first_tool_call_start.stream_event.type == "tool_call_start"
     assert first_tool_call_start.stream_event.content_index == 1
     assert first_tool_call_delta.stream_event.type == "tool_call_delta"
     assert (
-        _expect_stream_event_type(
+        expect_stream_event(
             first_tool_call_delta.stream_event, ToolCallDeltaEvent
         ).delta
         == '{"city":"Munich"}'
     )
     assert first_tool_call_end.stream_event.type == "tool_call_end"
     assert (
-        _expect_stream_event_type(
-            first_tool_call_end.stream_event, ToolCallEndEvent
-        ).block
-        == tool_call_block
+        expect_stream_event(first_tool_call_end.stream_event, ToolCallEndEvent).block
+        == weather_tool_call_block
     )
     assert first_final_message.response_id == "resp_tool_call"
     assert first_final_message.stop_reason == "tool_use"
@@ -503,7 +370,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_turn_end.assistant_turn.response_id == "resp_tool_call"
     assert first_turn_end.assistant_turn.stop_reason == "tool_use"
     assert first_turn_end.assistant_turn.status == "completed"
-    assert first_turn_end.assistant_turn.blocks == [tool_call_block]
+    assert first_turn_end.assistant_turn.blocks == [weather_tool_call_block]
     first_turn_outcome = first_turn_end.tool_executions[0]
     assert first_turn_outcome.tool_result_turn.call_id == "call_123"
     assert first_turn_outcome.tool_result_turn.tool_name == "get_weather"
@@ -514,12 +381,12 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert second_text_start.stream_event.type == "text_start"
     assert second_text_start.stream_event.content_index == 0
     assert second_text_delta.stream_event.type == "text_delta"
-    assert _expect_stream_event_type(
+    assert expect_stream_event(
         second_text_delta.stream_event, TextDeltaEvent
     ).delta == ("It is sunny in Munich.")
     assert second_text_end.stream_event.type == "text_end"
     assert (
-        _expect_stream_event_type(second_text_end.stream_event, TextEndEvent).block
+        expect_stream_event(second_text_end.stream_event, TextEndEvent).block
         == text_block
     )
     assert second_final_message.response_id == "resp_follow_up"
@@ -534,9 +401,9 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert invocations[0].model == "gpt-5.4"
     assert invocations[0].tools == tuple(tools)
     assert invocations[1].tools == tuple(tools)
-    first_request_user = _expect_user_message(invocations[0].history[0])
-    second_request_assistant = _expect_assistant_turn(invocations[1].history[1])
-    second_request_tool_result = _expect_tool_result_turn(invocations[1].history[2])
+    first_request_user = expect_user_message(invocations[0].history[0])
+    second_request_assistant = expect_assistant_turn(invocations[1].history[1])
+    second_request_tool_result = expect_tool_result_turn(invocations[1].history[2])
     assert first_request_user.content == "What is the weather in Munich?"
     assert second_request_assistant.response_id == "resp_tool_call"
     assert second_request_tool_result.tool_name == "get_weather"
@@ -550,12 +417,12 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     stream_fn = build_stream_fn(
         streams=[
             [
-                _stream_start("resp_tool_call"),
-                _stream_done(
+                stream_start("resp_tool_call"),
+                stream_done(
                     "resp_tool_call",
                     stop_reason="tool_use",
                     blocks=[
-                        _tool_call_block(
+                        tool_call_block(
                             call_id="call_123",
                             name="get_weather",
                             arguments={"city": "Munich"},
@@ -565,8 +432,8 @@ def test_agent_run_executes_registered_tool_definition() -> None:
                 ),
             ],
             [
-                _stream_start("resp_follow_up"),
-                _stream_done("resp_follow_up"),
+                stream_start("resp_follow_up"),
+                stream_done("resp_follow_up"),
             ],
         ],
         invocations=invocations,
@@ -600,13 +467,14 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
     invocations: list[StreamInvocation] = []
     stream_fn = build_stream_fn(
         streams=[
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_tool_call",
                 call_id="call_read",
                 tool_name="read_file",
                 arguments={},
+                provider_item_id="fc_call_read",
             ),
-            _final_text_stream(
+            final_text_stream(
                 response_id="resp_follow_up",
                 text="I read the file.",
             ),
@@ -619,7 +487,7 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     turn_end = _expect_event_type(events[6], TurnEndEvent)
-    tool_result_turn = _expect_tool_result_turn(invocations[1].history[2])
+    tool_result_turn = expect_tool_result_turn(invocations[1].history[2])
     outcome = tool_execution_end.outcome
     turn_outcome = turn_end.tool_executions[0]
     assert outcome.details == ReadDetails(output=_tool_output_details())
@@ -646,13 +514,14 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
     invocations: list[StreamInvocation] = []
     stream_fn = build_stream_fn(
         streams=[
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_tool_call",
                 call_id="call_123",
                 tool_name="fail_weather",
                 arguments={"city": "Munich"},
+                provider_item_id="fc_call_123",
             ),
-            _final_text_stream(
+            final_text_stream(
                 response_id="resp_follow_up",
                 text="The tool failed.",
             ),
@@ -664,7 +533,7 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
     events = _collect_run_events(history, stream_fn=stream_fn, tools=[failing_tool])
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    second_request_tool_result = _expect_tool_result_turn(invocations[1].history[2])
+    second_request_tool_result = expect_tool_result_turn(invocations[1].history[2])
     _expect_event_type(events[-1], AgentEndEvent)
     assert tool_execution_end.outcome.tool_result_turn.is_error is True
     assert _tool_text(tool_execution_end.outcome.result) == "boom"
@@ -680,19 +549,21 @@ def test_agent_run_handles_multiple_tool_use_turns() -> None:
     invocations: list[StreamInvocation] = []
     stream_fn = build_stream_fn(
         streams=[
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_tool_call_1",
                 call_id="call_1",
                 tool_name="get_weather",
                 arguments={"city": "Munich"},
+                provider_item_id="fc_call_1",
             ),
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_tool_call_2",
                 call_id="call_2",
                 tool_name="get_weather",
                 arguments={"city": "Berlin"},
+                provider_item_id="fc_call_2",
             ),
-            _final_text_stream(response_id="resp_final", text="Both cities are sunny."),
+            final_text_stream(response_id="resp_final", text="Both cities are sunny."),
         ],
         invocations=invocations,
     )
@@ -704,14 +575,14 @@ def test_agent_run_handles_multiple_tool_use_turns() -> None:
     assert len(invocations) == 3
     assert len(invocations[1].history) == 3
     assert len(invocations[2].history) == 5
-    assert _expect_assistant_turn(invocations[2].history[1]).response_id == (
+    assert expect_assistant_turn(invocations[2].history[1]).response_id == (
         "resp_tool_call_1"
     )
-    assert _expect_tool_result_turn(invocations[2].history[2]).call_id == "call_1"
-    assert _expect_assistant_turn(invocations[2].history[3]).response_id == (
+    assert expect_tool_result_turn(invocations[2].history[2]).call_id == "call_1"
+    assert expect_assistant_turn(invocations[2].history[3]).response_id == (
         "resp_tool_call_2"
     )
-    assert _expect_tool_result_turn(invocations[2].history[4]).call_id == "call_2"
+    assert expect_tool_result_turn(invocations[2].history[4]).call_id == "call_2"
 
 
 def test_agent_includes_cwd_in_stream_instructions(tmp_path: Path) -> None:
@@ -721,8 +592,8 @@ def test_agent_includes_cwd_in_stream_instructions(tmp_path: Path) -> None:
     stream_fn = build_stream_fn(
         streams=[
             [
-                _stream_start("resp_done"),
-                _stream_done("resp_done"),
+                stream_start("resp_done"),
+                stream_done("resp_done"),
             ]
         ],
         invocations=invocations,
@@ -746,8 +617,8 @@ def test_agent_formats_cwd_prompt_variable(tmp_path: Path) -> None:
     stream_fn = build_stream_fn(
         streams=[
             [
-                _stream_start("resp_done"),
-                _stream_done("resp_done"),
+                stream_start("resp_done"),
+                stream_done("resp_done"),
             ]
         ],
         invocations=invocations,
@@ -771,8 +642,8 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     stream_fn = build_stream_fn(
         streams=[
             [
-                _stream_start("resp_error"),
-                _stream_error("resp_error", "Socket closed"),
+                stream_start("resp_error"),
+                stream_error("resp_error", "Socket closed"),
             ]
         ],
         invocations=invocations,
@@ -794,7 +665,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     message_end = _expect_event_type(events[3], MessageEndEvent)
     turn_end = _expect_event_type(events[4], TurnEndEvent)
     _expect_event_type(events[5], AgentEndEvent)
-    final_message = _expect_agent_assistant_turn(message_end.assistant_turn)
+    final_message = message_end.assistant_turn
 
     assert isinstance(events[0], AgentStartEvent)
     assert isinstance(events[1], TurnStartEvent)
@@ -807,5 +678,5 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     assert turn_end.assistant_turn.error_message == "Socket closed"
     assert turn_end.tool_executions == []
     assert len(invocations) == 1
-    first_request_user = _expect_user_message(invocations[0].history[0])
+    first_request_user = expect_user_message(invocations[0].history[0])
     assert first_request_user.content == "Say hello"

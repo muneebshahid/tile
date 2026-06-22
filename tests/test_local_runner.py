@@ -3,32 +3,26 @@
 import asyncio
 import io
 import json
-from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
 
 from agent.history import InMemoryHistoryStore
-from ai.types.conversation import (
-    AssistantTurn,
-    ConversationItem,
-    ToolResultTurn,
-    UserMessage,
-)
-from ai.types.stream_events import (
-    AssistantBlock,
-    ProviderSource,
-    ProviderStreamEvent,
-    StreamDoneEvent,
-    StreamStartEvent,
-    StopReason,
-    TextBlock,
-    ToolCallBlock,
-)
-from ai.types.tools import JsonObject, ToolTextContent
+from ai.types.conversation import ConversationItem
+from ai.types.tools import ToolTextContent
 from examples import local_runner
 from examples.local_runner import run_cli, run_prompt
-from tests.support.agent_streams import StreamInvocation, build_stream_fn
+from tests.support.agent_streams import (
+    StreamInvocation,
+    build_stream_fn,
+    final_text_stream,
+    tool_call_stream,
+)
+from tests.support.conversation_assertions import (
+    expect_assistant_turn,
+    expect_tool_result_turn,
+    expect_user_message,
+)
 
 
 def test_run_prompt_streams_runtime_tool_flow_as_json_lines(tmp_path: Path) -> None:
@@ -76,13 +70,13 @@ def _run_runtime_tool_flow(
     invocations: list[StreamInvocation] = []
     stream_fn = build_stream_fn(
         [
-            _tool_call_stream(
+            tool_call_stream(
                 response_id="resp_read",
                 call_id="call_read",
                 tool_name="read",
                 arguments={"path": "notes.txt"},
             ),
-            _final_text_stream(response_id="resp_final", text="The note says hello."),
+            final_text_stream(response_id="resp_final", text="The note says hello."),
         ],
         invocations,
     )
@@ -130,7 +124,7 @@ def _assert_provider_received_tool_result(
 
     assert len(invocations) == 2
     assert len(invocations[0].history) == 1
-    assert _expect_user_message(invocations[0].history[0]).content == "Read the note"
+    assert expect_user_message(invocations[0].history[0]).content == "Read the note"
     assert _expect_tool_text(invocations[1].history[2]) == ("hello from disk\n")
 
 
@@ -149,102 +143,15 @@ def _assert_runtime_persisted_completed_history(
         "tool_result",
         "assistant",
     ]
-    assert _expect_assistant_turn(history[1]).response_id == "resp_read"
-    assert _expect_tool_result_turn(history[2]).call_id == "call_read"
-    assert _expect_assistant_turn(history[3]).response_id == "resp_final"
-
-
-def _tool_call_stream(
-    *,
-    response_id: str,
-    call_id: str,
-    tool_name: str,
-    arguments: JsonObject,
-) -> list[ProviderStreamEvent]:
-    """Build a minimal provider stream that requests one tool call."""
-
-    return [
-        _start_event_with_response(response_id),
-        _stream_done(
-            response_id,
-            stop_reason="tool_use",
-            blocks=[
-                ToolCallBlock(
-                    call_id=call_id,
-                    name=tool_name,
-                    arguments=arguments,
-                )
-            ],
-        ),
-    ]
-
-
-def _final_text_stream(
-    *,
-    response_id: str,
-    text: str,
-) -> list[ProviderStreamEvent]:
-    """Build a minimal provider stream that returns final text."""
-
-    return [
-        _start_event_with_response(response_id),
-        _stream_done(response_id, blocks=[TextBlock(text=text)]),
-    ]
-
-
-def _start_event_with_response(response_id: str) -> StreamStartEvent:
-    """Build a deterministic stream start event for a response id."""
-
-    return StreamStartEvent(source=_source(), response_id=response_id)
-
-
-def _stream_done(
-    response_id: str,
-    *,
-    stop_reason: StopReason = "stop",
-    blocks: Sequence[AssistantBlock] = (),
-) -> StreamDoneEvent:
-    """Build a deterministic stream completion event."""
-
-    return StreamDoneEvent(
-        source=_source(),
-        response_id=response_id,
-        stop_reason=stop_reason,
-        blocks=list(blocks),
-    )
-
-
-def _source() -> ProviderSource:
-    """Build a deterministic provider source for runner tests."""
-
-    return ProviderSource(provider="test", model="gpt-5.4")
-
-
-def _expect_user_message(item: ConversationItem) -> UserMessage:
-    """Assert and return a user conversation item."""
-
-    assert isinstance(item, UserMessage)
-    return item
-
-
-def _expect_assistant_turn(item: ConversationItem) -> AssistantTurn:
-    """Assert and return an assistant conversation item."""
-
-    assert isinstance(item, AssistantTurn)
-    return item
-
-
-def _expect_tool_result_turn(item: ConversationItem) -> ToolResultTurn:
-    """Assert and return a tool result conversation item."""
-
-    assert isinstance(item, ToolResultTurn)
-    return item
+    assert expect_assistant_turn(history[1]).response_id == "resp_read"
+    assert expect_tool_result_turn(history[2]).call_id == "call_read"
+    assert expect_assistant_turn(history[3]).response_id == "resp_final"
 
 
 def _expect_tool_text(item: ConversationItem) -> str:
     """Assert and return the first text block from a tool result item."""
 
-    tool_result = _expect_tool_result_turn(item)
+    tool_result = expect_tool_result_turn(item)
     content = tool_result.content[0]
     assert isinstance(content, ToolTextContent)
     return content.text
