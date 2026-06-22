@@ -10,7 +10,7 @@ from agent.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from agent.runtime import AgentRuntime
+from agent.runtime import AgentRuntime, Session
 from agent.types import (
     AgentEndEvent,
     AgentEvent,
@@ -18,11 +18,13 @@ from agent.types import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-from ai.types.conversation import UserMessage
+from ai.types.contracts import AsyncEventStream, Reasoning
+from ai.types.conversation import ConversationItem, UserMessage
 from ai.types.stream_events import (
     ProviderStreamEvent,
 )
 from ai.types.tools import ToolDefinition, ToolResult
+from tests.support.async_streams import async_stream
 from tests.support.agent_streams import (
     StreamInvocation,
     build_stream_fn,
@@ -125,6 +127,67 @@ def _runtime_with_streams(
 
     stream_fn: StreamFn = build_stream_fn(streams, invocations)
     return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4", tools=tools)
+
+
+def _runtime_with_gated_streams(
+    releases: Sequence[asyncio.Event],
+    invocations: list[StreamInvocation],
+) -> AgentRuntime:
+    """Build a runtime whose provider streams wait for explicit release."""
+
+    stream_fn: StreamFn = _build_gated_stream_fn(releases, invocations)
+    return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4")
+
+
+def _build_gated_stream_fn(
+    releases: Sequence[asyncio.Event],
+    invocations: list[StreamInvocation],
+) -> StreamFn:
+    """Build a provider stream function that blocks each stream by index."""
+
+    async def _stream_fn(
+        history: Sequence[ConversationItem],
+        model: str,
+        *,
+        instructions: str,
+        reasoning: Reasoning | None,
+        tools: Sequence[ToolDefinition] | None,
+    ) -> AsyncEventStream:
+        """Record one provider invocation and wait to release its stream."""
+
+        index = len(invocations)
+        invocations.append(
+            StreamInvocation(
+                history=tuple(history),
+                model=model,
+                instructions=instructions,
+                reasoning=reasoning,
+                tools=tuple(tools) if tools is not None else None,
+            )
+        )
+        await releases[index].wait()
+        return async_stream(final_text_stream(f"resp_{index}", f"answer {index}"))
+
+    return _stream_fn
+
+
+async def _consume_prompt(session: Session, content: str) -> list[AgentEvent]:
+    """Collect every event from one session prompt."""
+
+    return [event async for event in session.prompt(content)]
+
+
+async def _wait_for_invocation_count(
+    invocations: list[StreamInvocation],
+    expected_count: int,
+) -> None:
+    """Wait briefly for async prompt work to reach a provider call."""
+
+    for _ in range(20):
+        if len(invocations) >= expected_count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"Expected {expected_count} provider invocation(s).")
 
 
 class FalsyHistoryStore(InMemoryHistoryStore):
@@ -296,6 +359,46 @@ def test_session_prompt_replays_prior_history_on_next_prompt() -> None:
     assert expect_assistant_turn(session.history[1]).response_id == "resp_first"
     assert expect_user_message(session.history[2]).content == "second"
     assert expect_assistant_turn(session.history[3]).response_id == "resp_second"
+
+
+def test_session_prompt_serializes_overlapping_same_session_prompts() -> None:
+    """Keep same-session prompts ordered when callers overlap."""
+
+    async def _run() -> None:
+        """Run overlapping prompts through one event loop."""
+
+        releases = [asyncio.Event(), asyncio.Event()]
+        invocations: list[StreamInvocation] = []
+        runtime = _runtime_with_gated_streams(releases, invocations)
+        session = runtime.session(session_id="overlap")
+
+        first_task = asyncio.create_task(_consume_prompt(session, "first"))
+        await _wait_for_invocation_count(invocations, 1)
+        second_task = asyncio.create_task(_consume_prompt(session, "second"))
+        await asyncio.sleep(0)
+
+        assert len(invocations) == 1
+        assert expect_user_message(session.history[0]).content == "first"
+        assert len(session.history) == 1
+
+        releases[0].set()
+        await _wait_for_invocation_count(invocations, 2)
+        second_request_history = invocations[1].history
+
+        assert len(second_request_history) == 3
+        assert expect_user_message(second_request_history[0]).content == "first"
+        assert expect_assistant_turn(second_request_history[1]).response_id == "resp_0"
+        assert expect_user_message(second_request_history[2]).content == "second"
+
+        releases[1].set()
+        await asyncio.gather(first_task, second_task)
+
+        assert expect_user_message(session.history[0]).content == "first"
+        assert expect_assistant_turn(session.history[1]).response_id == "resp_0"
+        assert expect_user_message(session.history[2]).content == "second"
+        assert expect_assistant_turn(session.history[3]).response_id == "resp_1"
+
+    asyncio.run(_run())
 
 
 def test_session_prompt_persists_tool_result_history() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,7 @@ class AgentRuntime:
         self._reasoning = reasoning
         self._system_prompt = system_prompt
         self._cwd = cwd
+        self._prompt_locks: dict[str, asyncio.Lock] = {}
 
     @property
     def sessions(self) -> tuple[Session, ...]:
@@ -99,19 +101,29 @@ class AgentRuntime:
     ) -> AsyncIterator[AgentEvent]:
         """Run one prompt in a session and persist completed items."""
 
-        self._append_user_message(session_id, content)
+        async with self._lock_for_session(session_id):
+            self._append_user_message(session_id, content)
 
-        async for event in run_agent(
-            self._history_store.get_history(session_id),
-            stream_fn=self._stream_fn,
-            model=self._model,
-            tool_executor=self._tool_executor,
-            reasoning=self._reasoning,
-            system_prompt=self._system_prompt,
-            cwd=self._cwd,
-        ):
-            self._persist_stable_event(session_id, event)
-            yield event
+            async for event in run_agent(
+                self._history_store.get_history(session_id),
+                stream_fn=self._stream_fn,
+                model=self._model,
+                tool_executor=self._tool_executor,
+                reasoning=self._reasoning,
+                system_prompt=self._system_prompt,
+                cwd=self._cwd,
+            ):
+                self._persist_stable_event(session_id, event)
+                yield event
+
+    def _lock_for_session(self, session_id: str) -> asyncio.Lock:
+        """Return the runtime-only prompt lock for a session."""
+
+        lock = self._prompt_locks.get(session_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._prompt_locks[session_id] = lock
+        return lock
 
     def _append_user_message(self, session_id: str, content: str) -> None:
         """Persist a user message before provider execution starts."""
