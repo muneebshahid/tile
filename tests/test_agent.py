@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TypeVar
 
 from agent.agent import run_agent
+from agent.tool_executor import ToolExecutor
 from agent.types import (
     AgentEndEvent,
     AgentEvent,
@@ -91,8 +92,8 @@ def _collect_run_events(
                 history,
                 stream_fn=stream_fn,
                 model=model,
+                tool_executor=ToolExecutor(tools),
                 reasoning=reasoning,
-                tools=tools,
                 system_prompt=system_prompt,
                 cwd=cwd,
             )

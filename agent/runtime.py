@@ -13,6 +13,7 @@ from ai.types.tools import ToolDefinition
 from agent.agent import run_agent
 from agent.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from agent.prompt import PROMPT
+from agent.tool_executor import ToolExecutor
 from agent.types import AgentEvent, MessageEndEvent, StreamFn, ToolExecutionEndEvent
 
 
@@ -37,7 +38,7 @@ class AgentRuntime:
         self._history_store = (
             history_store if history_store is not None else InMemoryHistoryStore()
         )
-        self._tools = tuple(tools)
+        self._tool_executor = ToolExecutor(tools)
         self._reasoning = reasoning
         self._system_prompt = system_prompt
         self._cwd = cwd
@@ -104,8 +105,8 @@ class AgentRuntime:
             self._history_store.get_history(session_id),
             stream_fn=self._stream_fn,
             model=self._model,
+            tool_executor=self._tool_executor,
             reasoning=self._reasoning,
-            tools=self._tools,
             system_prompt=self._system_prompt,
             cwd=self._cwd,
         ):

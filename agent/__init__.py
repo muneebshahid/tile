@@ -7,6 +7,7 @@ from agent.history import (
     SessionRecord,
 )
 from agent.runtime import AgentRuntime, Session
+from agent.tool_executor import ToolExecutionRequest, ToolExecutor
 
 __all__ = [
     "AgentRuntime",
@@ -15,4 +16,6 @@ __all__ = [
     "Session",
     "SessionAlreadyExistsError",
     "SessionRecord",
+    "ToolExecutionRequest",
+    "ToolExecutor",
 ]

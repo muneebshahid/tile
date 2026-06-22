@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TextIO
 
 from agent.agent import run_agent
+from agent.tool_executor import ToolExecutor
 from agent.tools import build_tools
 from agent.types import AgentEvent, StreamFn
 from ai.openai.provider import stream_api
@@ -48,6 +49,7 @@ async def run_prompt(
     active_tools = (
         tuple(tools) if tools is not None else tuple(build_tools(working_directory))
     )
+    tool_executor = ToolExecutor(active_tools)
     history = [UserMessage(content=prompt)]
     event_output = output or sys.stdout
 
@@ -55,7 +57,7 @@ async def run_prompt(
         history,
         stream_fn=stream_fn,
         model=model or settings.openai_model,
-        tools=active_tools,
+        tool_executor=tool_executor,
         cwd=working_directory,
     ):
         event_output.write(_serialize_event(event))

@@ -22,8 +22,9 @@ from ai.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from ai.types.tools import JsonObject, ToolDefinition, ToolFunction, ToolResult
+from ai.types.tools import JsonObject
 from agent.prompt import PROMPT, build_system_prompt
+from agent.tool_executor import ToolExecutionRequest, ToolExecutor
 from agent.types import (
     AgentEndEvent,
     AgentEvent,
@@ -57,8 +58,8 @@ async def run_agent(
     *,
     stream_fn: StreamFn,
     model: str,
+    tool_executor: ToolExecutor,
     reasoning: Reasoning | None = None,
-    tools: Sequence[ToolDefinition] = (),
     system_prompt: str = PROMPT,
     cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
@@ -74,7 +75,7 @@ async def run_agent(
         model=model,
         instructions=instructions,
         reasoning=reasoning,
-        tools=tuple(tools),
+        tool_executor=tool_executor,
     ):
         yield event
     yield AgentEndEvent()
@@ -87,7 +88,7 @@ async def _run_agent_loop(
     model: str,
     instructions: str,
     reasoning: Reasoning | None,
-    tools: tuple[ToolDefinition, ...],
+    tool_executor: ToolExecutor,
 ) -> AsyncIterator[AgentEvent]:
     """Call the provider until the assistant stops requesting tools."""
 
@@ -98,14 +99,14 @@ async def _run_agent_loop(
             model,
             instructions=instructions,
             reasoning=reasoning,
-            tools=tools,
+            tools=tool_executor.tools,
         )
 
         async for event in stream:
             async for agent_event in _handle_stream_event(
                 event,
                 run_history=run_history,
-                tools=tools,
+                tool_executor=tool_executor,
             ):
                 if (
                     isinstance(agent_event, TurnEndEvent)
@@ -122,7 +123,7 @@ async def _handle_stream_event(
     event: ProviderStreamEvent,
     *,
     run_history: list[ConversationItem],
-    tools: tuple[ToolDefinition, ...],
+    tool_executor: ToolExecutor,
 ) -> AsyncIterator[AgentEvent]:
     """Route one provider stream event into agent-level events."""
 
@@ -134,7 +135,7 @@ async def _handle_stream_event(
             async for agent_event in _handle_stream_done_event(
                 event,
                 run_history=run_history,
-                tools=tools,
+                tool_executor=tool_executor,
             ):
                 yield agent_event
         case StreamErrorEvent():
@@ -151,7 +152,7 @@ async def _handle_stream_done_event(
     event: StreamDoneEvent,
     *,
     run_history: list[ConversationItem],
-    tools: tuple[ToolDefinition, ...],
+    tool_executor: ToolExecutor,
 ) -> AsyncIterator[AgentEvent]:
     """Finalize an assistant message and execute requested tools."""
 
@@ -165,7 +166,7 @@ async def _handle_stream_done_event(
             call_id=tool_call.call_id,
             tool_name=tool_call.name,
             arguments=tool_call.arguments,
-            tools=tools,
+            tool_executor=tool_executor,
         ):
             if isinstance(agent_event, ToolExecutionEndEvent):
                 outcome = agent_event.outcome
@@ -194,7 +195,7 @@ async def _execute_tool(
     call_id: str,
     tool_name: str,
     arguments: JsonObject,
-    tools: tuple[ToolDefinition, ...],
+    tool_executor: ToolExecutor,
 ) -> AsyncIterator[AgentEvent]:
     """Emit the full lifecycle for one tool execution."""
 
@@ -204,43 +205,14 @@ async def _execute_tool(
         arguments=arguments,
     )
 
-    result, is_error = await _call_tool(tool_name, arguments, tools)
-    outcome = ToolExecutionOutcome.from_result(
-        call_id=call_id,
-        tool_name=tool_name,
-        result=result,
-        is_error=is_error,
+    outcome = await tool_executor.execute(
+        ToolExecutionRequest(
+            call_id=call_id,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
     )
     yield ToolExecutionEndEvent(outcome=outcome)
-
-
-async def _call_tool(
-    tool_name: str,
-    arguments: JsonObject,
-    tools: tuple[ToolDefinition, ...],
-) -> tuple[ToolResult, bool]:
-    """Resolve and call a tool while normalizing tool failures."""
-
-    try:
-        tool = _get_tool(tool_name, tools)
-        if tool is None:
-            return ToolResult.text(f"Tool '{tool_name}' not found"), True
-        return await tool(**arguments), False
-    except Exception as error:
-        return ToolResult.text(str(error)), True
-
-
-def _get_tool(
-    tool_name: str,
-    tools: tuple[ToolDefinition, ...],
-) -> ToolFunction | None:
-    """Find a registered tool implementation by name."""
-
-    normalized_tool_name = tool_name.lower().strip()
-    for tool in tools:
-        if tool.name == normalized_tool_name:
-            return tool.fn
-    return None
 
 
 def _resolve_cwd(cwd: Path | str | None) -> Path:
