@@ -180,72 +180,8 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
 
 
 def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
-    raw_events: list[SubscriptionEventPayload] = [
-        {
-            "type": "response.created",
-            "response": {"id": "resp_subscription"},
-        },
-        {
-            "type": "response.output_item.added",
-            "item": {
-                "id": "msg_subscription",
-                "type": "message",
-                "status": "in_progress",
-                "role": "assistant",
-                "content": [],
-            },
-        },
-        {
-            "type": "response.content_part.added",
-            "item_id": "msg_subscription",
-            "part": {
-                "type": "output_text",
-                "text": "",
-                "annotations": [],
-            },
-        },
-        {
-            "type": "response.output_text.delta",
-            "item_id": "msg_subscription",
-            "delta": "Hello from subscription",
-        },
-        {
-            "type": "response.output_item.done",
-            "item": {
-                "id": "msg_subscription",
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": "Hello from subscription",
-                        "annotations": [],
-                    }
-                ],
-            },
-        },
-        {
-            "type": "response.completed",
-            "response": {
-                "id": "resp_subscription",
-                "status": "completed",
-                "output": [],
-            },
-        },
-    ]
+    events = _collect_subscription_events(_subscription_text_payloads())
 
-    async def _collect() -> list[ProviderStreamEvent]:
-        event_stream = await stream_subscription(
-            history=[UserMessage(content="hello")],
-            model="gpt-5.4",
-            reasoning={"effort": "medium"},
-            instructions="Follow the repo conventions.",
-            raw_stream=async_stream(raw_events),
-        )
-        return [event async for event in event_stream]
-
-    events = asyncio.run(_collect())
     start = _expect_event_type(events[0], StreamStartEvent)
     text_start = _expect_event_type(events[1], TextStartEvent)
     text_delta = _expect_event_type(events[2], TextDeltaEvent)
@@ -264,6 +200,68 @@ def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
     assert text_delta.delta == "Hello from subscription"
     assert _expect_text_block(text_end.block).text == "Hello from subscription"
     assert done.response_id == "resp_subscription"
+
+
+def _subscription_text_payloads() -> list[SubscriptionEventPayload]:
+    """Build the minimal raw subscription payloads for a final text response."""
+
+    raw_events: list[SubscriptionEventPayload] = [
+        {
+            "type": "response.created",
+            "response": {"id": "resp_subscription"},
+        },
+        {
+            "type": "response.output_item.added",
+            "item": {
+                "id": "msg_subscription",
+                "type": "message",
+            },
+        },
+        {
+            "type": "response.content_part.added",
+            "part": {"type": "output_text"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "delta": "Hello from subscription",
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "id": "msg_subscription",
+                "type": "message",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hello from subscription",
+                    }
+                ],
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {"output": []},
+        },
+    ]
+    return raw_events
+
+
+def _collect_subscription_events(
+    raw_events: Sequence[SubscriptionEventPayload],
+) -> list[ProviderStreamEvent]:
+    """Collect provider stream events from raw subscription payloads."""
+
+    async def _collect() -> list[ProviderStreamEvent]:
+        event_stream = await stream_subscription(
+            history=[UserMessage(content="hello")],
+            model="gpt-5.4",
+            reasoning={"effort": "medium"},
+            instructions="Follow the repo conventions.",
+            raw_stream=async_stream(raw_events),
+        )
+        return [event async for event in event_stream]
+
+    return asyncio.run(_collect())
 
 
 def test_stream_subscription_raises_until_transport_is_implemented() -> None:
