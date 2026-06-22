@@ -9,6 +9,7 @@ or ``error``, and executes tools before starting a follow-up assistant turn.
 import asyncio
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
@@ -38,10 +39,12 @@ from ai.types.stream_events import (
     ReasoningDeltaEvent,
     ReasoningEndEvent,
     ReasoningStartEvent,
+    ProviderStreamEvent,
     TextBlock,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
+    ToolCallBlock,
     ToolCallDeltaEvent,
     ToolCallEndEvent,
     ToolCallStartEvent,
@@ -71,6 +74,18 @@ from tests.support.conversation_assertions import (
 from tests.support.stream_assertions import expect_stream_event
 
 TEvent = TypeVar("TEvent", bound=AgentEvent)
+
+
+@dataclass(frozen=True)
+class ToolUseLoopRun:
+    """Captured events and expected blocks for the weather tool-loop scenario."""
+
+    events: list[AgentEvent]
+    invocations: list[StreamInvocation]
+    tools: list[ToolDefinition]
+    reasoning_block: ReasoningBlock
+    tool_call_block: ToolCallBlock
+    text_block: TextBlock
 
 
 def _collect_run_events(
@@ -183,6 +198,81 @@ def _tool_output_details() -> ToolOutputDetails:
     )
 
 
+def _collect_weather_tool_loop_run() -> ToolUseLoopRun:
+    """Run a two-turn weather tool loop and capture its observable state."""
+
+    tools = _sample_tools()
+    invocations: list[StreamInvocation] = []
+    reasoning_block = ReasoningBlock(summary_text="Thinking about weather")
+    weather_tool_call_block = tool_call_block(
+        call_id="call_123",
+        name="get_weather",
+        arguments={"city": "Munich"},
+        provider_item_id="fc_123",
+    )
+    text_block = TextBlock(text="It is sunny in Munich.")
+    stream_fn = build_stream_fn(
+        streams=[
+            _weather_tool_call_stream(reasoning_block, weather_tool_call_block),
+            _weather_follow_up_stream(text_block),
+        ],
+        invocations=invocations,
+    )
+    history: list[ConversationItem] = [
+        UserMessage(content="What is the weather in Munich?")
+    ]
+
+    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
+    return ToolUseLoopRun(
+        events=events,
+        invocations=invocations,
+        tools=tools,
+        reasoning_block=reasoning_block,
+        tool_call_block=weather_tool_call_block,
+        text_block=text_block,
+    )
+
+
+def _weather_tool_call_stream(
+    reasoning_block: ReasoningBlock,
+    weather_tool_call_block: ToolCallBlock,
+) -> list[ProviderStreamEvent]:
+    """Build a provider stream that requests the weather tool with deltas."""
+
+    return [
+        stream_start("resp_tool_call"),
+        ReasoningStartEvent(content_index=0),
+        ReasoningDeltaEvent(content_index=0, delta="Thinking about weather"),
+        ReasoningEndEvent(content_index=0, block=reasoning_block),
+        ToolCallStartEvent(
+            content_index=1,
+            call_id="call_123",
+            name="get_weather",
+        ),
+        ToolCallDeltaEvent(content_index=1, delta='{"city":"Munich"}'),
+        ToolCallEndEvent(content_index=1, block=weather_tool_call_block),
+        stream_done(
+            "resp_tool_call",
+            stop_reason="tool_use",
+            blocks=[weather_tool_call_block],
+        ),
+    ]
+
+
+def _weather_follow_up_stream(
+    text_block: TextBlock,
+) -> list[ProviderStreamEvent]:
+    """Build a provider stream that answers after tool execution."""
+
+    return [
+        stream_start("resp_follow_up"),
+        TextStartEvent(content_index=0),
+        TextDeltaEvent(content_index=0, delta="It is sunny in Munich."),
+        TextEndEvent(content_index=0, block=text_block),
+        stream_done("resp_follow_up", blocks=[text_block]),
+    ]
+
+
 def test_run_agent_does_not_mutate_supplied_history() -> None:
     """Keep caller-owned history unchanged while emitting stable events."""
 
@@ -206,76 +296,12 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
     assert message_end.assistant_turn.response_id == "resp_done"
 
 
-def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
-    """Emit stream and tool events while carrying history into follow-up turns."""
+def test_agent_run_yields_expected_event_sequence_for_tool_use_loop() -> None:
+    """Emit the expected event sequence for a tool-use loop."""
 
-    tools = _sample_tools()
-    invocations: list[StreamInvocation] = []
-    reasoning_block = ReasoningBlock(summary_text="Thinking about weather")
-    weather_tool_call_block = tool_call_block(
-        call_id="call_123",
-        name="get_weather",
-        arguments={"city": "Munich"},
-        provider_item_id="fc_123",
-    )
-    text_block = TextBlock(text="It is sunny in Munich.")
-    stream_fn = build_stream_fn(
-        streams=[
-            [
-                stream_start("resp_tool_call"),
-                ReasoningStartEvent(content_index=0),
-                ReasoningDeltaEvent(
-                    content_index=0,
-                    delta="Thinking about weather",
-                ),
-                ReasoningEndEvent(
-                    content_index=0,
-                    block=reasoning_block,
-                ),
-                ToolCallStartEvent(
-                    content_index=1,
-                    call_id="call_123",
-                    name="get_weather",
-                ),
-                ToolCallDeltaEvent(
-                    content_index=1,
-                    delta='{"city":"Munich"}',
-                ),
-                ToolCallEndEvent(
-                    content_index=1,
-                    block=weather_tool_call_block,
-                ),
-                stream_done(
-                    "resp_tool_call",
-                    stop_reason="tool_use",
-                    blocks=[weather_tool_call_block],
-                ),
-            ],
-            [
-                stream_start("resp_follow_up"),
-                TextStartEvent(
-                    content_index=0,
-                ),
-                TextDeltaEvent(
-                    content_index=0,
-                    delta="It is sunny in Munich.",
-                ),
-                TextEndEvent(
-                    content_index=0,
-                    block=text_block,
-                ),
-                stream_done("resp_follow_up", blocks=[text_block]),
-            ],
-        ],
-        invocations=invocations,
-    )
-    history: list[ConversationItem] = [
-        UserMessage(content="What is the weather in Munich?")
-    ]
+    run = _collect_weather_tool_loop_run()
 
-    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
-
-    assert [event.type for event in events] == [
+    assert [event.type for event in run.events] == [
         "agent_start",
         "turn_start",
         "message_start",
@@ -299,7 +325,13 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         "agent_end",
     ]
 
-    first_turn_start = _expect_event_type(events[1], TurnStartEvent)
+
+def test_agent_run_yields_current_tool_use_stream_events() -> None:
+    """Forward first-turn reasoning and tool-call stream events."""
+
+    run = _collect_weather_tool_loop_run()
+    events = run.events
+
     first_message_start = _expect_event_type(events[2], MessageStartEvent)
     first_reasoning_start = _expect_event_type(events[3], MessageUpdateEvent)
     first_reasoning_delta = _expect_event_type(events[4], MessageUpdateEvent)
@@ -307,23 +339,8 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     first_tool_call_start = _expect_event_type(events[6], MessageUpdateEvent)
     first_tool_call_delta = _expect_event_type(events[7], MessageUpdateEvent)
     first_tool_call_end = _expect_event_type(events[8], MessageUpdateEvent)
-    first_message_end = _expect_event_type(events[9], MessageEndEvent)
-    tool_execution_start = _expect_event_type(events[10], ToolExecutionStartEvent)
-    tool_execution_end = _expect_event_type(events[11], ToolExecutionEndEvent)
-    first_turn_end = _expect_event_type(events[12], TurnEndEvent)
-    second_turn_start = _expect_event_type(events[13], TurnStartEvent)
-    second_message_start = _expect_event_type(events[14], MessageStartEvent)
-    second_text_start = _expect_event_type(events[15], MessageUpdateEvent)
-    second_text_delta = _expect_event_type(events[16], MessageUpdateEvent)
-    second_text_end = _expect_event_type(events[17], MessageUpdateEvent)
-    second_message_end = _expect_event_type(events[18], MessageEndEvent)
-    second_turn_end = _expect_event_type(events[19], TurnEndEvent)
-    _expect_event_type(events[20], AgentEndEvent)
-    first_final_message = first_message_end.assistant_turn
-    second_final_message = second_message_end.assistant_turn
-
     assert isinstance(events[0], AgentStartEvent)
-    assert first_turn_start.type == "turn_start"
+    assert isinstance(events[1], TurnStartEvent)
     assert first_message_start.response_id == "resp_tool_call"
     assert first_reasoning_start.stream_event.type == "reasoning_start"
     assert first_reasoning_start.stream_event.content_index == 0
@@ -337,7 +354,7 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_reasoning_end.stream_event.type == "reasoning_end"
     assert (
         expect_stream_event(first_reasoning_end.stream_event, ReasoningEndEvent).block
-        == reasoning_block
+        == run.reasoning_block
     )
     assert first_tool_call_start.stream_event.type == "tool_call_start"
     assert first_tool_call_start.stream_event.content_index == 1
@@ -351,8 +368,48 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_tool_call_end.stream_event.type == "tool_call_end"
     assert (
         expect_stream_event(first_tool_call_end.stream_event, ToolCallEndEvent).block
-        == weather_tool_call_block
+        == run.tool_call_block
     )
+
+
+def test_agent_run_yields_current_follow_up_stream_events() -> None:
+    """Forward second-turn text stream events after tool execution."""
+
+    run = _collect_weather_tool_loop_run()
+    events = run.events
+
+    second_message_start = _expect_event_type(events[14], MessageStartEvent)
+    second_text_start = _expect_event_type(events[15], MessageUpdateEvent)
+    second_text_delta = _expect_event_type(events[16], MessageUpdateEvent)
+    second_text_end = _expect_event_type(events[17], MessageUpdateEvent)
+    _expect_event_type(events[20], AgentEndEvent)
+
+    assert isinstance(events[13], TurnStartEvent)
+    assert second_message_start.response_id == "resp_follow_up"
+    assert second_text_start.stream_event.type == "text_start"
+    assert second_text_start.stream_event.content_index == 0
+    assert second_text_delta.stream_event.type == "text_delta"
+    assert expect_stream_event(
+        second_text_delta.stream_event, TextDeltaEvent
+    ).delta == ("It is sunny in Munich.")
+    assert second_text_end.stream_event.type == "text_end"
+    assert expect_stream_event(second_text_end.stream_event, TextEndEvent).block == (
+        run.text_block
+    )
+
+
+def test_agent_run_emits_tool_execution_outcome_for_tool_use_loop() -> None:
+    """Emit tool execution details and attach them to the completed turn."""
+
+    run = _collect_weather_tool_loop_run()
+    events = run.events
+
+    first_message_end = _expect_event_type(events[9], MessageEndEvent)
+    tool_execution_start = _expect_event_type(events[10], ToolExecutionStartEvent)
+    tool_execution_end = _expect_event_type(events[11], ToolExecutionEndEvent)
+    first_turn_end = _expect_event_type(events[12], TurnEndEvent)
+    first_final_message = first_message_end.assistant_turn
+
     assert first_final_message.response_id == "resp_tool_call"
     assert first_final_message.stop_reason == "tool_use"
     assert tool_execution_start.call_id == "call_123"
@@ -370,25 +427,24 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
     assert first_turn_end.assistant_turn.response_id == "resp_tool_call"
     assert first_turn_end.assistant_turn.stop_reason == "tool_use"
     assert first_turn_end.assistant_turn.status == "completed"
-    assert first_turn_end.assistant_turn.blocks == [weather_tool_call_block]
+    assert first_turn_end.assistant_turn.blocks == [run.tool_call_block]
     first_turn_outcome = first_turn_end.tool_executions[0]
     assert first_turn_outcome.tool_result_turn.call_id == "call_123"
     assert first_turn_outcome.tool_result_turn.tool_name == "get_weather"
     assert first_turn_outcome.result.content == tool_execution_outcome.result.content
     assert first_turn_outcome.tool_result_turn.is_error is False
-    assert second_turn_start.type == "turn_start"
-    assert second_message_start.response_id == "resp_follow_up"
-    assert second_text_start.stream_event.type == "text_start"
-    assert second_text_start.stream_event.content_index == 0
-    assert second_text_delta.stream_event.type == "text_delta"
-    assert expect_stream_event(
-        second_text_delta.stream_event, TextDeltaEvent
-    ).delta == ("It is sunny in Munich.")
-    assert second_text_end.stream_event.type == "text_end"
-    assert (
-        expect_stream_event(second_text_end.stream_event, TextEndEvent).block
-        == text_block
-    )
+
+
+def test_agent_run_sends_tool_result_history_to_follow_up_turn() -> None:
+    """Send assistant and tool result turns into the follow-up model request."""
+
+    run = _collect_weather_tool_loop_run()
+    events = run.events
+
+    second_message_end = _expect_event_type(events[18], MessageEndEvent)
+    second_turn_end = _expect_event_type(events[19], TurnEndEvent)
+    second_final_message = second_message_end.assistant_turn
+
     assert second_final_message.response_id == "resp_follow_up"
     assert second_final_message.stop_reason == "stop"
     assert second_turn_end.assistant_turn.response_id == "resp_follow_up"
@@ -397,13 +453,13 @@ def test_agent_run_yields_current_events_for_tool_use_loop() -> None:
         TextBlock(text="It is sunny in Munich.")
     ]
     assert second_turn_end.tool_executions == []
-    assert len(invocations) == 2
-    assert invocations[0].model == "gpt-5.4"
-    assert invocations[0].tools == tuple(tools)
-    assert invocations[1].tools == tuple(tools)
-    first_request_user = expect_user_message(invocations[0].history[0])
-    second_request_assistant = expect_assistant_turn(invocations[1].history[1])
-    second_request_tool_result = expect_tool_result_turn(invocations[1].history[2])
+    assert len(run.invocations) == 2
+    assert run.invocations[0].model == "gpt-5.4"
+    assert run.invocations[0].tools == tuple(run.tools)
+    assert run.invocations[1].tools == tuple(run.tools)
+    first_request_user = expect_user_message(run.invocations[0].history[0])
+    second_request_assistant = expect_assistant_turn(run.invocations[1].history[1])
+    second_request_tool_result = expect_tool_result_turn(run.invocations[1].history[2])
     assert first_request_user.content == "What is the weather in Munich?"
     assert second_request_assistant.response_id == "resp_tool_call"
     assert second_request_tool_result.tool_name == "get_weather"
