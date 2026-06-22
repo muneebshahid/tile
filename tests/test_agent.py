@@ -641,8 +641,10 @@ def test_agent_run_handles_multiple_tool_use_turns() -> None:
     assert expect_tool_result_turn(invocations[2].history[4]).call_id == "call_2"
 
 
-def test_agent_includes_cwd_in_stream_instructions(tmp_path: Path) -> None:
-    """Add the agent working directory to model instructions."""
+def test_agent_leaves_instructions_unchanged_without_cwd_variable(
+    tmp_path: Path,
+) -> None:
+    """Do not append the working directory unless the prompt requests it."""
 
     invocations: list[StreamInvocation] = []
     stream_fn = build_stream_fn(
