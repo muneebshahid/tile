@@ -1,7 +1,6 @@
 """Runtime and session facade for the stateless agent runner."""
 
 from __future__ import annotations
-
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +14,10 @@ from agent.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from agent.prompt import PROMPT
 from agent.tool_executor import ToolExecutor
 from agent.types import AgentEvent, MessageEndEvent, StreamFn, ToolExecutionEndEvent
+
+
+class SessionBusyError(RuntimeError):
+    """Raised when a prompt starts while the same session is already active."""
 
 
 class AgentRuntime:
@@ -42,6 +45,7 @@ class AgentRuntime:
         self._reasoning = reasoning
         self._system_prompt = system_prompt
         self._cwd = cwd
+        self._active_prompt_session_ids: set[str] = set()
 
     @property
     def sessions(self) -> tuple[Session, ...]:
@@ -99,19 +103,37 @@ class AgentRuntime:
     ) -> AsyncIterator[AgentEvent]:
         """Run one prompt in a session and persist completed items."""
 
-        self._append_user_message(session_id, content)
+        self._start_prompt(session_id)
+        try:
+            self._append_user_message(session_id, content)
 
-        async for event in run_agent(
-            self._history_store.get_history(session_id),
-            stream_fn=self._stream_fn,
-            model=self._model,
-            tool_executor=self._tool_executor,
-            reasoning=self._reasoning,
-            system_prompt=self._system_prompt,
-            cwd=self._cwd,
-        ):
-            self._persist_stable_event(session_id, event)
-            yield event
+            async for event in run_agent(
+                self._history_store.get_history(session_id),
+                stream_fn=self._stream_fn,
+                model=self._model,
+                tool_executor=self._tool_executor,
+                reasoning=self._reasoning,
+                system_prompt=self._system_prompt,
+                cwd=self._cwd,
+            ):
+                self._persist_stable_event(session_id, event)
+                yield event
+        finally:
+            self._finish_prompt(session_id)
+
+    def _start_prompt(self, session_id: str) -> None:
+        """Mark a session prompt active or reject overlapping prompt work."""
+
+        if session_id in self._active_prompt_session_ids:
+            raise SessionBusyError(
+                f"Session already has an active prompt: {session_id}"
+            )
+        self._active_prompt_session_ids.add(session_id)
+
+    def _finish_prompt(self, session_id: str) -> None:
+        """Clear the active prompt marker for a session."""
+
+        self._active_prompt_session_ids.discard(session_id)
 
     def _append_user_message(self, session_id: str, content: str) -> None:
         """Persist a user message before provider execution starts."""

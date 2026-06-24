@@ -10,7 +10,7 @@ from agent.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from agent.runtime import AgentRuntime
+from agent.runtime import AgentRuntime, Session, SessionBusyError
 from agent.types import (
     AgentEndEvent,
     AgentEvent,
@@ -18,15 +18,19 @@ from agent.types import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-from ai.types.conversation import UserMessage
+from ai.types.contracts import AsyncEventStream, Reasoning
+from ai.types.conversation import ConversationItem, UserMessage
 from ai.types.stream_events import (
     ProviderStreamEvent,
 )
-from ai.types.tools import ToolDefinition, ToolResult
+from ai.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from tests.support.async_streams import async_stream
 from tests.support.agent_streams import (
     StreamInvocation,
     build_stream_fn,
     final_text_stream,
+    stream_error,
+    stream_start,
     tool_call_stream,
 )
 from tests.support.conversation_assertions import (
@@ -127,6 +131,67 @@ def _runtime_with_streams(
     return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4", tools=tools)
 
 
+def _runtime_with_gated_streams(
+    releases: Sequence[asyncio.Event],
+    invocations: list[StreamInvocation],
+) -> AgentRuntime:
+    """Build a runtime whose provider streams wait for explicit release."""
+
+    stream_fn: StreamFn = _build_gated_stream_fn(releases, invocations)
+    return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4")
+
+
+def _build_gated_stream_fn(
+    releases: Sequence[asyncio.Event],
+    invocations: list[StreamInvocation],
+) -> StreamFn:
+    """Build a provider stream function that blocks each stream by index."""
+
+    async def _stream_fn(
+        history: Sequence[ConversationItem],
+        model: str,
+        *,
+        instructions: str,
+        reasoning: Reasoning | None,
+        tools: Sequence[ToolDefinition] | None,
+    ) -> AsyncEventStream:
+        """Record one provider invocation and wait to release its stream."""
+
+        index = len(invocations)
+        invocations.append(
+            StreamInvocation(
+                history=tuple(history),
+                model=model,
+                instructions=instructions,
+                reasoning=reasoning,
+                tools=tuple(tools) if tools is not None else None,
+            )
+        )
+        await releases[index].wait()
+        return async_stream(final_text_stream(f"resp_{index}", f"answer {index}"))
+
+    return _stream_fn
+
+
+async def _consume_prompt(session: Session, content: str) -> list[AgentEvent]:
+    """Collect every event from one session prompt."""
+
+    return [event async for event in session.prompt(content)]
+
+
+async def _wait_for_invocation_count(
+    invocations: list[StreamInvocation],
+    expected_count: int,
+) -> None:
+    """Wait briefly for async prompt work to reach a provider call."""
+
+    for _ in range(20):
+        if len(invocations) >= expected_count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"Expected {expected_count} provider invocation(s).")
+
+
 class FalsyHistoryStore(InMemoryHistoryStore):
     """History store that is falsey even when injected."""
 
@@ -158,6 +223,29 @@ async def _get_weather(city: str) -> ToolResult:
     """Return deterministic weather text for runtime tests."""
 
     return ToolResult.text(f"{city}: sunny")
+
+
+async def _raise_weather_error(city: str) -> ToolResult:
+    """Raise a deterministic weather failure for runtime tests."""
+
+    _ = city
+    raise RuntimeError("weather unavailable")
+
+
+def _failing_tool() -> ToolDefinition:
+    """Build a deterministic failing tool definition for runtime tests."""
+
+    return ToolDefinition(
+        name="fail_weather",
+        description="Raise a deterministic weather failure.",
+        input_schema={
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+        fn=_raise_weather_error,
+    )
 
 
 def test_runtime_creates_generated_and_explicit_sessions() -> None:
@@ -298,6 +386,76 @@ def test_session_prompt_replays_prior_history_on_next_prompt() -> None:
     assert expect_assistant_turn(session.history[3]).response_id == "resp_second"
 
 
+def test_session_prompt_rejects_overlapping_same_session_prompts() -> None:
+    """Reject same-session prompts while a prompt is already active."""
+
+    async def _run() -> None:
+        """Run overlapping prompts through one event loop."""
+
+        releases = [asyncio.Event(), asyncio.Event()]
+        invocations: list[StreamInvocation] = []
+        runtime = _runtime_with_gated_streams(releases, invocations)
+        session = runtime.session(session_id="overlap")
+
+        first_task = asyncio.create_task(_consume_prompt(session, "first"))
+        await _wait_for_invocation_count(invocations, 1)
+        second_task = asyncio.create_task(_consume_prompt(session, "second"))
+
+        with pytest.raises(SessionBusyError, match="overlap"):
+            await second_task
+        assert expect_user_message(session.history[0]).content == "first"
+        assert len(session.history) == 1
+
+        releases[0].set()
+        await first_task
+
+        second_after_completion = asyncio.create_task(
+            _consume_prompt(session, "second")
+        )
+        await _wait_for_invocation_count(invocations, 2)
+        releases[1].set()
+        await second_after_completion
+
+        assert expect_user_message(session.history[0]).content == "first"
+        assert expect_assistant_turn(session.history[1]).response_id == "resp_0"
+        assert expect_user_message(session.history[2]).content == "second"
+        assert expect_assistant_turn(session.history[3]).response_id == "resp_1"
+
+    asyncio.run(_run())
+
+
+def test_session_prompt_rejects_reentry_while_yielding_terminal_event() -> None:
+    """Reject reentrant prompts while the active prompt is yielding events."""
+
+    async def _run() -> None:
+        """Start a nested prompt from inside terminal event handling."""
+
+        invocations: list[StreamInvocation] = []
+        runtime = _runtime_with_streams(
+            [
+                final_text_stream("resp_first", "first answer"),
+                final_text_stream("resp_second", "second answer"),
+            ],
+            invocations,
+        )
+        session = runtime.session(session_id="reentry")
+
+        async for event in session.prompt("first"):
+            if isinstance(event, AgentEndEvent):
+                with pytest.raises(SessionBusyError, match="reentry"):
+                    await _consume_prompt(session, "second")
+
+        await _consume_prompt(session, "second")
+
+        assert len(invocations) == 2
+        assert expect_user_message(session.history[0]).content == "first"
+        assert expect_assistant_turn(session.history[1]).response_id == "resp_first"
+        assert expect_user_message(session.history[2]).content == "second"
+        assert expect_assistant_turn(session.history[3]).response_id == "resp_second"
+
+    asyncio.run(_run())
+
+
 def test_session_prompt_persists_tool_result_history() -> None:
     """Persist assistant tool calls, tool results, and final assistant turns."""
 
@@ -369,6 +527,58 @@ def test_session_prompt_persists_tool_result_at_execution_end() -> None:
     assert expect_assistant_turn(session.history[1]).response_id == "resp_tool"
     assert expect_tool_result_turn(session.history[2]).call_id == "call_weather"
     assert tool_execution_end.outcome.tool_result_turn == session.history[2]
+
+
+def test_session_prompt_persists_stream_error_history() -> None:
+    """Persist provider stream failures as assistant error turns."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams(
+        [[stream_start("resp_error"), stream_error("resp_error", "Socket closed")]],
+        invocations,
+    )
+    session = runtime.session(session_id="stream-error")
+
+    events = _collect_prompt_events(runtime, session.id, "hello")
+
+    assert isinstance(events[-1], AgentEndEvent)
+    assert expect_user_message(session.history[0]).content == "hello"
+    assistant_turn = expect_assistant_turn(session.history[1])
+    assert assistant_turn.response_id == "resp_error"
+    assert assistant_turn.status == "error"
+    assert assistant_turn.stop_reason == "error"
+    assert assistant_turn.error_message == "Socket closed"
+
+
+def test_session_prompt_persists_tool_exception_history() -> None:
+    """Persist tool exceptions as replayable error tool results."""
+
+    invocations: list[StreamInvocation] = []
+    runtime = _runtime_with_streams(
+        [
+            tool_call_stream(
+                response_id="resp_tool",
+                call_id="call_weather",
+                tool_name="fail_weather",
+                arguments={"city": "Munich"},
+            ),
+            final_text_stream("resp_final", "Tool failed."),
+        ],
+        invocations,
+        tools=[_failing_tool()],
+    )
+    session = runtime.session(session_id="tool-error")
+
+    _collect_prompt_events(runtime, session.id, "check weather")
+
+    tool_result = expect_tool_result_turn(session.history[2])
+    assert tool_result.call_id == "call_weather"
+    assert tool_result.tool_name == "fail_weather"
+    assert tool_result.is_error is True
+    content = tool_result.content[0]
+    assert isinstance(content, ToolTextContent)
+    assert content.text == "weather unavailable"
+    assert expect_assistant_turn(session.history[3]).response_id == "resp_final"
 
 
 def test_runtime_keeps_session_histories_independent() -> None:

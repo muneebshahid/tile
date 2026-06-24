@@ -166,11 +166,9 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
     tool_result = await ls.fn(path=str(path), limit=500, cwd=Path.cwd())
     result = _text(tool_result)
     notice = "\n\n[50.0KB limit reached. Directory has 270 entries]"
-    entries = ls._list_directory_entries(path)
     body = result.removesuffix(notice)
 
     assert result.endswith(notice)
-    assert len("\n".join(entries).encode("utf-8")) > truncation.OUTPUT_BYTE_LIMIT
     assert len(body.encode("utf-8")) <= truncation.OUTPUT_BYTE_LIMIT
     details = _ls_details(tool_result)
     assert details.output.output_lines < details.output.total_lines

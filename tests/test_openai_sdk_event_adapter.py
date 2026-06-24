@@ -60,6 +60,16 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
     """Builds normalization cases for stream lifecycle events."""
 
     return [
+        *_build_response_start_cases(),
+        *_build_response_completion_cases(),
+        *_build_response_incomplete_cases(),
+    ]
+
+
+def _build_response_start_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for response creation events."""
+
+    return [
         NormalizationCase(
             name="response.created",
             raw_event=response_created_event(
@@ -70,6 +80,13 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
                 "response_id": "resp_created",
             },
         ),
+    ]
+
+
+def _build_response_completion_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for completed response events."""
+
+    return [
         NormalizationCase(
             name="response.completed.stop",
             raw_event=response_completed_event(
@@ -102,6 +119,13 @@ def _build_lifecycle_cases() -> list[NormalizationCase]:
                 "stop_reason": "tool_use",
             },
         ),
+    ]
+
+
+def _build_response_incomplete_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for incomplete response events."""
+
+    return [
         NormalizationCase(
             name="response.incomplete.length",
             raw_event=response_incomplete_event(
@@ -135,6 +159,16 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
     """Builds normalization cases for reasoning-related events."""
 
     return [
+        *_build_reasoning_start_cases(),
+        *_build_reasoning_delta_cases(),
+        *_build_reasoning_done_cases(),
+    ]
+
+
+def _build_reasoning_start_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for reasoning start events."""
+
+    return [
         NormalizationCase(
             name="response.output_item.added.reasoning",
             raw_event=reasoning_added_event(
@@ -146,6 +180,13 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
                 "item_id": "rs_added",
             },
         ),
+    ]
+
+
+def _build_reasoning_delta_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for reasoning delta events."""
+
+    return [
         NormalizationCase(
             name="response.reasoning_summary_text.delta",
             raw_event=reasoning_summary_delta_event(
@@ -185,6 +226,13 @@ def _build_reasoning_cases() -> list[NormalizationCase]:
                 "delta": "\n\n",
             },
         ),
+    ]
+
+
+def _build_reasoning_done_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for completed reasoning items."""
+
+    return [
         NormalizationCase(
             name="response.output_item.done.reasoning",
             raw_event=reasoning_done_event(
@@ -216,6 +264,17 @@ def _build_message_cases() -> list[NormalizationCase]:
     """Builds normalization cases for assistant message events."""
 
     return [
+        *_build_message_start_cases(),
+        *_build_message_part_cases(),
+        *_build_message_delta_cases(),
+        *_build_message_done_cases(),
+    ]
+
+
+def _build_message_start_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for assistant message start events."""
+
+    return [
         NormalizationCase(
             name="response.output_item.added.message",
             raw_event=message_added_event(
@@ -230,6 +289,13 @@ def _build_message_cases() -> list[NormalizationCase]:
                 "phase": "commentary",
             },
         ),
+    ]
+
+
+def _build_message_part_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for assistant message content parts."""
+
+    return [
         NormalizationCase(
             name="response.content_part.added.output_text",
             raw_event=content_part_added_event(
@@ -269,6 +335,13 @@ def _build_message_cases() -> list[NormalizationCase]:
                 "part_type": None,
             },
         ),
+    ]
+
+
+def _build_message_delta_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for assistant message delta events."""
+
+    return [
         NormalizationCase(
             name="response.output_text.delta",
             raw_event=text_delta_event(
@@ -297,6 +370,13 @@ def _build_message_cases() -> list[NormalizationCase]:
                 "delta": "No",
             },
         ),
+    ]
+
+
+def _build_message_done_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for completed assistant message events."""
+
+    return [
         NormalizationCase(
             name="response.output_item.done.message",
             raw_event=message_done_event(
@@ -321,6 +401,16 @@ def _build_message_cases() -> list[NormalizationCase]:
 
 def _build_tool_call_cases() -> list[NormalizationCase]:
     """Builds normalization cases for tool-call related events."""
+
+    return [
+        *_build_tool_call_start_cases(),
+        *_build_tool_call_argument_cases(),
+        *_build_tool_call_done_cases(),
+    ]
+
+
+def _build_tool_call_start_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for started tool-call events."""
 
     return [
         NormalizationCase(
@@ -359,6 +449,13 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "arguments": {},
             },
         ),
+    ]
+
+
+def _build_tool_call_argument_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for streamed tool-call arguments."""
+
+    return [
         NormalizationCase(
             name="response.function_call_arguments.delta",
             raw_event=function_tool_call_arguments_delta_event(
@@ -400,6 +497,13 @@ def _build_tool_call_cases() -> list[NormalizationCase]:
                 "arguments": {},
             },
         ),
+    ]
+
+
+def _build_tool_call_done_cases() -> list[NormalizationCase]:
+    """Builds normalization cases for completed tool-call events."""
+
+    return [
         NormalizationCase(
             name="response.output_item.done.function_call",
             raw_event=function_tool_call_done_event(

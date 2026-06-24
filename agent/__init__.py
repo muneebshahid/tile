@@ -6,7 +6,7 @@ from agent.history import (
     SessionAlreadyExistsError,
     SessionRecord,
 )
-from agent.runtime import AgentRuntime, Session
+from agent.runtime import AgentRuntime, Session, SessionBusyError
 from agent.tool_executor import ToolExecutionRequest, ToolExecutor
 
 __all__ = [
@@ -15,6 +15,7 @@ __all__ = [
     "InMemoryHistoryStore",
     "Session",
     "SessionAlreadyExistsError",
+    "SessionBusyError",
     "SessionRecord",
     "ToolExecutionRequest",
     "ToolExecutor",
