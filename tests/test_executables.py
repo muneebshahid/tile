@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import agent.tools.executables as executables
+import ori.tools.executables as executables
 
 
 def test_require_executable_returns_resolved_path(

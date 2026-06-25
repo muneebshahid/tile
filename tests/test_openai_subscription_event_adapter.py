@@ -6,8 +6,8 @@ from collections.abc import Sequence
 
 import pytest
 
-from ai.openai.normalized_events import NormalizedEvent, NormalizedEventType
-from ai.openai.subscription_event_adapter import (
+from ori.openai.normalized_events import NormalizedEvent, NormalizedEventType
+from ori.openai.subscription_event_adapter import (
     SubscriptionEventPayload,
     normalize_subscription_events,
 )

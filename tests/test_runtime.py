@@ -5,25 +5,25 @@ from collections.abc import Sequence
 
 import pytest
 
-from agent.history import (
+from ori.history import (
     InMemoryHistoryStore,
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from agent.runtime import AgentRuntime, Session, SessionBusyError
-from agent.types import (
+from ori.runtime import AgentRuntime, Session, SessionBusyError
+from ori.events import (
     AgentEndEvent,
     AgentEvent,
     MessageEndEvent,
     StreamFn,
     ToolExecutionEndEvent,
 )
-from ai.types.contracts import AsyncEventStream, Reasoning
-from ai.types.conversation import ConversationItem, UserMessage
-from ai.types.stream_events import (
+from ori.types.contracts import AsyncEventStream, Reasoning
+from ori.types.conversation import ConversationItem, UserMessage
+from ori.types.stream_events import (
     ProviderStreamEvent,
 )
-from ai.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
 from tests.support.async_streams import async_stream
 from tests.support.agent_streams import (
     StreamInvocation,

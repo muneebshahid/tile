@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-import agent.tools.read as read
-import agent.tools.truncation as truncation
-from ai.types.tools import ReadDetails, ToolImageContent, ToolResult, ToolTextContent
+import ori.tools.read as read
+import ori.tools.truncation as truncation
+from ori.types.tools import ReadDetails, ToolImageContent, ToolResult, ToolTextContent
 
 
 def test_read_schema_requires_only_path() -> None:

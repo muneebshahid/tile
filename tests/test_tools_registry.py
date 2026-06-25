@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent.tools import build_tools
+from ori.tools import build_tools
 
 
 @pytest.mark.asyncio

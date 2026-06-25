@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import agent.tools.bash as bash
-from ai.types.tools import BashDetails, ToolResult, ToolTextContent
-from agent.tools.output_accumulator import OutputAccumulator, OutputSnapshot
-from agent.tools.truncation import OUTPUT_LINE_LIMIT
+import ori.tools.bash as bash
+from ori.types.tools import BashDetails, ToolResult, ToolTextContent
+from ori.tools.output_accumulator import OutputAccumulator, OutputSnapshot
+from ori.tools.truncation import OUTPUT_LINE_LIMIT
 
 
 def test_bash_schema_requires_only_command() -> None:

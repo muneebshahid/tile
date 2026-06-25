@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from agent.agent import run_agent
-from agent.tool_executor import ToolExecutor
-from agent.types import (
+from ori.agent import run_agent
+from ori.tool_executor import ToolExecutor
+from ori.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
@@ -28,13 +28,13 @@ from agent.types import (
     TurnEndEvent,
     TurnStartEvent,
 )
-from ai.types.contracts import Reasoning
-from ai.types.conversation import (
+from ori.types.contracts import Reasoning
+from ori.types.conversation import (
     ConversationItem,
     ToolResultTurn,
     UserMessage,
 )
-from ai.types.stream_events import (
+from ori.types.stream_events import (
     ReasoningBlock,
     ReasoningDeltaEvent,
     ReasoningEndEvent,
@@ -49,7 +49,7 @@ from ai.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from ai.types.tools import (
+from ori.types.tools import (
     ReadDetails,
     ToolDefinition,
     ToolOutputDetails,

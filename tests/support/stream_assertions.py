@@ -2,7 +2,7 @@
 
 from typing import TypeVar
 
-from ai.types.stream_events import (
+from ori.types.stream_events import (
     AssistantBlock,
     ReasoningBlock,
     StreamEvent,

@@ -18,11 +18,11 @@ from unittest.mock import patch
 
 import pytest
 
-from ai.openai.provider import stream_api, stream_subscription
-from ai.openai.serialization import serialize_history_items
-from ai.openai.subscription_event_adapter import SubscriptionEventPayload
-from ai.types.conversation import UserMessage
-from ai.types.stream_events import (
+from ori.openai.provider import stream_api, stream_subscription
+from ori.openai.serialization import serialize_history_items
+from ori.openai.subscription_event_adapter import SubscriptionEventPayload
+from ori.types.conversation import UserMessage
+from ori.types.stream_events import (
     ProviderStreamEvent,
     StreamDoneEvent,
     StreamStartEvent,
@@ -30,7 +30,7 @@ from ai.types.stream_events import (
     TextEndEvent,
     TextStartEvent,
 )
-from ai.types.tools import ToolDefinition, ToolResult
+from ori.types.tools import ToolDefinition, ToolResult
 from tests.support.async_streams import async_stream
 from tests.support.openai_response_events import (
     FakeOpenAIClient,
@@ -62,7 +62,7 @@ def _collect_events(
         )
         return [event async for event in event_stream]
 
-    with patch("ai.openai.provider.create_client", return_value=client):
+    with patch("ori.openai.provider.create_client", return_value=client):
         return asyncio.run(_collect())
 
 

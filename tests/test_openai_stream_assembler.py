@@ -10,7 +10,7 @@ such as ``text_start``, ``text_delta``, ``text_end``, and ``stream_done``.
 import asyncio
 from collections.abc import Sequence
 
-from ai.openai.normalized_events import (
+from ori.openai.normalized_events import (
     CompletedNormalizedEvent,
     CreatedNormalizedEvent,
     FailedNormalizedEvent,
@@ -30,8 +30,8 @@ from ai.openai.normalized_events import (
     ToolCallArgumentsDoneNormalizedEvent,
     ToolCallDoneNormalizedEvent,
 )
-from ai.openai.stream_assembler import assemble_stream
-from ai.types.stream_events import (
+from ori.openai.stream_assembler import assemble_stream
+from ori.types.stream_events import (
     Phase,
     ProviderSource,
     ProviderStreamEvent,
@@ -49,7 +49,7 @@ from ai.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from ai.types.tools import JsonObject
+from ori.types.tools import JsonObject
 from tests.support.async_streams import async_stream
 from tests.support.stream_assertions import (
     expect_metadata_string as _expect_metadata_string,

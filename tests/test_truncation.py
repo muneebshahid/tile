@@ -1,6 +1,6 @@
 """Tests for shared tool output truncation helpers."""
 
-import agent.tools.truncation as truncation
+import ori.tools.truncation as truncation
 
 
 def test_append_notice_block_returns_text_without_notices() -> None:

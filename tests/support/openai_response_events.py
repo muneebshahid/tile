@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
-from ai.types.tools import JsonObject
+from ori.types.tools import JsonObject
 from openai.types.responses import (
     ResponseCompletedEvent,
     ResponseContentPartAddedEvent,

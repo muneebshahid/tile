@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import agent.tools.executables as executables
-import agent.tools.grep as grep
-import agent.tools.truncation as truncation
-from ai.types.tools import GrepDetails, ToolResult, ToolTextContent
+import ori.tools.executables as executables
+import ori.tools.grep as grep
+import ori.tools.truncation as truncation
+from ori.types.tools import GrepDetails, ToolResult, ToolTextContent
 
 
 def test_schema_requires_only_pattern() -> None:

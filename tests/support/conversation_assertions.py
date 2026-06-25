@@ -1,6 +1,6 @@
 """Shared assertions for provider-neutral conversation history tests."""
 
-from ai.types.conversation import (
+from ori.types.conversation import (
     AssistantTurn,
     ConversationItem,
     ToolResultTurn,

@@ -72,6 +72,8 @@ The current codebase already has a useful local kernel:
 - built-in local coding tools
 - OpenAI provider path
 - local JSONL runner
+- top-level `ori` package layout for runtime, history, events, tools, provider,
+  and type contracts
 - focused tests for agent, runtime, provider, serialization, and tools
 
 This baseline should not be re-planned as future work. Future tickets should
@@ -190,13 +192,13 @@ Includes:
 
 - current runtime/session/tool/provider baseline
 - stable public imports for the current API surface
+- module/package import reorganization under `ori`
 - clear error vocabulary for session busy and session lookup failures
 - updated README and examples using Ori naming
 - stale roadmap/todo cleanup
 
 Does not include:
 
-- module/package import reorganization under `ori`
 - SQLite
 - server mode
 - extension hooks
@@ -296,14 +298,14 @@ End-to-end test:
 
 ### 2. Stabilize Public Runtime Imports
 
-Define the first stable import surface without doing a large module move.
+Define the first stable import surface under the top-level `ori` package.
 
 Acceptance criteria:
 
-- Public imports are documented from existing packages.
+- Public imports are documented from `ori` packages.
 - Internal modules are clearly not guaranteed stable.
 - Existing examples use the documented imports.
-- No top-level `ori/` module move is required in this ticket.
+- Implementation modules live under `ori`.
 
 End-to-end test:
 

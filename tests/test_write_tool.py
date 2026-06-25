@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-import agent.tools.write as write
-from ai.types.tools import ToolResult, ToolTextContent
+import ori.tools.write as write
+from ori.types.tools import ToolResult, ToolTextContent
 
 
 def test_write_schema_requires_path_and_content() -> None:

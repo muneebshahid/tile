@@ -3,10 +3,10 @@
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 
-from agent.types import StreamFn
-from ai.types.contracts import Reasoning
-from ai.types.conversation import ConversationItem
-from ai.types.stream_events import (
+from ori.events import StreamFn
+from ori.types.contracts import Reasoning
+from ori.types.conversation import ConversationItem
+from ori.types.stream_events import (
     AssistantBlock,
     ProviderMetadata,
     ProviderSource,
@@ -18,7 +18,7 @@ from ai.types.stream_events import (
     TextBlock,
     ToolCallBlock,
 )
-from ai.types.tools import JsonObject, ToolDefinition
+from ori.types.tools import JsonObject, ToolDefinition
 from tests.support.async_streams import async_stream
 
 

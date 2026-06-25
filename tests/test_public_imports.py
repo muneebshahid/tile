@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 
-from agent import (
+from ori import (
     AgentRuntime,
     HistoryStore,
     InMemoryHistoryStore,
@@ -11,9 +11,9 @@ from agent import (
     SessionBusyError,
     SessionNotFoundError,
 )
-from agent.types import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
-from ai.openai import stream_api
-from ai.types import (
+from ori.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
+from ori.openai import stream_api
+from ori.types import (
     AsyncEventStream,
     ConversationItem,
     ProviderSource,

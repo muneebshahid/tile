@@ -2,8 +2,8 @@
 
 import pytest
 
-from agent.tool_executor import ToolExecutionRequest, ToolExecutor
-from ai.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from ori.tool_executor import ToolExecutionRequest, ToolExecutor
+from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
 
 
 async def _get_weather(city: str) -> ToolResult:

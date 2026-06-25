@@ -1,18 +1,18 @@
 from pydantic import TypeAdapter
 
-from ai.openai.serialization import (
+from ori.openai.serialization import (
     serialize_history_items,
     serialize_response_input,
     serialize_tools,
 )
-from ai.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
-from ai.types.stream_events import (
+from ori.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
+from ori.types.stream_events import (
     ProviderMetadata,
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
 )
-from ai.types.tools import ToolDefinition, ToolImageContent, ToolResult
+from ori.types.tools import ToolDefinition, ToolImageContent, ToolResult
 from openai.types.responses.response_input_param import ResponseInputParam
 
 

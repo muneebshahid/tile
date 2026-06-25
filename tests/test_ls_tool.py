@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-import agent.tools.ls as ls
-import agent.tools.truncation as truncation
-from ai.types.tools import LsDetails, ToolResult, ToolTextContent
+import ori.tools.ls as ls
+import ori.tools.truncation as truncation
+from ori.types.tools import LsDetails, ToolResult, ToolTextContent
 
 
 def test_ls_schema_requires_no_arguments() -> None:

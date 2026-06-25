@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from agent.history import InMemoryHistoryStore
-from ai.types.conversation import ConversationItem
-from ai.types.tools import ToolTextContent
+from ori.history import InMemoryHistoryStore
+from ori.types.conversation import ConversationItem
+from ori.types.tools import ToolTextContent
 from examples import local_runner
 from examples.local_runner import run_cli, run_prompt
 from tests.support.agent_streams import (

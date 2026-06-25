@@ -23,11 +23,13 @@ A small Python-native runtime for tool-using agent sessions.
 
 ```
 ori/
-├── agent/           # Core agent orchestration and event dispatch
-├── ai/
-│   ├── openai/      # OpenAI provider implementation
-│   └── types/       # Shared type definitions for contracts, tools, and streams
-└── tests/           # Test suite
+├── history/         # Session metadata and conversation history stores
+├── openai/          # OpenAI provider implementation
+├── tools/           # Built-in local tool implementations
+├── types/           # Provider-neutral contracts for conversations and tools
+├── events.py        # Runtime event contracts
+└── runtime.py       # Session runtime facade
+tests/               # Test suite
 ```
 
 ## Quick Start
@@ -50,17 +52,16 @@ Use the package facades for application code. Deep module paths are internal and
 may move as Ori grows.
 
 ```python
-from agent import AgentRuntime, HistoryStore, InMemoryHistoryStore
-from agent.types import AgentEvent, MessageEndEvent, StreamFn
-from ai.openai import stream_api
-from ai.types import ToolDefinition, ToolResult
+from ori import AgentRuntime, HistoryStore, InMemoryHistoryStore
+from ori.events import AgentEvent, MessageEndEvent, StreamFn
+from ori.openai import stream_api
+from ori.types import ToolDefinition, ToolResult
 ```
 
-`agent` exposes the runtime, session, history-store, and runtime-error
-contracts. `agent.types` exposes structured runtime events yielded by
-`Session.prompt(...)`. `ai.types` exposes provider-neutral conversation, stream,
-and tool contracts. `ai.openai` exposes the implemented OpenAI stream
-entrypoint.
+`ori` exposes the runtime, session, history-store, and runtime-error contracts.
+`ori.events` exposes structured runtime events yielded by `Session.prompt(...)`.
+`ori.types` exposes provider-neutral conversation, stream, and tool contracts.
+`ori.openai` exposes the implemented OpenAI stream entrypoint.
 
 ## Development
 
