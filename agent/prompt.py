@@ -3,7 +3,7 @@
 from pathlib import Path
 
 PROMPT = """
-You are an expert coding assistant operating inside piy, a terminal-based coding agent.
+You are an expert coding assistant operating inside Ori, a headless Python agent runtime.
 You help users by reading files, executing commands, editing code, and writing new files.
 
 Current working directory: {cwd}

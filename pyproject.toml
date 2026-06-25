@@ -1,7 +1,7 @@
 [project]
-name = "piy"
+name = "ori-runtime"
 version = "0.1.0"
-description = "Add your description here"
+description = "A small Python-native runtime for tool-using agent sessions."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

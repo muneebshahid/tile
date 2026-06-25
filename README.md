@@ -1,12 +1,12 @@
-# piy
+# Ori
 
 > ⚠️ **Work in Progress** — This project is under active development and APIs may change.
 
-A minimal, headless harness for building tool-using AI agents in Python.
+A small Python-native runtime for tool-using agent sessions.
 
 ## Overview
 
-**piy** is a headless agent kernel for building intelligent AI agents in Python. Providers, tools, events, and serialization are explicit runtime contracts. Start minimal and compose the agent loop you need without adopting a terminal UI or application framework.
+**Ori** is a headless agent session runtime for Python. Providers, tools, events, and serialization are explicit runtime contracts. Use it as an embedded library or as the core of a service without adopting a broad application framework.
 
 ## Features
 
@@ -15,14 +15,14 @@ A minimal, headless harness for building tool-using AI agents in Python.
 - **Minimal Core**: Only what you need—everything else is optional
 - **Async First**: Built on Python async/await for non-blocking I/O
 - **Type Safe**: Full Pydantic integration with mypy support
-- **Streaming Support**: Real-time event streaming via plugin-based event dispatch
+- **Streaming Support**: Real-time structured runtime events
 - **Tool Execution**: Pluggable tool definitions and execution strategies
 - **Reasoning**: Extensible support for extended thinking workflows
 
 ## Architecture
 
 ```
-piy/
+ori/
 ├── agent/           # Core agent orchestration and event dispatch
 ├── ai/
 │   ├── openai/      # OpenAI provider implementation

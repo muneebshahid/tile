@@ -286,13 +286,13 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
         ],
         invocations=invocations,
     )
-    history: list[ConversationItem] = [UserMessage(content="Hello, piy")]
+    history: list[ConversationItem] = [UserMessage(content="Hello, Ori")]
 
     events = _collect_run_events(history, stream_fn=stream_fn)
 
     message_end = _expect_event_type(events[3], MessageEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
-    assert history == [UserMessage(content="Hello, piy")]
+    assert history == [UserMessage(content="Hello, Ori")]
     assert message_end.assistant_turn.response_id == "resp_done"
 
 

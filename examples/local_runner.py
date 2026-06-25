@@ -1,4 +1,4 @@
-"""Example local runner for one headless piy prompt."""
+"""Example local runner for one headless Ori prompt."""
 
 import asyncio
 import sys
