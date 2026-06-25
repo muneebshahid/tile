@@ -6,12 +6,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
-from agent.history import HistoryStore
-from agent.runtime import AgentRuntime
+from agent import AgentRuntime, HistoryStore
 from agent.tools import build_tools
 from agent.types import AgentEvent, StreamFn
-from ai.openai.provider import stream_api
-from ai.types.tools import ToolDefinition
+from ai.openai import stream_api
+from ai.types import ToolDefinition
 from settings import settings
 
 

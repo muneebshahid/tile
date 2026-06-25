@@ -44,6 +44,23 @@ Or pipe a prompt through stdin:
 printf "Inspect the current repository" | uv run python -m examples.local_runner
 ```
 
+## Public API
+
+Use the package facades for application code. Deep module paths are internal and
+may move as Ori grows.
+
+```python
+from agent import AgentRuntime, HistoryStore, InMemoryHistoryStore
+from agent.types import AgentEvent, MessageEndEvent, StreamFn
+from ai.openai import stream_api
+from ai.types import ToolDefinition, ToolResult
+```
+
+`agent` exposes the runtime, session, history-store, and runtime-error
+contracts. `agent.types` exposes structured runtime events yielded by
+`Session.prompt(...)`. `ai.types` exposes provider-neutral conversation, stream,
+and tool contracts. `ai.openai` exposes the supported OpenAI stream entrypoints.
+
 ## Development
 
 Install dependencies:
