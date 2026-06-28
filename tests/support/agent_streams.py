@@ -1,10 +1,12 @@
 """Provider stream helpers for stateless agent tests."""
 
-from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
+import asyncio
+from collections.abc import Sequence
+from typing import cast
+from unittest.mock import AsyncMock
 
 from ori.events import StreamFn
-from ori.types.contracts import Reasoning
+from ori.types.contracts import AsyncEventStream, Reasoning
 from ori.types.conversation import ConversationItem
 from ori.types.stream_events import (
     AssistantBlock,
@@ -22,50 +24,92 @@ from ori.types.tools import JsonObject, ToolDefinition
 from tests.support.async_streams import async_stream
 
 
-@dataclass
-class StreamInvocation:
-    """Captured arguments from one provider stream invocation."""
+class ProviderStreamMock:
+    """Async mock-backed fake provider stream with typed call inspectors."""
 
-    history: tuple[ConversationItem, ...]
-    model: str
-    instructions: str
-    reasoning: Reasoning | None
-    tools: tuple[ToolDefinition, ...] | None
+    def __init__(self, streams: Sequence[Sequence[ProviderStreamEvent]]) -> None:
+        """Create a fake provider stream from queued event streams."""
+
+        self.mock = AsyncMock(side_effect=[async_stream(stream) for stream in streams])
+
+    @property
+    def fn(self) -> StreamFn:
+        """Return this mock as the provider stream function protocol."""
+
+        return cast(StreamFn, self.mock)
+
+    @property
+    def await_count(self) -> int:
+        """Return how many provider calls were awaited."""
+
+        return self.mock.await_count
+
+    def assert_awaited_once(self) -> None:
+        """Assert the provider stream was awaited exactly once."""
+
+        self.mock.assert_awaited_once()
+
+    def instructions(self) -> str:
+        """Return the instructions from the only provider call."""
+
+        self.assert_awaited_once()
+        await_args = self.mock.await_args
+        assert await_args is not None
+        instructions = await_args.kwargs["instructions"]
+        assert isinstance(instructions, str)
+        return instructions
+
+    def history(self, index: int) -> tuple[ConversationItem, ...]:
+        """Return model-visible history from one provider call."""
+
+        await_args = self.mock.await_args_list[index]
+        history = await_args.args[0]
+        assert isinstance(history, tuple)
+        return history
+
+    def model(self, index: int) -> str:
+        """Return the model name from one provider call."""
+
+        await_args = self.mock.await_args_list[index]
+        model = await_args.args[1]
+        assert isinstance(model, str)
+        return model
+
+    def tools(self, index: int) -> tuple[ToolDefinition, ...] | None:
+        """Return tool definitions from one provider call."""
+
+        await_args = self.mock.await_args_list[index]
+        tools = await_args.kwargs["tools"]
+        assert tools is None or isinstance(tools, tuple)
+        return tools
 
 
-def build_stream_fn(
-    streams: Sequence[Sequence[ProviderStreamEvent]],
-    invocations: list[StreamInvocation],
-) -> StreamFn:
-    """Build a provider stream function that records each invocation."""
+class GatedProviderStreamMock(ProviderStreamMock):
+    """Provider stream fake that blocks each response on a release event."""
 
-    pending_streams = list(streams)
+    def __init__(self, releases: Sequence[asyncio.Event]) -> None:
+        """Create a gated provider stream fake with one release per call."""
 
-    async def _stream_fn(
-        history: Sequence[ConversationItem],
-        model: str,
+        self._releases = tuple(releases)
+        self._next_stream_index = 0
+        self.mock = AsyncMock(side_effect=self._stream)
+
+    async def _stream(
+        self,
+        _history: Sequence[ConversationItem],
+        _model: str,
         *,
         instructions: str,
         reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
-    ) -> AsyncIterator[ProviderStreamEvent]:
-        """Return the next queued provider event stream."""
+    ) -> AsyncEventStream:
+        """Return the next provider stream after its release event is set."""
 
-        invocations.append(
-            StreamInvocation(
-                history=tuple(history),
-                model=model,
-                instructions=instructions,
-                reasoning=reasoning,
-                tools=tuple(tools) if tools is not None else None,
-            )
-        )
-        assert pending_streams, (
-            "Provider stream invoked more times than queued test streams."
-        )
-        return async_stream(pending_streams.pop(0))
-
-    return _stream_fn
+        _ = instructions, reasoning, tools
+        index = self._next_stream_index
+        self._next_stream_index += 1
+        await self._releases[index].wait()
+        return async_stream(final_text_stream(f"resp_{index}", f"answer {index}"))
 
 
 def final_text_stream(response_id: str, text: str) -> list[ProviderStreamEvent]:
@@ -74,6 +118,24 @@ def final_text_stream(response_id: str, text: str) -> list[ProviderStreamEvent]:
     return [
         stream_start(response_id),
         stream_done(response_id, blocks=[TextBlock(text=text)]),
+    ]
+
+
+def empty_stream(response_id: str) -> list[ProviderStreamEvent]:
+    """Build a minimal provider stream that completes without content blocks."""
+
+    return [
+        stream_start(response_id),
+        stream_done(response_id),
+    ]
+
+
+def error_stream(response_id: str, error_message: str) -> list[ProviderStreamEvent]:
+    """Build a minimal provider stream that fails before completion."""
+
+    return [
+        stream_start(response_id),
+        stream_error(response_id, error_message),
     ]
 
 
