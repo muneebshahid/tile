@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 import ori.tools.read as read
-import ori.tools.truncation as truncation
+import ori.tools.support.truncation as truncation
 from ori.types.tools import ReadDetails, ToolImageContent, ToolResult, ToolTextContent
 
 

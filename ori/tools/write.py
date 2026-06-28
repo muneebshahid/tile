@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 
 from ori.types.tools import ToolDefinition, ToolResult
-from ori.tools.paths import resolve_to_cwd
+from ori.tools.support.paths import resolve_to_cwd
 
 
 async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:

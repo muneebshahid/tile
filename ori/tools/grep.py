@@ -7,8 +7,8 @@ from typing import Literal
 from pydantic import BaseModel, ValidationError
 
 from ori.types.tools import GrepDetails, ToolDefinition, ToolOutputDetails, ToolResult
-from ori.tools.executables import execute, require_executable
-from ori.tools.truncation import (
+from ori.tools.support.executables import execute, require_executable
+from ori.tools.support.truncation import (
     GREP_LINE_CHARACTER_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
     append_notice_block,

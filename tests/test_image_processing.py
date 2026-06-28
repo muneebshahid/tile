@@ -6,7 +6,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
-from ori.tools.image_processing import (
+from ori.tools.support.image_processing import (
     ImageProcessingError,
     ImageProcessingOptions,
     ProcessedImage,

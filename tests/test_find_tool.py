@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import ori.tools.executables as executables
+import ori.tools.support.executables as executables
 import ori.tools.find as find
-import ori.tools.truncation as truncation
+import ori.tools.support.truncation as truncation
 from ori.types.tools import FindDetails, ToolResult, ToolTextContent
 
 

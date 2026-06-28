@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import ori.tools.executables as executables
+import ori.tools.support.executables as executables
 import ori.tools.grep as grep
-import ori.tools.truncation as truncation
+import ori.tools.support.truncation as truncation
 from ori.types.tools import GrepDetails, ToolResult, ToolTextContent
 
 

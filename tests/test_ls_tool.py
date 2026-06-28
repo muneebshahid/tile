@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import ori.tools.ls as ls
-import ori.tools.truncation as truncation
+import ori.tools.support.truncation as truncation
 from ori.types.tools import LsDetails, ToolResult, ToolTextContent
 
 

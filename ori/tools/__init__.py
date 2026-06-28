@@ -10,7 +10,7 @@ from ori.tools.edit import tool as edit_tool
 from ori.tools.find import tool as find_tool
 from ori.tools.grep import tool as grep_tool
 from ori.tools.ls import tool as ls_tool
-from ori.tools.paths import normalize_cwd
+from ori.tools.support.paths import normalize_cwd
 from ori.tools.read import tool as read_tool
 from ori.tools.write import tool as write_tool
 

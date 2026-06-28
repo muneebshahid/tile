@@ -2,8 +2,8 @@
 
 import pytest
 
-from ori.tools.output_accumulator import OutputAccumulator
-from ori.tools.truncation import truncate_tail
+from ori.tools.support.output_accumulator import OutputAccumulator
+from ori.tools.support.truncation import truncate_tail
 
 
 def test_accumulate_decodes_split_utf8_characters() -> None:

@@ -7,8 +7,8 @@ import pytest
 
 import ori.tools.bash as bash
 from ori.types.tools import BashDetails, ToolResult, ToolTextContent
-from ori.tools.output_accumulator import OutputAccumulator, OutputSnapshot
-from ori.tools.truncation import OUTPUT_LINE_LIMIT
+from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
+from ori.tools.support.truncation import OUTPUT_LINE_LIMIT
 
 
 def test_bash_schema_requires_only_command() -> None:

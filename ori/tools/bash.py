@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 
 from ori.types.tools import BashDetails, ToolDefinition, ToolOutputDetails, ToolResult
-from ori.tools.output_accumulator import OutputAccumulator, OutputSnapshot
-from ori.tools.truncation import (
+from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
+from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
     format_size,
 )

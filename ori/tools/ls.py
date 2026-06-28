@@ -10,8 +10,8 @@ from ori.types.tools import (
     ToolResult,
 )
 
-from ori.tools.paths import resolve_to_cwd
-from ori.tools.truncation import (
+from ori.tools.support.paths import resolve_to_cwd
+from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
     append_notice_block,
     truncate_head,

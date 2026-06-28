@@ -3,7 +3,7 @@
 import codecs
 from dataclasses import dataclass, replace
 
-from ori.tools.truncation import (
+from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT,
     OUTPUT_LINE_LIMIT,
     truncate_tail,
