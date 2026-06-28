@@ -57,11 +57,11 @@ from ori.types.tools import (
     ToolTextContent,
 )
 from tests.support.agent_streams import (
-    StreamInvocation,
-    build_stream_fn,
+    ProviderStreamMock,
+    empty_stream,
+    error_stream,
     final_text_stream,
     stream_done,
-    stream_error,
     stream_start,
     tool_call_block,
     tool_call_stream,
@@ -81,7 +81,7 @@ class ToolUseLoopRun:
     """Captured events and expected blocks for the weather tool-loop scenario."""
 
     events: list[AgentEvent]
-    invocations: list[StreamInvocation]
+    provider: ProviderStreamMock
     tools: list[ToolDefinition]
     reasoning_block: ReasoningBlock
     tool_call_block: ToolCallBlock
@@ -202,7 +202,6 @@ def _collect_weather_tool_loop_run() -> ToolUseLoopRun:
     """Run a two-turn weather tool loop and capture its observable state."""
 
     tools = _sample_tools()
-    invocations: list[StreamInvocation] = []
     reasoning_block = ReasoningBlock(summary_text="Thinking about weather")
     weather_tool_call_block = tool_call_block(
         call_id="call_123",
@@ -211,21 +210,24 @@ def _collect_weather_tool_loop_run() -> ToolUseLoopRun:
         provider_item_id="fc_123",
     )
     text_block = TextBlock(text="It is sunny in Munich.")
-    stream_fn = build_stream_fn(
-        streams=[
+    provider = ProviderStreamMock(
+        [
             _weather_tool_call_stream(reasoning_block, weather_tool_call_block),
             _weather_follow_up_stream(text_block),
-        ],
-        invocations=invocations,
+        ]
     )
     history: list[ConversationItem] = [
         UserMessage(content="What is the weather in Munich?")
     ]
 
-    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
+    events = _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        tools=tools,
+    )
     return ToolUseLoopRun(
         events=events,
-        invocations=invocations,
+        provider=provider,
         tools=tools,
         reasoning_block=reasoning_block,
         tool_call_block=weather_tool_call_block,
@@ -276,19 +278,14 @@ def _weather_follow_up_stream(
 def test_run_agent_does_not_mutate_supplied_history() -> None:
     """Keep caller-owned history unchanged while emitting stable events."""
 
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
-            [
-                stream_start("resp_done"),
-                stream_done("resp_done"),
-            ]
-        ],
-        invocations=invocations,
+    provider = ProviderStreamMock(
+        [
+            empty_stream("resp_done"),
+        ]
     )
     history: list[ConversationItem] = [UserMessage(content="Hello, Ori")]
 
-    events = _collect_run_events(history, stream_fn=stream_fn)
+    events = _collect_run_events(history, stream_fn=provider.fn)
 
     message_end = _expect_event_type(events[3], MessageEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
@@ -453,50 +450,49 @@ def test_agent_run_sends_tool_result_history_to_follow_up_turn() -> None:
         TextBlock(text="It is sunny in Munich.")
     ]
     assert second_turn_end.tool_executions == []
-    assert len(run.invocations) == 2
-    assert run.invocations[0].model == "gpt-5.4"
-    assert run.invocations[0].tools == tuple(run.tools)
-    assert run.invocations[1].tools == tuple(run.tools)
-    first_request_user = expect_user_message(run.invocations[0].history[0])
-    second_request_assistant = expect_assistant_turn(run.invocations[1].history[1])
-    second_request_tool_result = expect_tool_result_turn(run.invocations[1].history[2])
-    assert first_request_user.content == "What is the weather in Munich?"
-    assert second_request_assistant.response_id == "resp_tool_call"
-    assert second_request_tool_result.tool_name == "get_weather"
+
+    assert run.provider.await_count == 2
+    assert run.provider.model(0) == "gpt-5.4"
+    assert run.provider.tools(0) == tuple(run.tools)
+    assert run.provider.tools(1) == tuple(run.tools)
+
+    first_request_history = run.provider.history(0)
+    assert expect_user_message(first_request_history[0]).content == (
+        "What is the weather in Munich?"
+    )
+
+    follow_up_request_history = run.provider.history(1)
+    assert expect_assistant_turn(follow_up_request_history[1]).response_id == (
+        "resp_tool_call"
+    )
+    assert expect_tool_result_turn(follow_up_request_history[2]).tool_name == (
+        "get_weather"
+    )
 
 
 def test_agent_run_executes_registered_tool_definition() -> None:
     """Execute a registered tool and expose its result through agent events."""
 
     tools = _sample_tools()
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
-            [
-                stream_start("resp_tool_call"),
-                stream_done(
-                    "resp_tool_call",
-                    stop_reason="tool_use",
-                    blocks=[
-                        tool_call_block(
-                            call_id="call_123",
-                            name="get_weather",
-                            arguments={"city": "Munich"},
-                            provider_item_id="fc_123",
-                        )
-                    ],
-                ),
-            ],
-            [
-                stream_start("resp_follow_up"),
-                stream_done("resp_follow_up"),
-            ],
-        ],
-        invocations=invocations,
+    provider = ProviderStreamMock(
+        [
+            tool_call_stream(
+                response_id="resp_tool_call",
+                call_id="call_123",
+                tool_name="get_weather",
+                arguments={"city": "Munich"},
+                provider_item_id="fc_123",
+            ),
+            empty_stream("resp_follow_up"),
+        ]
     )
     history = [UserMessage(content="What is the weather in Munich?")]
 
-    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
+    events = _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        tools=tools,
+    )
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     assert _tool_text(tool_execution_end.outcome.result) == (
@@ -520,9 +516,8 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
             fn=_read_file,
         )
     ]
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
+    provider = ProviderStreamMock(
+        [
             tool_call_stream(
                 response_id="resp_tool_call",
                 call_id="call_read",
@@ -534,21 +529,26 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
                 response_id="resp_follow_up",
                 text="I read the file.",
             ),
-        ],
-        invocations=invocations,
+        ]
     )
     history = [UserMessage(content="Read a file")]
 
-    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
+    events = _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        tools=tools,
+    )
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     turn_end = _expect_event_type(events[6], TurnEndEvent)
-    tool_result_turn = expect_tool_result_turn(invocations[1].history[2])
     outcome = tool_execution_end.outcome
     turn_outcome = turn_end.tool_executions[0]
     assert outcome.details == ReadDetails(output=_tool_output_details())
     assert outcome.result.details == outcome.details
     assert turn_outcome.details == outcome.details
+
+    follow_up_request_history = provider.history(1)
+    tool_result_turn = expect_tool_result_turn(follow_up_request_history[2])
     assert tool_result_turn == outcome.tool_result_turn
     assert "details" not in ToolResultTurn.model_fields
 
@@ -567,9 +567,8 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
         },
         fn=_raise_tool_error,
     )
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
+    provider = ProviderStreamMock(
+        [
             tool_call_stream(
                 response_id="resp_tool_call",
                 call_id="call_123",
@@ -581,30 +580,34 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
                 response_id="resp_follow_up",
                 text="The tool failed.",
             ),
-        ],
-        invocations=invocations,
+        ]
     )
     history = [UserMessage(content="What is the weather in Munich?")]
 
-    events = _collect_run_events(history, stream_fn=stream_fn, tools=[failing_tool])
+    events = _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        tools=[failing_tool],
+    )
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    second_request_tool_result = expect_tool_result_turn(invocations[1].history[2])
     _expect_event_type(events[-1], AgentEndEvent)
     assert tool_execution_end.outcome.tool_result_turn.is_error is True
     assert _tool_text(tool_execution_end.outcome.result) == "boom"
     assert tool_execution_end.outcome.tool_result_turn.tool_name == "fail_weather"
-    assert second_request_tool_result.is_error is True
-    assert second_request_tool_result.tool_name == "fail_weather"
+
+    follow_up_request_history = provider.history(1)
+    tool_result = expect_tool_result_turn(follow_up_request_history[2])
+    assert tool_result.is_error is True
+    assert tool_result.tool_name == "fail_weather"
 
 
 def test_agent_run_handles_multiple_tool_use_turns() -> None:
     """Carry cumulative run-local history through repeated tool turns."""
 
     tools = _sample_tools()
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
+    provider = ProviderStreamMock(
+        [
             tool_call_stream(
                 response_id="resp_tool_call_1",
                 call_id="call_1",
@@ -620,25 +623,32 @@ def test_agent_run_handles_multiple_tool_use_turns() -> None:
                 provider_item_id="fc_call_2",
             ),
             final_text_stream(response_id="resp_final", text="Both cities are sunny."),
-        ],
-        invocations=invocations,
+        ]
     )
     history = [UserMessage(content="Compare Munich and Berlin weather.")]
 
-    events = _collect_run_events(history, stream_fn=stream_fn, tools=tools)
+    events = _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        tools=tools,
+    )
 
     _expect_event_type(events[-1], AgentEndEvent)
-    assert len(invocations) == 3
-    assert len(invocations[1].history) == 3
-    assert len(invocations[2].history) == 5
-    assert expect_assistant_turn(invocations[2].history[1]).response_id == (
+    assert provider.await_count == 3
+
+    second_tool_request_history = provider.history(1)
+    assert len(second_tool_request_history) == 3
+
+    final_request_history = provider.history(2)
+    assert len(final_request_history) == 5
+    assert expect_assistant_turn(final_request_history[1]).response_id == (
         "resp_tool_call_1"
     )
-    assert expect_tool_result_turn(invocations[2].history[2]).call_id == "call_1"
-    assert expect_assistant_turn(invocations[2].history[3]).response_id == (
+    assert expect_tool_result_turn(final_request_history[2]).call_id == "call_1"
+    assert expect_assistant_turn(final_request_history[3]).response_id == (
         "resp_tool_call_2"
     )
-    assert expect_tool_result_turn(invocations[2].history[4]).call_id == "call_2"
+    assert expect_tool_result_turn(final_request_history[4]).call_id == "call_2"
 
 
 def test_agent_leaves_instructions_unchanged_without_cwd_variable(
@@ -646,69 +656,54 @@ def test_agent_leaves_instructions_unchanged_without_cwd_variable(
 ) -> None:
     """Do not append the working directory unless the prompt requests it."""
 
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
-            [
-                stream_start("resp_done"),
-                stream_done("resp_done"),
-            ]
-        ],
-        invocations=invocations,
+    provider = ProviderStreamMock(
+        [
+            empty_stream("resp_done"),
+        ]
     )
     history = [UserMessage(content="Hello")]
 
     _collect_run_events(
         history,
-        stream_fn=stream_fn,
+        stream_fn=provider.fn,
         system_prompt="Base prompt.",
         cwd=tmp_path,
     )
 
-    assert invocations[0].instructions == "Base prompt."
+    assert provider.instructions() == "Base prompt."
 
 
 def test_agent_formats_cwd_prompt_variable(tmp_path: Path) -> None:
     """Apply cwd prompt variables before sending model instructions."""
 
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
-            [
-                stream_start("resp_done"),
-                stream_done("resp_done"),
-            ]
-        ],
-        invocations=invocations,
+    provider = ProviderStreamMock(
+        [
+            empty_stream("resp_done"),
+        ]
     )
     history = [UserMessage(content="Hello")]
 
     _collect_run_events(
         history,
-        stream_fn=stream_fn,
+        stream_fn=provider.fn,
         system_prompt="Current working directory: {cwd}",
         cwd=tmp_path,
     )
 
-    assert invocations[0].instructions == f"Current working directory: {tmp_path}"
+    assert provider.instructions() == f"Current working directory: {tmp_path}"
 
 
 def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     """Finalize an errored assistant stream as an error turn."""
 
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
-        streams=[
-            [
-                stream_start("resp_error"),
-                stream_error("resp_error", "Socket closed"),
-            ]
-        ],
-        invocations=invocations,
+    provider = ProviderStreamMock(
+        [
+            error_stream("resp_error", "Socket closed"),
+        ]
     )
     history = [UserMessage(content="Say hello")]
 
-    events = _collect_run_events(history, stream_fn=stream_fn)
+    events = _collect_run_events(history, stream_fn=provider.fn)
 
     assert [event.type for event in events] == [
         "agent_start",
@@ -735,6 +730,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     assert turn_end.assistant_turn.status == "error"
     assert turn_end.assistant_turn.error_message == "Socket closed"
     assert turn_end.tool_executions == []
-    assert len(invocations) == 1
-    first_request_user = expect_user_message(invocations[0].history[0])
-    assert first_request_user.content == "Say hello"
+
+    provider.assert_awaited_once()
+    request_history = provider.history(0)
+    assert expect_user_message(request_history[0]).content == "Say hello"

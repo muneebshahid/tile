@@ -13,8 +13,7 @@ from ori.types.tools import ToolTextContent
 from examples import local_runner
 from examples.local_runner import run_cli, run_prompt
 from tests.support.agent_streams import (
-    StreamInvocation,
-    build_stream_fn,
+    ProviderStreamMock,
     final_text_stream,
     tool_call_stream,
 )
@@ -28,10 +27,10 @@ from tests.support.conversation_assertions import (
 def test_run_prompt_streams_runtime_tool_flow_as_json_lines(tmp_path: Path) -> None:
     """Run one prompt through the local runtime with a deterministic file tool."""
 
-    invocations, history_store, output = _run_runtime_tool_flow(tmp_path)
+    provider, history_store, output = _run_runtime_tool_flow(tmp_path)
 
     _assert_runtime_event_sequence(output)
-    _assert_provider_received_tool_result(invocations)
+    _assert_provider_received_tool_result(provider)
     _assert_runtime_persisted_completed_history(history_store)
 
 
@@ -64,11 +63,10 @@ def test_run_cli_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def _run_runtime_tool_flow(
     tmp_path: Path,
-) -> tuple[list[StreamInvocation], InMemoryHistoryStore, io.StringIO]:
+) -> tuple[ProviderStreamMock, InMemoryHistoryStore, io.StringIO]:
     """Run the local runner through a fake provider and real read tool."""
 
-    invocations: list[StreamInvocation] = []
-    stream_fn = build_stream_fn(
+    provider = ProviderStreamMock(
         [
             tool_call_stream(
                 response_id="resp_read",
@@ -76,9 +74,11 @@ def _run_runtime_tool_flow(
                 tool_name="read",
                 arguments={"path": "notes.txt"},
             ),
-            final_text_stream(response_id="resp_final", text="The note says hello."),
-        ],
-        invocations,
+            final_text_stream(
+                response_id="resp_final",
+                text="The note says hello.",
+            ),
+        ]
     )
     history_store = InMemoryHistoryStore()
     output = io.StringIO()
@@ -87,14 +87,14 @@ def _run_runtime_tool_flow(
     asyncio.run(
         run_prompt(
             "Read the note",
-            stream_fn=stream_fn,
+            stream_fn=provider.fn,
             model="gpt-5.4",
             history_store=history_store,
             cwd=tmp_path,
             output=output,
         )
     )
-    return invocations, history_store, output
+    return provider, history_store, output
 
 
 def _assert_runtime_event_sequence(output: io.StringIO) -> None:
@@ -118,14 +118,17 @@ def _assert_runtime_event_sequence(output: io.StringIO) -> None:
 
 
 def _assert_provider_received_tool_result(
-    invocations: list[StreamInvocation],
+    provider: ProviderStreamMock,
 ) -> None:
     """Assert the second provider call received the read tool result."""
 
-    assert len(invocations) == 2
-    assert len(invocations[0].history) == 1
-    assert expect_user_message(invocations[0].history[0]).content == "Read the note"
-    assert _expect_tool_text(invocations[1].history[2]) == ("hello from disk\n")
+    assert provider.await_count == 2
+    initial_request_history = provider.history(0)
+    assert len(initial_request_history) == 1
+    assert expect_user_message(initial_request_history[0]).content == "Read the note"
+
+    follow_up_request_history = provider.history(1)
+    assert _expect_tool_text(follow_up_request_history[2]) == "hello from disk\n"
 
 
 def _assert_runtime_persisted_completed_history(

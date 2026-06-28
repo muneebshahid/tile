@@ -63,108 +63,11 @@ from tests.support.stream_assertions import (
 def test_assemble_stream_accumulates_reasoning_and_text_blocks() -> None:
     """Accumulates reasoning and text blocks onto the terminal stream event."""
 
-    normalized_events = [
-        _created_event("resp_success"),
-        _reasoning_added_event("rs_123"),
-        _reasoning_delta_event("Exploring "),
-        _reasoning_delta_event("reasoning traces"),
-        _reasoning_delta_event("\n\n"),
-        _reasoning_delta_event("Formulating "),
-        _reasoning_delta_event("reasoning traces"),
-        _reasoning_done_event(
-            item_id="rs_123",
-            summary_text="Exploring reasoning traces\n\nFormulating reasoning traces",
-            reasoning_signature='{"id":"rs_123"}',
-        ),
-        _message_added_event("msg_123"),
-        _message_text_part_event("output_text"),
-        _message_text_delta_event("output_text", "Hello"),
-        _message_text_delta_event("output_text", " world"),
-        _message_done_event("msg_123", "Hello world"),
-        _completed_event("stop"),
-    ]
+    events = _collect_stream_events(_reasoning_text_events())
 
-    events = _collect_stream_events(normalized_events)
-
-    start = _expect_event_type(events[0], StreamStartEvent)
-    reasoning_start = _expect_event_type(events[1], ReasoningStartEvent)
-    reasoning_delta_one = _expect_event_type(events[2], ReasoningDeltaEvent)
-    reasoning_delta_two = _expect_event_type(events[3], ReasoningDeltaEvent)
-    reasoning_delta_separator = _expect_event_type(events[4], ReasoningDeltaEvent)
-    reasoning_delta_three = _expect_event_type(events[5], ReasoningDeltaEvent)
-    reasoning_delta_four = _expect_event_type(events[6], ReasoningDeltaEvent)
-    reasoning_end = _expect_event_type(events[7], ReasoningEndEvent)
-    text_start = _expect_event_type(events[8], TextStartEvent)
-    text_delta_one = _expect_event_type(events[9], TextDeltaEvent)
-    text_delta_two = _expect_event_type(events[10], TextDeltaEvent)
-    text_end = _expect_event_type(events[11], TextEndEvent)
-    done = _expect_event_type(events[12], StreamDoneEvent)
-    final_reasoning_block = _expect_reasoning_block(reasoning_end.block)
-    final_text_block = _expect_text_block(text_end.block)
-    done_reasoning_block = _expect_reasoning_block(done.blocks[0])
-    done_text_block = _expect_text_block(done.blocks[1])
-
-    assert [event.type for event in events] == [
-        "stream_start",
-        "reasoning_start",
-        "reasoning_delta",
-        "reasoning_delta",
-        "reasoning_delta",
-        "reasoning_delta",
-        "reasoning_delta",
-        "reasoning_end",
-        "text_start",
-        "text_delta",
-        "text_delta",
-        "text_end",
-        "stream_done",
-    ]
-    assert start.response_id == "resp_success"
-    assert start.source == _source()
-    assert reasoning_start.content_index == 0
-    assert reasoning_delta_one.content_index == 0
-    assert reasoning_delta_two.content_index == 0
-    assert reasoning_delta_separator.content_index == 0
-    assert reasoning_delta_three.content_index == 0
-    assert reasoning_delta_four.content_index == 0
-    assert reasoning_end.content_index == 0
-    assert text_start.content_index == 1
-    assert text_delta_one.content_index == 1
-    assert text_delta_two.content_index == 1
-    assert text_end.content_index == 1
-    assert reasoning_delta_one.delta == "Exploring "
-    assert reasoning_delta_two.delta == "reasoning traces"
-    assert reasoning_delta_separator.delta == "\n\n"
-    assert reasoning_delta_three.delta == "Formulating "
-    assert reasoning_delta_four.delta == "reasoning traces"
-    assert (
-        final_reasoning_block.summary_text
-        == "Exploring reasoning traces\n\nFormulating reasoning traces"
-    )
-    assert (
-        _expect_metadata_string(
-            final_reasoning_block,
-            "reasoning_signature",
-        )
-        == '{"id":"rs_123"}'
-    )
-    assert text_delta_one.delta == "Hello"
-    assert text_delta_two.delta == " world"
-    assert final_text_block.text == "Hello world"
-    assert done.response_id == "resp_success"
-    assert done.source == _source()
-    assert (
-        done_reasoning_block.summary_text
-        == "Exploring reasoning traces\n\nFormulating reasoning traces"
-    )
-    assert (
-        _expect_metadata_string(
-            done_reasoning_block,
-            "reasoning_signature",
-        )
-        == '{"id":"rs_123"}'
-    )
-    assert done_text_block.text == "Hello world"
+    _assert_reasoning_text_event_sequence(events)
+    _assert_reasoning_text_stream_content(events)
+    _assert_reasoning_text_terminal_blocks(events)
 
 
 def test_assemble_stream_preserves_reasoning_deltas_when_done_summary_is_empty() -> (
@@ -276,56 +179,10 @@ def test_assemble_stream_waits_for_supported_text_part_before_deltas() -> None:
 def test_assemble_stream_maps_tool_call_events() -> None:
     """Accumulates tool-call events onto terminal stream blocks."""
 
-    events = _collect_stream_events(
-        [
-            _created_event("resp_tool_call"),
-            _tool_call_added_event(
-                provider_item_id="fc_123",
-                call_id="call_123",
-                name="get_weather",
-                arguments={},
-            ),
-            _tool_call_arguments_delta_event('{"'),
-            _tool_call_arguments_delta_event('city":"Munich"}'),
-            _tool_call_arguments_done_event({"city": "Munich"}),
-            _tool_call_done_event(
-                provider_item_id="fc_123",
-                call_id="call_123",
-                name="get_weather",
-                arguments={"city": "Munich"},
-            ),
-            _completed_event("tool_use"),
-        ]
-    )
+    events = _collect_stream_events(_tool_call_events())
 
-    tool_call_start = _expect_event_type(events[1], ToolCallStartEvent)
-    tool_call_delta_one = _expect_event_type(events[2], ToolCallDeltaEvent)
-    tool_call_delta_two = _expect_event_type(events[3], ToolCallDeltaEvent)
-    tool_call_end = _expect_event_type(events[4], ToolCallEndEvent)
-    done = _expect_event_type(events[5], StreamDoneEvent)
-    tool_call_block = _expect_tool_call_block(tool_call_end.block)
-    done_tool_call_block = _expect_tool_call_block(done.blocks[0])
-
-    assert [event.type for event in events] == [
-        "stream_start",
-        "tool_call_start",
-        "tool_call_delta",
-        "tool_call_delta",
-        "tool_call_end",
-        "stream_done",
-    ]
-    assert tool_call_start.content_index == 0
-    assert tool_call_delta_one.content_index == 0
-    assert tool_call_delta_two.content_index == 0
-    assert tool_call_end.content_index == 0
-    assert tool_call_delta_one.delta == '{"'
-    assert tool_call_delta_two.delta == 'city":"Munich"}'
-    assert tool_call_block.call_id == "call_123"
-    assert tool_call_block.name == "get_weather"
-    assert _expect_metadata_string(tool_call_block, "provider_item_id") == "fc_123"
-    assert tool_call_block.arguments == {"city": "Munich"}
-    assert done.stop_reason == "tool_use"
-    assert done_tool_call_block.arguments == {"city": "Munich"}
+    _assert_tool_call_event_sequence(events)
+    _assert_tool_call_stream_content(events)
 
 
 def test_assemble_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:
@@ -472,6 +329,187 @@ def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
     assert [event.type for event in events] == ["stream_start", "stream_done"]
     assert done.response_id == "resp_done"
     assert done.blocks == []
+
+
+def _reasoning_text_events() -> list[NormalizedEvent]:
+    """Build normalized events for a reasoning-plus-text response."""
+
+    return [
+        _created_event("resp_success"),
+        _reasoning_added_event("rs_123"),
+        _reasoning_delta_event("Exploring "),
+        _reasoning_delta_event("reasoning traces"),
+        _reasoning_delta_event("\n\n"),
+        _reasoning_delta_event("Formulating "),
+        _reasoning_delta_event("reasoning traces"),
+        _reasoning_done_event(
+            item_id="rs_123",
+            summary_text=_combined_reasoning_summary(),
+            reasoning_signature='{"id":"rs_123"}',
+        ),
+        _message_added_event("msg_123"),
+        _message_text_part_event("output_text"),
+        _message_text_delta_event("output_text", "Hello"),
+        _message_text_delta_event("output_text", " world"),
+        _message_done_event("msg_123", "Hello world"),
+        _completed_event("stop"),
+    ]
+
+
+def _assert_reasoning_text_event_sequence(
+    events: Sequence[ProviderStreamEvent],
+) -> None:
+    """Assert event order and content indexes for reasoning-plus-text output."""
+
+    start = _expect_event_type(events[0], StreamStartEvent)
+    assert [event.type for event in events] == [
+        "stream_start",
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_delta",
+        "reasoning_delta",
+        "reasoning_delta",
+        "reasoning_delta",
+        "reasoning_end",
+        "text_start",
+        "text_delta",
+        "text_delta",
+        "text_end",
+        "stream_done",
+    ]
+    assert start.response_id == "resp_success"
+    assert start.source == _source()
+    _assert_reasoning_content_indexes(events)
+    _assert_text_content_indexes(events)
+
+
+def _assert_reasoning_text_stream_content(
+    events: Sequence[ProviderStreamEvent],
+) -> None:
+    """Assert streamed reasoning and text deltas."""
+
+    reasoning_deltas = [
+        _expect_event_type(events[index], ReasoningDeltaEvent).delta
+        for index in range(2, 7)
+    ]
+    assert reasoning_deltas == [
+        "Exploring ",
+        "reasoning traces",
+        "\n\n",
+        "Formulating ",
+        "reasoning traces",
+    ]
+    assert _expect_event_type(events[9], TextDeltaEvent).delta == "Hello"
+    assert _expect_event_type(events[10], TextDeltaEvent).delta == " world"
+
+
+def _assert_reasoning_text_terminal_blocks(
+    events: Sequence[ProviderStreamEvent],
+) -> None:
+    """Assert final reasoning/text blocks and replay metadata."""
+
+    reasoning_end = _expect_event_type(events[7], ReasoningEndEvent)
+    text_end = _expect_event_type(events[11], TextEndEvent)
+    done = _expect_event_type(events[12], StreamDoneEvent)
+    final_reasoning_block = _expect_reasoning_block(reasoning_end.block)
+    done_reasoning_block = _expect_reasoning_block(done.blocks[0])
+
+    assert final_reasoning_block.summary_text == _combined_reasoning_summary()
+    assert _expect_metadata_string(final_reasoning_block, "reasoning_signature") == (
+        '{"id":"rs_123"}'
+    )
+    assert _expect_text_block(text_end.block).text == "Hello world"
+    assert done.response_id == "resp_success"
+    assert done.source == _source()
+    assert done_reasoning_block.summary_text == _combined_reasoning_summary()
+    assert _expect_metadata_string(done_reasoning_block, "reasoning_signature") == (
+        '{"id":"rs_123"}'
+    )
+    assert _expect_text_block(done.blocks[1]).text == "Hello world"
+
+
+def _assert_reasoning_content_indexes(events: Sequence[ProviderStreamEvent]) -> None:
+    """Assert content indexes for reasoning events."""
+
+    assert _expect_event_type(events[1], ReasoningStartEvent).content_index == 0
+    for index in range(2, 7):
+        assert _expect_event_type(events[index], ReasoningDeltaEvent).content_index == 0
+    assert _expect_event_type(events[7], ReasoningEndEvent).content_index == 0
+
+
+def _assert_text_content_indexes(events: Sequence[ProviderStreamEvent]) -> None:
+    """Assert content indexes for text events."""
+
+    assert _expect_event_type(events[8], TextStartEvent).content_index == 1
+    assert _expect_event_type(events[9], TextDeltaEvent).content_index == 1
+    assert _expect_event_type(events[10], TextDeltaEvent).content_index == 1
+    assert _expect_event_type(events[11], TextEndEvent).content_index == 1
+
+
+def _tool_call_events() -> list[NormalizedEvent]:
+    """Build normalized events for a tool-call response."""
+
+    return [
+        _created_event("resp_tool_call"),
+        _tool_call_added_event(
+            provider_item_id="fc_123",
+            call_id="call_123",
+            name="get_weather",
+            arguments={},
+        ),
+        _tool_call_arguments_delta_event('{"'),
+        _tool_call_arguments_delta_event('city":"Munich"}'),
+        _tool_call_arguments_done_event({"city": "Munich"}),
+        _tool_call_done_event(
+            provider_item_id="fc_123",
+            call_id="call_123",
+            name="get_weather",
+            arguments={"city": "Munich"},
+        ),
+        _completed_event("tool_use"),
+    ]
+
+
+def _assert_tool_call_event_sequence(events: Sequence[ProviderStreamEvent]) -> None:
+    """Assert event order and content indexes for tool-call output."""
+
+    assert [event.type for event in events] == [
+        "stream_start",
+        "tool_call_start",
+        "tool_call_delta",
+        "tool_call_delta",
+        "tool_call_end",
+        "stream_done",
+    ]
+    assert _expect_event_type(events[1], ToolCallStartEvent).content_index == 0
+    assert _expect_event_type(events[2], ToolCallDeltaEvent).content_index == 0
+    assert _expect_event_type(events[3], ToolCallDeltaEvent).content_index == 0
+    assert _expect_event_type(events[4], ToolCallEndEvent).content_index == 0
+
+
+def _assert_tool_call_stream_content(events: Sequence[ProviderStreamEvent]) -> None:
+    """Assert streamed tool-call deltas and final blocks."""
+
+    tool_call_delta_one = _expect_event_type(events[2], ToolCallDeltaEvent)
+    tool_call_delta_two = _expect_event_type(events[3], ToolCallDeltaEvent)
+    tool_call_end = _expect_event_type(events[4], ToolCallEndEvent)
+    done = _expect_event_type(events[5], StreamDoneEvent)
+    tool_call_block = _expect_tool_call_block(tool_call_end.block)
+
+    assert tool_call_delta_one.delta == '{"'
+    assert tool_call_delta_two.delta == 'city":"Munich"}'
+    assert tool_call_block.call_id == "call_123"
+    assert tool_call_block.name == "get_weather"
+    assert _expect_metadata_string(tool_call_block, "provider_item_id") == "fc_123"
+    assert tool_call_block.arguments == {"city": "Munich"}
+    assert done.stop_reason == "tool_use"
+    assert _expect_tool_call_block(done.blocks[0]).arguments == {"city": "Munich"}
+
+
+def _combined_reasoning_summary() -> str:
+    """Return the reasoning summary accumulated by the combined stream."""
+
+    return "Exploring reasoning traces\n\nFormulating reasoning traces"
 
 
 def _collect_stream_events(

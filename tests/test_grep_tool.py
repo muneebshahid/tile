@@ -11,6 +11,12 @@ import ori.tools.support.executables as executables
 import ori.tools.grep as grep
 import ori.tools.support.truncation as truncation
 from ori.types.tools import GrepDetails, ToolResult, ToolTextContent
+from tests.support.command_mocks import (
+    captured_args,
+    captured_cwd,
+    executable_lookup,
+    no_executable,
+)
 
 
 def test_schema_requires_only_pattern() -> None:
@@ -84,14 +90,18 @@ def test_build_args_protects_flag_like_patterns() -> None:
 def rg_available(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the rg executable available to fn-level tests."""
 
-    monkeypatch.setattr(executables.shutil, "which", _find_command)
+    monkeypatch.setattr(
+        executables.shutil,
+        "which",
+        executable_lookup("rg", "/usr/bin/rg"),
+    )
 
 
 @pytest.fixture
 def rg_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the rg executable unavailable to fn-level tests."""
 
-    monkeypatch.setattr(executables.shutil, "which", _find_no_commands)
+    monkeypatch.setattr(executables.shutil, "which", no_executable)
 
 
 @pytest.fixture
@@ -151,8 +161,8 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
     result = _text(await grep.fn(pattern="needle", path="src", cwd=tmp_path))
 
     assert result == "example.txt:2: needle line"
-    assert _captured_args(execution)[-1] == "src"
-    assert _captured_cwd(execution) == tmp_path
+    assert captured_args(execution)[-1] == "src"
+    assert captured_cwd(execution) == tmp_path
 
 
 @pytest.mark.asyncio
@@ -392,43 +402,6 @@ def test_build_result_combines_truncation_notices() -> None:
         "50.0KB limit reached. "
         "Some lines truncated to 500 chars. Use read tool to see full lines]"
     )
-
-
-def _find_command(command: str) -> str | None:
-    """Return a path only for search command availability checks."""
-
-    if command == "rg":
-        return "/usr/bin/rg"
-    return None
-
-
-def _find_no_commands(command: str) -> None:
-    """Return no command path for all availability checks."""
-
-    _ = command
-    return None
-
-
-def _captured_args(execution: AsyncMock) -> list[str]:
-    """Return the rg args captured by a fake execution call."""
-
-    execution.assert_awaited_once()
-    await_args = execution.await_args
-    assert await_args is not None
-    args = await_args.args
-    assert isinstance(args[1], list)
-    return args[1]
-
-
-def _captured_cwd(execution: AsyncMock) -> Path | None:
-    """Return the cwd captured by a fake execution call."""
-
-    execution.assert_awaited_once()
-    await_args = execution.await_args
-    assert await_args is not None
-    cwd = await_args.kwargs.get("cwd")
-    assert isinstance(cwd, Path) or cwd is None
-    return cwd
 
 
 def _event(

@@ -9,6 +9,12 @@ import ori.tools.support.executables as executables
 import ori.tools.find as find
 import ori.tools.support.truncation as truncation
 from ori.types.tools import FindDetails, ToolResult, ToolTextContent
+from tests.support.command_mocks import (
+    captured_args,
+    captured_cwd,
+    executable_lookup,
+    no_executable,
+)
 
 
 def test_find_schema_requires_only_pattern() -> None:
@@ -31,14 +37,18 @@ def test_find_schema_exposes_path_search_controls() -> None:
 def fd_available(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the fd executable available to fn-level tests."""
 
-    monkeypatch.setattr(executables.shutil, "which", _find_command)
+    monkeypatch.setattr(
+        executables.shutil,
+        "which",
+        executable_lookup("fd", "/usr/bin/fd"),
+    )
 
 
 @pytest.fixture
 def fd_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make the fd executable unavailable to fn-level tests."""
 
-    monkeypatch.setattr(executables.shutil, "which", _find_no_commands)
+    monkeypatch.setattr(executables.shutil, "which", no_executable)
 
 
 @pytest.fixture
@@ -94,8 +104,8 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
     result = _text(await find.fn(pattern="*.py", path="src", cwd=tmp_path))
 
     assert result == "ori/tools/find.py"
-    assert _captured_args(execution)[-1] == "src"
-    assert _captured_cwd(execution) == tmp_path
+    assert captured_args(execution)[-1] == "src"
+    assert captured_cwd(execution) == tmp_path
 
 
 @pytest.mark.asyncio
@@ -112,7 +122,7 @@ async def test_fn_uses_full_path_for_path_patterns(
     )
 
     assert result == "ori/tools/find.py"
-    assert _captured_args(execution) == [
+    assert captured_args(execution) == [
         "--glob",
         "--color=never",
         "--hidden",
@@ -140,7 +150,7 @@ async def test_fn_normalizes_root_relative_full_path_pattern(
     )
 
     assert result == "ori/tools/find.py"
-    assert _captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
+    assert captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
 
 
 @pytest.mark.asyncio
@@ -157,7 +167,7 @@ async def test_fn_preserves_prefixed_full_path_pattern(
     )
 
     assert result == "ori/tools/find.py"
-    assert _captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
+    assert captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
 
 
 @pytest.mark.asyncio
@@ -173,7 +183,7 @@ async def test_fn_clamps_limit_to_one(execution: AsyncMock) -> None:
         result
         == "a.py\n\n[1 results limit reached. Use limit=2 for more, or refine pattern]"
     )
-    assert _captured_args(execution)[4:6] == ["--max-results", "2"]
+    assert captured_args(execution)[4:6] == ["--max-results", "2"]
 
 
 @pytest.mark.asyncio
@@ -283,43 +293,6 @@ async def test_fn_reports_byte_limit_when_byte_boundary_is_first(
 
     assert result.endswith("\n\n[50.0KB limit reached]")
     assert "results limit reached" not in result
-
-
-def _captured_args(execution: AsyncMock) -> list[str]:
-    """Return the fd args captured by a fake execution call."""
-
-    execution.assert_awaited_once()
-    await_args = execution.await_args
-    assert await_args is not None
-    args = await_args.args
-    assert isinstance(args[1], list)
-    return args[1]
-
-
-def _captured_cwd(execution: AsyncMock) -> Path | None:
-    """Return the cwd captured by a fake execution call."""
-
-    execution.assert_awaited_once()
-    await_args = execution.await_args
-    assert await_args is not None
-    cwd = await_args.kwargs.get("cwd")
-    assert isinstance(cwd, Path) or cwd is None
-    return cwd
-
-
-def _find_command(command: str) -> str | None:
-    """Return a path for the fd command only."""
-
-    if command == "fd":
-        return "/usr/bin/fd"
-    return None
-
-
-def _find_no_commands(command: str) -> None:
-    """Return no command path for all availability checks."""
-
-    _ = command
-    return None
 
 
 def _text(result: ToolResult) -> str:
