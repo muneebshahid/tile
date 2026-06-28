@@ -7,11 +7,11 @@ from openai import AsyncOpenAI
 from openai.types.responses.response_create_params import ResponseCreateParamsStreaming
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 
-from ori.openai.client import create_client
-from ori.openai.serialization import serialize_history_items, serialize_tools
-from ori.openai.sdk_event_adapter import normalize_sdk_events
-from ori.openai.stream_assembler import assemble_stream
-from ori.openai.subscription_event_adapter import (
+from ori.providers.openai.client import create_client
+from ori.providers.openai.serialization import serialize_history_items, serialize_tools
+from ori.providers.openai.sdk_event_adapter import normalize_sdk_events
+from ori.providers.openai.stream_assembler import assemble_stream
+from ori.providers.openai.subscription_event_adapter import (
     SubscriptionEventPayload,
     normalize_subscription_events,
 )

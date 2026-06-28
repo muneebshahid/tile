@@ -32,7 +32,7 @@ from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
 )
 
-from ori.openai.normalized_events import (
+from ori.providers.openai.normalized_events import (
     NormalizedEvent,
     NormalizedEventType,
     TextPartType,

@@ -1,6 +1,6 @@
 from pydantic import TypeAdapter
 
-from ori.openai.serialization import (
+from ori.providers.openai.serialization import (
     serialize_history_items,
     serialize_response_input,
     serialize_tools,

@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import cast
 
-from ori.openai.normalized_events import (
+from ori.providers.openai.normalized_events import (
     CompletedNormalizedEvent,
     CreatedNormalizedEvent,
     FailedNormalizedEvent,

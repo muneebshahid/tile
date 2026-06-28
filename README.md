@@ -24,7 +24,8 @@ A small Python-native runtime for tool-using agent sessions.
 ```
 ori/
 ├── history/         # Session metadata and conversation history stores
-├── openai/          # OpenAI provider implementation
+├── providers/       # Provider integrations
+│   └── openai/      # OpenAI provider implementation
 ├── tools/           # Built-in local tool implementations
 ├── types/           # Provider-neutral contracts for conversations and tools
 ├── events.py        # Runtime event contracts
@@ -54,14 +55,14 @@ may move as Ori grows.
 ```python
 from ori import AgentRuntime, HistoryStore, InMemoryHistoryStore
 from ori.events import AgentEvent, MessageEndEvent, StreamFn
-from ori.openai import stream_api
+from ori.providers.openai import stream_api
 from ori.types import ToolDefinition, ToolResult
 ```
 
 `ori` exposes the runtime, session, history-store, and runtime-error contracts.
 `ori.events` exposes structured runtime events yielded by `Session.prompt(...)`.
 `ori.types` exposes provider-neutral conversation, stream, and tool contracts.
-`ori.openai` exposes the implemented OpenAI stream entrypoint.
+`ori.providers.openai` exposes the implemented OpenAI stream entrypoint.
 
 ## Development
 

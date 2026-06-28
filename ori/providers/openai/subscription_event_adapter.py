@@ -6,7 +6,7 @@ from typing import TypeAlias, cast
 
 from pydantic import JsonValue
 
-from ori.openai.normalized_events import (
+from ori.providers.openai.normalized_events import (
     NormalizedEvent,
     NormalizedEventType,
     TextPartType,

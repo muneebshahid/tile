@@ -8,7 +8,7 @@ from typing import TextIO
 
 from ori import AgentRuntime, HistoryStore
 from ori.events import AgentEvent, StreamFn
-from ori.openai import stream_api
+from ori.providers.openai import stream_api
 from ori.tools import build_tools
 from ori.types import ToolDefinition
 from settings import settings

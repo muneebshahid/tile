@@ -12,7 +12,7 @@ from ori import (
     SessionNotFoundError,
 )
 from ori.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
-from ori.openai import stream_api
+from ori.providers.openai import stream_api
 from ori.types import (
     AsyncEventStream,
     ConversationItem,
