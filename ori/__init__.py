@@ -3,6 +3,8 @@
 from ori.history import (
     HistoryStore,
     InMemoryHistoryStore,
+    SQLiteHistoryStore,
+    SQLiteHistoryStoreSchemaError,
     SessionAlreadyExistsError,
     SessionNotFoundError,
     SessionRecord,
@@ -19,5 +21,7 @@ __all__ = [
     "SessionBusyError",
     "SessionNotFoundError",
     "SessionRecord",
+    "SQLiteHistoryStore",
+    "SQLiteHistoryStoreSchemaError",
     "ToolExecutor",
 ]
