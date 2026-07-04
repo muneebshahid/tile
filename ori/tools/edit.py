@@ -74,6 +74,16 @@ class ReplacementApplication:
     new_content: str
 
 
+@dataclass(frozen=True)
+class LineWindowEdit:
+    """A validated fuzzy replacement window in original line coordinates."""
+
+    edit_index: int
+    start_line: int
+    end_line: int
+    new_lines: list[str]
+
+
 class MatchNotFound(RuntimeError):
     """Raised when a replacement oldText cannot be found."""
 
@@ -154,16 +164,12 @@ def _apply_replacements_with_fallback(
     replacements: list[EditReplacement],
     display_path: str,
 ) -> ReplacementApplication:
-    """Apply exact replacements, then retry in fuzzy-normalized space if needed."""
+    """Apply exact replacements, then retry fuzzy whole-line matching if needed."""
 
     try:
         return _apply_replacements(content, replacements, display_path)
     except MatchNotFound:
-        return _apply_replacements(
-            _normalize_for_fuzzy_match(content),
-            _fuzzy_normalized_replacements(replacements),
-            display_path,
-        )
+        return _apply_fuzzy_replacements(content, replacements, display_path)
 
 
 def _apply_replacements(
@@ -178,6 +184,104 @@ def _apply_replacements(
     if content == new_content:
         raise RuntimeError(_no_change_error(display_path, len(replacements)))
     return ReplacementApplication(base_content=content, new_content=new_content)
+
+
+def _apply_fuzzy_replacements(
+    content: str,
+    replacements: list[EditReplacement],
+    display_path: str,
+) -> ReplacementApplication:
+    """Apply replacements by matching fuzzy-normalized whole lines.
+
+    Normalization is used only to locate matches; replacements splice the
+    original lines so untouched regions stay byte-identical.
+    """
+
+    original_lines = content.split("\n")
+    normalized_lines = [_normalize_for_fuzzy_match(line) for line in original_lines]
+    window_edits = _match_fuzzy_windows(normalized_lines, replacements, display_path)
+    new_content = "\n".join(_replace_line_windows(original_lines, window_edits))
+    if content == new_content:
+        raise RuntimeError(_no_change_error(display_path, len(replacements)))
+    return ReplacementApplication(base_content=content, new_content=new_content)
+
+
+def _match_fuzzy_windows(
+    normalized_lines: list[str],
+    replacements: list[EditReplacement],
+    display_path: str,
+) -> list[LineWindowEdit]:
+    """Find a unique normalized line window for every requested replacement."""
+
+    window_edits: list[LineWindowEdit] = []
+    for index, replacement in enumerate(replacements):
+        window = [
+            _normalize_for_fuzzy_match(line)
+            for line in _window_lines(replacement.oldText)
+        ]
+        starts = _find_window_starts(normalized_lines, window)
+        if not starts:
+            raise RuntimeError(_not_found_error(display_path, index, len(replacements)))
+        if len(starts) > 1:
+            raise RuntimeError(
+                _duplicate_error(display_path, index, len(replacements), len(starts))
+            )
+        window_edits.append(
+            LineWindowEdit(
+                edit_index=index,
+                start_line=starts[0],
+                end_line=starts[0] + len(window),
+                new_lines=_window_lines(replacement.newText),
+            )
+        )
+    _validate_non_overlapping_windows(window_edits, display_path)
+    return window_edits
+
+
+def _window_lines(text: str) -> list[str]:
+    """Split edit text into whole lines, treating a trailing newline as closure."""
+
+    lines = _normalize_to_lf(text).split("\n")
+    if len(lines) > 1 and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _find_window_starts(normalized_lines: list[str], window: list[str]) -> list[int]:
+    """Return start indexes where the window matches consecutive lines."""
+
+    span = len(window)
+    return [
+        start
+        for start in range(len(normalized_lines) - span + 1)
+        if normalized_lines[start : start + span] == window
+    ]
+
+
+def _replace_line_windows(
+    original_lines: list[str],
+    window_edits: list[LineWindowEdit],
+) -> list[str]:
+    """Splice window replacements in reverse order so line offsets stay stable."""
+
+    new_lines = list(original_lines)
+    for edit in sorted(window_edits, key=lambda item: item.start_line, reverse=True):
+        new_lines[edit.start_line : edit.end_line] = edit.new_lines
+    return new_lines
+
+
+def _validate_non_overlapping_windows(
+    window_edits: list[LineWindowEdit],
+    display_path: str,
+) -> None:
+    """Reject overlapping fuzzy replacement windows."""
+
+    ordered = sorted(window_edits, key=lambda edit: edit.start_line)
+    for previous, current in zip(ordered, ordered[1:]):
+        if previous.end_line > current.start_line:
+            raise RuntimeError(
+                _overlap_error(previous.edit_index, current.edit_index, display_path)
+            )
 
 
 def _write_loaded_file(path: Path, loaded_file: LoadedFile, content: str) -> None:
@@ -279,9 +383,7 @@ def _validate_non_overlapping(
     for previous, current in zip(sorted_edits, sorted_edits[1:]):
         if previous.match_index + previous.match_length > current.match_index:
             raise RuntimeError(
-                f"edits[{previous.edit_index}] and edits[{current.edit_index}] "
-                f"overlap in {display_path}. Merge them into one edit or target "
-                "disjoint regions."
+                _overlap_error(previous.edit_index, current.edit_index, display_path)
             )
 
 
@@ -330,20 +432,6 @@ def _restore_line_endings(content: str, line_ending: LineEnding) -> str:
     if line_ending == "\r\n":
         return content.replace("\n", "\r\n")
     return content
-
-
-def _fuzzy_normalized_replacements(
-    replacements: list[EditReplacement],
-) -> list[EditReplacement]:
-    """Normalize oldText values for fuzzy matching while preserving newText."""
-
-    return [
-        EditReplacement(
-            oldText=_normalize_for_fuzzy_match(_normalize_to_lf(replacement.oldText)),
-            newText=replacement.newText,
-        )
-        for replacement in replacements
-    ]
 
 
 def _normalize_for_fuzzy_match(text: str) -> str:
@@ -417,6 +505,15 @@ def _empty_old_text_error(path: str, edit_index: int, total_edits: int) -> str:
     if total_edits == 1:
         return f"oldText must not be empty in {path}."
     return f"edits[{edit_index}].oldText must not be empty in {path}."
+
+
+def _overlap_error(first_index: int, second_index: int, path: str) -> str:
+    """Return the overlapping-edits error message."""
+
+    return (
+        f"edits[{first_index}] and edits[{second_index}] overlap in {path}. "
+        "Merge them into one edit or target disjoint regions."
+    )
 
 
 def _no_change_error(path: str, total_edits: int) -> str:

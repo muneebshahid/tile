@@ -353,6 +353,77 @@ async def test_edit_fuzzy_matches_unicode_compatibility_forms(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
+async def test_edit_fuzzy_preserves_untouched_regions(tmp_path: Path) -> None:
+    """Leave lines outside the fuzzy-matched window byte-identical."""
+
+    file_path = _write_text(
+        tmp_path / "sample.txt",
+        "alpha ‘one’  \nconsole.log(‘hello’);\nomega “end”\t\n",
+    )
+
+    await edit.fn(
+        path=str(file_path),
+        edits=[
+            {
+                "oldText": "console.log('hello');",
+                "newText": "console.log('world');",
+            }
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert file_path.read_text(encoding="utf-8") == (
+        "alpha ‘one’  \nconsole.log('world');\nomega “end”\t\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_edit_fuzzy_diff_reports_original_content(tmp_path: Path) -> None:
+    """Diff fuzzy replacements against the original file content."""
+
+    file_path = _write_text(
+        tmp_path / "sample.txt",
+        "alpha ‘one’  \nconsole.log(‘hello’);\n",
+    )
+
+    tool_result = await edit.fn(
+        path=str(file_path),
+        edits=[
+            {
+                "oldText": "console.log('hello');",
+                "newText": "console.log('world');",
+            }
+        ],
+        cwd=Path.cwd(),
+    )
+
+    details = _edit_details(tool_result)
+    assert "-console.log(‘hello’);\n" in details.diff
+    assert "+console.log('world');\n" in details.diff
+    assert "-alpha" not in details.diff
+    assert "+alpha" not in details.diff
+
+
+@pytest.mark.asyncio
+async def test_edit_fuzzy_rejects_ambiguous_matches(tmp_path: Path) -> None:
+    """Reject fuzzy replacements whose window matches more than once."""
+
+    file_path = _write_text(
+        tmp_path / "sample.txt",
+        "log(‘x’);\nother\nlog(‘x’);\n",
+    )
+
+    with pytest.raises(RuntimeError, match="Found 2 occurrences"):
+        await edit.fn(
+            path=str(file_path),
+            edits=[{"oldText": "log('x');", "newText": "log('y');"}],
+            cwd=Path.cwd(),
+        )
+
+    assert file_path.read_text(encoding="utf-8") == ("log(‘x’);\nother\nlog(‘x’);\n")
+
+
+@pytest.mark.asyncio
 async def test_edit_prefers_exact_match_over_fuzzy_match(tmp_path: Path) -> None:
     """Use original content when all edits match exactly."""
 
