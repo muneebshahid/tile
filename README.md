@@ -55,14 +55,16 @@ may move as Ori grows.
 ```python
 from ori import AgentRuntime, HistoryStore, InMemoryHistoryStore
 from ori.events import AgentEvent, MessageEndEvent, StreamFn
-from ori.providers.openai import stream_api
+from ori.providers.openai import create_stream_api
 from ori.types import ToolDefinition, ToolResult
 ```
 
 `ori` exposes the runtime, session, history-store, and runtime-error contracts.
 `ori.events` exposes structured runtime events yielded by `Session.prompt(...)`.
 `ori.types` exposes provider-neutral conversation, stream, and tool contracts.
-`ori.providers.openai` exposes the implemented OpenAI stream entrypoint.
+`ori.providers.openai` exposes `create_stream_api`, which binds a
+caller-constructed `AsyncOpenAI` client to the runtime's stream-function
+contract: `create_stream_api(AsyncOpenAI(...))`.
 
 ## Development
 
