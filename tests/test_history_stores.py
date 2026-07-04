@@ -2,8 +2,9 @@
 
 import asyncio
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -39,7 +40,28 @@ def _sqlite_store(tmp_path: Path) -> HistoryStore:
     return SQLiteHistoryStore(tmp_path / "history.db")
 
 
-@pytest.mark.parametrize("store_factory", [_in_memory_store, _sqlite_store])
+@pytest.fixture(params=[_in_memory_store, _sqlite_store])
+def store_factory(request: pytest.FixtureRequest) -> Iterator[HistoryStoreFactory]:
+    """Return tracked history-store factories and close SQLite stores on teardown."""
+
+    stores: list[HistoryStore] = []
+    build_store = cast(HistoryStoreFactory, request.param)
+
+    def _tracked_store_factory(tmp_path: Path) -> HistoryStore:
+        """Build and track a history store for one contract test."""
+
+        store = build_store(tmp_path)
+        stores.append(store)
+        return store
+
+    try:
+        yield _tracked_store_factory
+    finally:
+        for store in stores:
+            if isinstance(store, SQLiteHistoryStore):
+                store.close()
+
+
 def test_history_store_creates_and_lists_sessions(
     tmp_path: Path,
     store_factory: HistoryStoreFactory,
@@ -60,7 +82,6 @@ def test_history_store_creates_and_lists_sessions(
     ]
 
 
-@pytest.mark.parametrize("store_factory", [_in_memory_store, _sqlite_store])
 def test_history_store_rejects_unknown_session_writes(
     tmp_path: Path,
     store_factory: HistoryStoreFactory,
@@ -73,7 +94,6 @@ def test_history_store_rejects_unknown_session_writes(
         store.append_history("missing", [UserMessage(content="hello")])
 
 
-@pytest.mark.parametrize("store_factory", [_in_memory_store, _sqlite_store])
 def test_history_store_preserves_history_order(
     tmp_path: Path,
     store_factory: HistoryStoreFactory,
@@ -93,7 +113,6 @@ def test_history_store_preserves_history_order(
     assert expect_user_message(history[2]).content == "second"
 
 
-@pytest.mark.parametrize("store_factory", [_in_memory_store, _sqlite_store])
 def test_history_store_returns_defensive_history_snapshots(
     tmp_path: Path,
     store_factory: HistoryStoreFactory,
@@ -114,7 +133,6 @@ def test_history_store_returns_defensive_history_snapshots(
     assert expect_user_message(stored_history[0]).content == "hello"
 
 
-@pytest.mark.parametrize("store_factory", [_in_memory_store, _sqlite_store])
 def test_history_store_copies_history_to_new_session(
     tmp_path: Path,
     store_factory: HistoryStoreFactory,
@@ -135,7 +153,6 @@ def test_history_store_copies_history_to_new_session(
     assert store.get_history("fork") == store.get_history("source")
 
 
-@pytest.mark.parametrize("store_factory", [_in_memory_store, _sqlite_store])
 def test_history_store_rejects_duplicate_copy_target(
     tmp_path: Path,
     store_factory: HistoryStoreFactory,
@@ -205,6 +222,25 @@ def test_sqlite_history_store_records_schema_version(tmp_path: Path) -> None:
     connection.close()
 
     assert version == ("1",)
+
+
+def test_sqlite_history_store_supports_explicit_in_memory_mode() -> None:
+    """Create an in-memory SQLite history store without a filesystem path."""
+
+    store = SQLiteHistoryStore(in_memory=True)
+
+    store.ensure_session(session_id="memory")
+    store.append_history("memory", [UserMessage(content="hello")])
+
+    assert expect_user_message(store.get_history("memory")[0]).content == "hello"
+    store.close()
+
+
+def test_sqlite_history_store_requires_path_for_file_backed_mode() -> None:
+    """Require a database path unless the caller opts into in-memory storage."""
+
+    with pytest.raises(ValueError, match="database_path is required"):
+        SQLiteHistoryStore()
 
 
 def test_sqlite_history_store_rejects_unknown_schema_version(tmp_path: Path) -> None:

@@ -28,13 +28,25 @@ class SQLiteHistoryStoreSchemaError(RuntimeError):
 class SQLiteHistoryStore:
     """SQLite implementation of session records and conversation history."""
 
-    def __init__(self, database_path: Path | str = _IN_MEMORY_DATABASE) -> None:
+    def __init__(
+        self,
+        database_path: Path | str | None = None,
+        *,
+        in_memory: bool = False,
+    ) -> None:
         """Open a SQLite history database and initialize its schema."""
 
-        self._database_path = _normalize_database_path(database_path)
-        self._connection = sqlite3.connect(self._database_path)
-        self._connection.execute("PRAGMA foreign_keys = ON")
-        self._initialize_schema()
+        self._connection_target = _resolve_connection_target(
+            database_path=database_path,
+            in_memory=in_memory,
+        )
+        self._connection = sqlite3.connect(self._connection_target)
+        try:
+            self._connection.execute("PRAGMA foreign_keys = ON")
+            self._initialize_schema()
+        except Exception:
+            self._connection.close()
+            raise
 
     def ensure_session(
         self,
@@ -309,9 +321,15 @@ class SQLiteHistoryStore:
             self._connection.commit()
 
 
-def _normalize_database_path(database_path: Path | str) -> str:
-    """Convert a filesystem path or SQLite memory marker to a connection target."""
+def _resolve_connection_target(
+    *,
+    database_path: Path | str | None,
+    in_memory: bool,
+) -> str:
+    """Return the SQLite connection target for a file-backed or in-memory store."""
 
-    if database_path == _IN_MEMORY_DATABASE:
+    if in_memory:
         return _IN_MEMORY_DATABASE
+    if database_path is None:
+        raise ValueError("database_path is required unless in_memory=True.")
     return str(Path(database_path).expanduser())
