@@ -12,7 +12,7 @@ from ori import (
     SessionNotFoundError,
 )
 from ori.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
-from ori.providers.openai import stream_api
+from ori.providers.openai import create_stream_api
 from ori.types import (
     AsyncEventStream,
     ConversationItem,
@@ -46,7 +46,7 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert len(session.history) == 2
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
-    assert callable(stream_api)
+    assert callable(create_stream_api)
 
 
 def _fake_stream_fn() -> StreamFn:

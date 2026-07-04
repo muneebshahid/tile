@@ -5,9 +5,8 @@ from typing import TYPE_CHECKING, cast
 
 from openai import AsyncOpenAI
 from openai.types.responses.response_create_params import ResponseCreateParamsStreaming
-from openai.types.responses.response_stream_event import ResponseStreamEvent
 
-from ori.providers.openai.client import create_client
+from ori.events import StreamFn
 from ori.providers.openai.serialization import serialize_history_items, serialize_tools
 from ori.providers.openai.sdk_event_adapter import normalize_sdk_events
 from ori.providers.openai.stream_assembler import assemble_stream
@@ -24,28 +23,33 @@ if TYPE_CHECKING:
     from openai.types.shared_params.reasoning import Reasoning as OpenAIReasoning
 
 
-async def stream_api(
-    history: Sequence[ConversationItem],
-    model: str,
-    *,
-    instructions: str,
-    reasoning: Reasoning | None = None,
-    tools: Sequence[ToolDefinition] | None = None,
-) -> AsyncEventStream:
-    """Stream assistant events through the OpenAI SDK transport."""
+def create_stream_api(client: AsyncOpenAI) -> StreamFn:
+    """Bind a caller-constructed OpenAI client to an API-transport stream function."""
 
-    request_params = _build_stream_request_params(
-        history,
-        model,
-        instructions=instructions,
-        reasoning=reasoning,
-        tools=tools,
-    )
-    raw_stream = await _create_api_stream(create_client(), request_params)
-    return assemble_stream(
-        normalize_sdk_events(raw_stream),
-        source=ProviderSource(provider="openai", model=model),
-    )
+    async def stream_api(
+        history: Sequence[ConversationItem],
+        model: str,
+        *,
+        instructions: str,
+        reasoning: Reasoning | None = None,
+        tools: Sequence[ToolDefinition] | None = None,
+    ) -> AsyncEventStream:
+        """Stream assistant events through the OpenAI SDK transport."""
+
+        request_params = _build_stream_request_params(
+            history,
+            model,
+            instructions=instructions,
+            reasoning=reasoning,
+            tools=tools,
+        )
+        raw_stream = await client.responses.create(**request_params)
+        return assemble_stream(
+            normalize_sdk_events(raw_stream),
+            source=ProviderSource(provider="openai", model=model),
+        )
+
+    return stream_api
 
 
 async def stream_subscription(
@@ -74,15 +78,6 @@ async def stream_subscription(
         normalize_subscription_events(subscription_stream),
         source=ProviderSource(provider="openai", model=model),
     )
-
-
-async def _create_api_stream(
-    client: AsyncOpenAI,
-    request_params: ResponseCreateParamsStreaming,
-) -> AsyncIterator[ResponseStreamEvent]:
-    """Create the raw OpenAI SDK event stream for API-based auth."""
-
-    return await client.responses.create(**request_params)
 
 
 async def _create_subscription_stream(

@@ -6,12 +6,14 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import TextIO
 
+from openai import AsyncOpenAI
+
 from ori import AgentRuntime, HistoryStore
 from ori.events import AgentEvent, StreamFn
-from ori.providers.openai import stream_api
+from ori.providers.openai import create_stream_api
 from ori.tools import build_tools
 from ori.types import ToolDefinition
-from settings import settings
+from examples.settings import settings
 
 
 def main() -> None:
@@ -28,14 +30,18 @@ async def run_cli(argv: Sequence[str]) -> int:
         print("Provide a prompt as arguments or stdin.", file=sys.stderr)
         return 2
 
-    await run_prompt(prompt)
+    client = AsyncOpenAI(
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_base_url,
+    )
+    await run_prompt(prompt, stream_fn=create_stream_api(client))
     return 0
 
 
 async def run_prompt(
     prompt: str,
     *,
-    stream_fn: StreamFn = stream_api,
+    stream_fn: StreamFn,
     model: str | None = None,
     tools: Sequence[ToolDefinition] | None = None,
     history_store: HistoryStore | None = None,

@@ -1,7 +1,7 @@
 """Public OpenAI provider entrypoints."""
 
-from ori.providers.openai.provider import stream_api
+from ori.providers.openai.provider import create_stream_api
 
 __all__ = [
-    "stream_api",
+    "create_stream_api",
 ]

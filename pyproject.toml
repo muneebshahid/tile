@@ -9,7 +9,6 @@ dependencies = [
     "openai>=1.0.0",
     "pillow>=12.2.0",
     "pydantic>=2.12.5",
-    "pydantic-settings>=2.13.1",
 ]
 
 [dependency-groups]
@@ -26,3 +25,11 @@ error-on-warning = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[build-system]
+requires = ["uv_build>=0.10,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "ori"
+module-root = ""
