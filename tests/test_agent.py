@@ -693,6 +693,35 @@ def test_agent_formats_cwd_prompt_variable(tmp_path: Path) -> None:
     assert provider.instructions() == f"Current working directory: {tmp_path}"
 
 
+def test_agent_preserves_literal_braces_in_system_prompt(tmp_path: Path) -> None:
+    """Leave non-cwd braces untouched in custom system prompts."""
+
+    provider = ProviderStreamMock(
+        [
+            empty_stream("resp_done"),
+        ]
+    )
+    history = [UserMessage(content="Hello")]
+    system_prompt = (
+        'Respond with JSON like {"status": "ok"}. '
+        "Use code blocks like function f() { return 1; }. "
+        "Current working directory: {cwd}"
+    )
+
+    _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        system_prompt=system_prompt,
+        cwd=tmp_path,
+    )
+
+    assert provider.instructions() == (
+        'Respond with JSON like {"status": "ok"}. '
+        "Use code blocks like function f() { return 1; }. "
+        f"Current working directory: {tmp_path}"
+    )
+
+
 def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     """Finalize an errored assistant stream as an error turn."""
 
