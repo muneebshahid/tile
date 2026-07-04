@@ -262,12 +262,12 @@ def test_sqlite_history_store_rejects_unknown_schema_version(tmp_path: Path) -> 
 
 
 def _collect_prompt_events(session: Session, content: str) -> None:
-    """Collect all runtime events from a session prompt."""
+    """Run one session prompt to completion."""
 
     async def _collect() -> None:
-        """Drain one prompt stream."""
+        """Submit the prompt and wait for its terminal status."""
 
-        async for _ in session.prompt(content):
-            pass
+        run = await session.prompt(content)
+        await run.wait()
 
     asyncio.run(_collect())

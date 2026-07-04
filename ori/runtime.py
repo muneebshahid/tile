@@ -1,9 +1,12 @@
-"""Runtime and session facade for the stateless agent runner."""
+"""Runtime, session, and run facades for the stateless agent runner."""
 
 from __future__ import annotations
+
+import asyncio
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, TypeAlias
 from uuid import uuid4
 
 from ori.types.contracts import Reasoning
@@ -15,9 +18,100 @@ from ori.prompt import PROMPT
 from ori.tool_executor import ToolExecutor
 from ori.events import AgentEvent, MessageEndEvent, StreamFn, ToolExecutionEndEvent
 
+RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
+
 
 class SessionBusyError(RuntimeError):
-    """Raised when a prompt starts while the same session is already active."""
+    """Raised when a prompt is submitted while the same session is already active."""
+
+
+class Run:
+    """Handle for one task-owned prompt execution.
+
+    Execution is driven by a runtime-owned task, not by event consumption.
+    Subscribers observe events; dropping a subscriber never affects the run.
+    """
+
+    def __init__(self, *, run_id: str, session_id: str) -> None:
+        """Create a run handle in the running state."""
+
+        self._run_id = run_id
+        self._session_id = session_id
+        self._events: list[AgentEvent] = []
+        self._status: RunStatus = "running"
+        self._error_message: str | None = None
+        self._changed = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def id(self) -> str:
+        """Return the stable run id."""
+
+        return self._run_id
+
+    @property
+    def session_id(self) -> str:
+        """Return the id of the session this run belongs to."""
+
+        return self._session_id
+
+    @property
+    def status(self) -> RunStatus:
+        """Return the current run status."""
+
+        return self._status
+
+    @property
+    def error_message(self) -> str | None:
+        """Return the failure message when the run has failed."""
+
+        return self._error_message
+
+    async def events(self) -> AsyncIterator[AgentEvent]:
+        """Yield run events from the start, following live until the run ends."""
+
+        index = 0
+        while True:
+            self._changed.clear()
+            while index < len(self._events):
+                yield self._events[index]
+                index += 1
+            if self._status != "running":
+                return
+            await self._changed.wait()
+
+    async def wait(self) -> RunStatus:
+        """Wait until the run reaches a terminal status and return it."""
+
+        await asyncio.wait({self._require_task()})
+        return self._status
+
+    def abort(self) -> None:
+        """Request cancellation of the active run task."""
+
+        task = self._require_task()
+        if not task.done():
+            task.cancel()
+
+    def _require_task(self) -> asyncio.Task[None]:
+        """Return the execution task attached by the runtime."""
+
+        if self._task is None:
+            raise RuntimeError(f"Run has no execution task: {self._run_id}")
+        return self._task
+
+    def _publish(self, event: AgentEvent) -> None:
+        """Append one event to the run log and wake subscribers."""
+
+        self._events.append(event)
+        self._changed.set()
+
+    def _finish(self, status: RunStatus, error_message: str | None = None) -> None:
+        """Record the terminal status and wake subscribers."""
+
+        self._status = status
+        self._error_message = error_message
+        self._changed.set()
 
 
 class AgentRuntime:
@@ -46,6 +140,7 @@ class AgentRuntime:
         self._system_prompt = system_prompt
         self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
+        self._active_runs: set[Run] = set()
 
     @property
     def sessions(self) -> tuple[Session, ...]:
@@ -96,30 +191,50 @@ class AgentRuntime:
         )
         return self._build_session(record)
 
-    async def _prompt_session(
-        self,
-        session_id: str,
-        content: str,
-    ) -> AsyncIterator[AgentEvent]:
-        """Run one prompt in a session and persist completed items."""
+    def _submit_prompt(self, session_id: str, content: str) -> Run:
+        """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
         try:
             self._append_user_message(session_id, content)
-
-            async for event in run_agent(
-                self._history_store.get_history(session_id),
-                stream_fn=self._stream_fn,
-                model=self._model,
-                tool_executor=self._tool_executor,
-                reasoning=self._reasoning,
-                system_prompt=self._system_prompt,
-                cwd=self._cwd,
-            ):
-                self._persist_stable_event(session_id, event)
-                yield event
-        finally:
+            run = Run(run_id=str(uuid4()), session_id=session_id)
+            task = asyncio.create_task(self._execute_run(run))
+        except BaseException:
             self._finish_prompt(session_id)
+            raise
+        run._task = task
+        self._active_runs.add(run)
+        task.add_done_callback(
+            lambda finished_task: self._finalize_run(run, finished_task)
+        )
+        return run
+
+    async def _execute_run(self, run: Run) -> None:
+        """Drive one prompt run to completion and persist stable history."""
+
+        async for event in run_agent(
+            self._history_store.get_history(run.session_id),
+            stream_fn=self._stream_fn,
+            model=self._model,
+            tool_executor=self._tool_executor,
+            reasoning=self._reasoning,
+            system_prompt=self._system_prompt,
+            cwd=self._cwd,
+        ):
+            self._persist_stable_event(run.session_id, event)
+            run._publish(event)
+
+    def _finalize_run(self, run: Run, task: asyncio.Task[None]) -> None:
+        """Release active-prompt state and record the terminal run status."""
+
+        self._finish_prompt(run.session_id)
+        self._active_runs.discard(run)
+        if task.cancelled():
+            run._finish("aborted")
+        elif (error := task.exception()) is not None:
+            run._finish("failed", error_message=str(error))
+        else:
+            run._finish("completed")
 
     def _start_prompt(self, session_id: str) -> None:
         """Mark a session prompt active or reject overlapping prompt work."""
@@ -189,11 +304,10 @@ class Session:
 
         return self._runtime.history_for(self.id)
 
-    async def prompt(self, content: str) -> AsyncIterator[AgentEvent]:
-        """Run one prompt in this session."""
+    async def prompt(self, content: str) -> Run:
+        """Submit one prompt to this session and return its run handle."""
 
-        async for event in self._runtime._prompt_session(self.id, content):
-            yield event
+        return self._runtime._submit_prompt(self.id, content)
 
     def fork(
         self,

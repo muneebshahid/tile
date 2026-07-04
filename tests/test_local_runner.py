@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from ori import RunStatus
 from ori.events import StreamFn
 from ori.history import InMemoryHistoryStore
 from ori.types.conversation import ConversationItem
@@ -48,10 +49,11 @@ def test_run_cli_reads_prompt_from_stdin(monkeypatch: pytest.MonkeyPatch) -> Non
 
     prompts: list[str] = []
 
-    async def _record_prompt(prompt: str, *, stream_fn: StreamFn) -> None:
+    async def _record_prompt(prompt: str, *, stream_fn: StreamFn) -> RunStatus:
         """Record the prompt passed by the CLI."""
 
         prompts.append(prompt)
+        return "completed"
 
     monkeypatch.setattr("sys.stdin", io.StringIO("Hello from stdin\n"))
     monkeypatch.setattr(local_runner.settings, "openai_api_key", "test-key")

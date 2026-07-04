@@ -9,13 +9,15 @@ from ori.history import (
     SessionNotFoundError,
     SessionRecord,
 )
-from ori.runtime import AgentRuntime, Session, SessionBusyError
+from ori.runtime import AgentRuntime, Run, RunStatus, Session, SessionBusyError
 from ori.tool_executor import ToolExecutor
 
 __all__ = [
     "AgentRuntime",
     "HistoryStore",
     "InMemoryHistoryStore",
+    "Run",
+    "RunStatus",
     "Session",
     "SessionAlreadyExistsError",
     "SessionBusyError",

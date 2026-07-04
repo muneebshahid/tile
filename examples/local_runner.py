@@ -8,7 +8,7 @@ from typing import TextIO
 
 from openai import AsyncOpenAI
 
-from ori import AgentRuntime, HistoryStore
+from ori import AgentRuntime, HistoryStore, RunStatus
 from ori.events import AgentEvent, StreamFn
 from ori.providers.openai import create_stream_api
 from ori.tools import build_tools
@@ -34,8 +34,8 @@ async def run_cli(argv: Sequence[str]) -> int:
         api_key=settings.openai_api_key,
         base_url=settings.openai_base_url,
     )
-    await run_prompt(prompt, stream_fn=create_stream_api(client))
-    return 0
+    status = await run_prompt(prompt, stream_fn=create_stream_api(client))
+    return 0 if status == "completed" else 1
 
 
 async def run_prompt(
@@ -47,7 +47,7 @@ async def run_prompt(
     history_store: HistoryStore | None = None,
     cwd: Path | str | None = None,
     output: TextIO | None = None,
-) -> None:
+) -> RunStatus:
     """Run one prompt through a runtime session and write JSON event lines."""
 
     working_directory = _resolve_cwd(cwd)
@@ -64,9 +64,11 @@ async def run_prompt(
     session = runtime.session(name="local-runner")
     event_output = output or sys.stdout
 
-    async for event in session.prompt(prompt):
+    run = await session.prompt(prompt)
+    async for event in run.events():
         event_output.write(_serialize_event(event))
         event_output.write("\n")
+    return await run.wait()
 
 
 def _read_prompt(argv: Sequence[str], stdin: TextIO) -> str:
