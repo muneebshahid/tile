@@ -13,4 +13,4 @@ Current working directory: {cwd}
 def build_system_prompt(prompt: str, cwd: Path) -> str:
     """Return the system prompt with runtime prompt variables applied."""
 
-    return prompt.format(cwd=cwd)
+    return prompt.replace("{cwd}", str(cwd))
