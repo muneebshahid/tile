@@ -2,9 +2,8 @@
 
 These tests document the first half of the streaming lifecycle:
 
-1. Raw OpenAI SDK events or ChatGPT subscription SSE payloads are created in the
-   test itself.
-2. The provider passes those raw events through the matching adapter.
+1. Raw OpenAI SDK events are created in the test itself.
+2. The provider passes those raw events through the SDK event adapter.
 3. The adapter emits normalized events, and ``assemble_stream`` turns them into
    app-level ``StreamEvent`` models.
 
@@ -16,12 +15,10 @@ import asyncio
 from collections.abc import Sequence
 from typing import cast
 
-import pytest
 from openai import AsyncOpenAI
 
-from ori.providers.openai.provider import create_stream_api, stream_subscription
+from ori.providers.openai.provider import create_stream_api
 from ori.providers.openai.serialization import serialize_history_items
-from ori.providers.openai.subscription_event_adapter import SubscriptionEventPayload
 from ori.types.conversation import UserMessage
 from ori.types.stream_events import (
     ProviderStreamEvent,
@@ -32,11 +29,9 @@ from ori.types.stream_events import (
     TextStartEvent,
 )
 from ori.types.tools import ToolDefinition, ToolResult
-from tests.support.async_streams import async_stream
 from tests.support.openai_response_events import (
     FakeOpenAIClient,
     build_fake_openai_client,
-    content_part_added_event,
     message_added_event,
     message_done_event,
     response_completed_event,
@@ -100,7 +95,6 @@ def test_stream_maps_raw_events_into_text_stream() -> None:
     raw_events = [
         response_created_event(1, "resp_success"),
         message_added_event(2, "msg_123", output_index=0),
-        content_part_added_event(3, "msg_123", "output_text", output_index=0),
         text_delta_event(4, "msg_123", "Hello", output_index=0),
         message_done_event(
             5,
@@ -178,103 +172,3 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
             }
         ],
     )
-
-
-def test_stream_subscription_maps_raw_events_into_stream_events() -> None:
-    events = _collect_subscription_events(_subscription_text_payloads())
-
-    start = _expect_event_type(events[0], StreamStartEvent)
-    text_start = _expect_event_type(events[1], TextStartEvent)
-    text_delta = _expect_event_type(events[2], TextDeltaEvent)
-    text_end = _expect_event_type(events[3], TextEndEvent)
-    done = _expect_event_type(events[4], StreamDoneEvent)
-
-    assert [event.type for event in events] == [
-        "stream_start",
-        "text_start",
-        "text_delta",
-        "text_end",
-        "stream_done",
-    ]
-    assert start.response_id == "resp_subscription"
-    assert text_start.content_index == 0
-    assert text_delta.delta == "Hello from subscription"
-    assert _expect_text_block(text_end.block).text == "Hello from subscription"
-    assert done.response_id == "resp_subscription"
-
-
-def _subscription_text_payloads() -> list[SubscriptionEventPayload]:
-    """Build the minimal raw subscription payloads for a final text response."""
-
-    raw_events: list[SubscriptionEventPayload] = [
-        {
-            "type": "response.created",
-            "response": {"id": "resp_subscription"},
-        },
-        {
-            "type": "response.output_item.added",
-            "item": {
-                "id": "msg_subscription",
-                "type": "message",
-            },
-        },
-        {
-            "type": "response.content_part.added",
-            "part": {"type": "output_text"},
-        },
-        {
-            "type": "response.output_text.delta",
-            "delta": "Hello from subscription",
-        },
-        {
-            "type": "response.output_item.done",
-            "item": {
-                "id": "msg_subscription",
-                "type": "message",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": "Hello from subscription",
-                    }
-                ],
-            },
-        },
-        {
-            "type": "response.completed",
-            "response": {"output": []},
-        },
-    ]
-    return raw_events
-
-
-def _collect_subscription_events(
-    raw_events: Sequence[SubscriptionEventPayload],
-) -> list[ProviderStreamEvent]:
-    """Collect provider stream events from raw subscription payloads."""
-
-    async def _collect() -> list[ProviderStreamEvent]:
-        event_stream = await stream_subscription(
-            history=[UserMessage(content="hello")],
-            model="gpt-5.4",
-            reasoning={"effort": "medium"},
-            instructions="Follow the repo conventions.",
-            raw_stream=async_stream(raw_events),
-        )
-        return [event async for event in event_stream]
-
-    return asyncio.run(_collect())
-
-
-def test_stream_subscription_raises_until_transport_is_implemented() -> None:
-    async def _collect() -> None:
-        await stream_subscription(
-            history=[UserMessage(content="hello")],
-            model="gpt-5.4",
-            instructions="Follow the repo conventions.",
-        )
-
-    with pytest.raises(
-        NotImplementedError,
-        match="Subscription transport is not implemented yet.",
-    ):
-        asyncio.run(_collect())
