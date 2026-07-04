@@ -34,7 +34,7 @@ class OutputAccumulator:
         self._tail_buffer = b""
         self._tail_starts_at_line_boundary = True
         self._total_bytes = 0
-        self._total_lines = 1
+        self._total_lines = 0
         self._finished = False
 
     def accumulate(self, chunk: bytes) -> None:
@@ -74,6 +74,8 @@ class OutputAccumulator:
 
         text_bytes = text.encode("utf-8")
         self._total_bytes += len(text_bytes)
+        if self._total_lines == 0:
+            self._total_lines = 1
         self._total_lines += text.count("\n")
 
         tail_buffer = self._tail_buffer + text_bytes

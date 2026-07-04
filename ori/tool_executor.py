@@ -60,6 +60,6 @@ class ToolExecutor:
 
         normalized_tool_name = tool_name.lower().strip()
         for tool in self._tools:
-            if tool.name == normalized_tool_name:
+            if tool.name.lower() == normalized_tool_name:
                 return tool.fn
         return None

@@ -1,5 +1,6 @@
 """Tests for the default shell command tool scaffold."""
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -125,6 +126,23 @@ async def test_fn_raises_with_timeout_status(tmp_path: Path) -> None:
         await bash.fn(command="printf 'start'; sleep 2", timeout=0.1, cwd=tmp_path)
 
     assert str(error.value) == "start\n\nCommand timed out after 0.1 seconds"
+
+
+@pytest.mark.asyncio
+async def test_stop_timed_out_process_escalates_to_kill_when_sigterm_ignored() -> None:
+    """No CancelledError escapes when SIGTERM is ignored and SIGKILL is required."""
+
+    process = await asyncio.create_subprocess_shell(
+        "trap '' SIGTERM; sleep 10",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        start_new_session=bash._supports_process_groups(),
+    )
+    wait_task = asyncio.create_task(process.wait())
+
+    await bash._stop_timed_out_process(process, wait_task)
+
+    assert process.returncode is not None
 
 
 def _text(result: ToolResult) -> str:
