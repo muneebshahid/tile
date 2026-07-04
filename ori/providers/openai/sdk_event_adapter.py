@@ -4,7 +4,6 @@ from typing import cast
 
 from openai.types.responses import (
     ResponseCompletedEvent,
-    ResponseContentPartAddedEvent,
     ResponseCreatedEvent,
     ResponseErrorEvent,
     ResponseFailedEvent,
@@ -35,7 +34,6 @@ from openai.types.responses.response_reasoning_item import (
 from ori.providers.openai.normalized_events import (
     NormalizedEvent,
     NormalizedEventType,
-    TextPartType,
 )
 from ori.types.stream_events import Phase, StopReason
 from ori.types.tools import JsonObject
@@ -44,13 +42,39 @@ from ori.types.tools import JsonObject
 async def normalize_sdk_events(
     raw_stream: AsyncIterator[ResponseStreamEvent],
 ) -> AsyncIterator[NormalizedEvent]:
+    """Normalize raw SDK events into transport-independent provider events.
+
+    Handles the pending-separator pattern for multi-part reasoning summaries:
+    a separator delta is injected between consecutive summary parts but never
+    appended after the final part.
+    """
+
+    pending_separator = False
     async for event in raw_stream:
+        if isinstance(event, ResponseReasoningSummaryPartDoneEvent):
+            pending_separator = True
+            continue
+
         normalized_event = _normalize_sdk_event(event)
-        if normalized_event is not None:
+        if normalized_event is None:
+            continue
+
+        event_type = normalized_event["type"]
+
+        if event_type == NormalizedEventType.REASONING_DONE:
+            pending_separator = False
+            yield normalized_event
+        elif event_type == NormalizedEventType.REASONING_DELTA and pending_separator:
+            pending_separator = False
+            yield {"type": NormalizedEventType.REASONING_DELTA, "delta": "\n\n"}
+            yield normalized_event
+        else:
             yield normalized_event
 
 
 def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
+    """Convert one raw SDK event into the shared normalized-event union."""
+
     match event:
         case ResponseCreatedEvent():
             return {
@@ -72,11 +96,6 @@ def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
                 "type": NormalizedEventType.REASONING_DELTA,
                 "delta": delta,
             }
-        case ResponseReasoningSummaryPartDoneEvent():
-            return {
-                "type": NormalizedEventType.REASONING_DELTA,
-                "delta": "\n\n",
-            }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
@@ -94,21 +113,14 @@ def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
                 "item_id": event.item.id,
                 "phase": _extract_message_phase(event.item),
             }
-        case ResponseContentPartAddedEvent():
-            return {
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": _extract_supported_text_part_type(event),
-            }
         case ResponseTextDeltaEvent():
             return {
                 "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                "part_type": "output_text",
                 "delta": event.delta,
             }
         case ResponseRefusalDeltaEvent():
             return {
                 "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                "part_type": "refusal",
                 "delta": event.delta,
             }
         case ResponseOutputItemDoneEvent() if isinstance(
@@ -175,17 +187,9 @@ def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
     return None
 
 
-def _extract_supported_text_part_type(
-    event: ResponseContentPartAddedEvent,
-) -> TextPartType | None:
-    if event.part.type == "output_text":
-        return "output_text"
-    if event.part.type == "refusal":
-        return "refusal"
-    return None
-
-
 def _parse_tool_call_arguments(arguments: str) -> JsonObject:
+    """Parse a JSON arguments string into a dict, returning {} on failure."""
+
     if not arguments.strip():
         return {}
 
@@ -200,6 +204,8 @@ def _parse_tool_call_arguments(arguments: str) -> JsonObject:
 
 
 def _extract_error_message(event: ResponseFailedEvent) -> str:
+    """Extract the error message from a failed response event."""
+
     error = getattr(event.response, "error", None)
     if error is None:
         return "OpenAI response failed."
@@ -212,10 +218,14 @@ def _extract_error_message(event: ResponseFailedEvent) -> str:
 
 
 def _extract_stream_error_message(event: ResponseErrorEvent) -> str:
+    """Extract the error message from a stream error event."""
+
     return event.message or "OpenAI stream error."
 
 
 def _extract_incomplete_error_message(event: ResponseIncompleteEvent) -> str:
+    """Extract a human-readable error message for an incomplete response."""
+
     reason = getattr(event.response.incomplete_details, "reason", None)
     if reason == "content_filter":
         return "OpenAI response was truncated by the content filter."
@@ -225,6 +235,8 @@ def _extract_incomplete_error_message(event: ResponseIncompleteEvent) -> str:
 def _extract_stop_reason(
     event: ResponseCompletedEvent | ResponseIncompleteEvent,
 ) -> StopReason:
+    """Derive the stop reason, promoting to tool_use when tool calls are present."""
+
     base_reason = _extract_base_stop_reason(event)
     if base_reason == "stop" and any(
         isinstance(item, ResponseFunctionToolCall) for item in event.response.output
@@ -236,6 +248,8 @@ def _extract_stop_reason(
 def _extract_base_stop_reason(
     event: ResponseCompletedEvent | ResponseIncompleteEvent,
 ) -> StopReason:
+    """Map the raw response status to a base stop reason."""
+
     if isinstance(event, ResponseIncompleteEvent):
         reason = getattr(event.response.incomplete_details, "reason", None)
         if reason == "content_filter":
@@ -247,14 +261,20 @@ def _extract_base_stop_reason(
 def _join_reasoning_summary_text(
     summary: Sequence[ResponseReasoningSummary],
 ) -> str:
+    """Join reasoning summary parts into a single paragraph-separated string."""
+
     return "\n\n".join(item.text for item in summary if item.text)
 
 
 def _serialize_reasoning_item(item: ResponseReasoningItem) -> str:
+    """Serialize a reasoning item to a JSON string for storage."""
+
     return json.dumps(item.model_dump(mode="json", exclude_none=True))
 
 
 def _join_message_text(content: Sequence[ResponseMessageContent]) -> str:
+    """Concatenate all output-text and refusal parts from a message."""
+
     parts: list[str] = []
     for item in content:
         if isinstance(item, ResponseOutputText):
@@ -267,6 +287,8 @@ def _join_message_text(content: Sequence[ResponseMessageContent]) -> str:
 def _extract_message_phase(
     item: ResponseOutputMessage,
 ) -> Phase | None:
+    """Extract the structured output phase from a message item if present."""
+
     phase = getattr(item, "phase", None)
     if phase in {"commentary", "final_answer"}:
         return phase

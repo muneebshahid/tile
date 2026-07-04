@@ -1,10 +1,10 @@
 """Tests for assembling normalized provider events into stream events.
 
 These tests document the middle of the streaming lifecycle. OpenAI transport
-adapters produce normalized events such as ``CREATED``, ``MESSAGE_TEXT_PART``,
-``MESSAGE_TEXT_DELTA``, and ``COMPLETED``. The stream assembler consumes those
-events, privately accumulates assistant blocks, and emits provider stream events
-such as ``text_start``, ``text_delta``, ``text_end``, and ``stream_done``.
+adapters produce normalized events such as ``CREATED``, ``MESSAGE_TEXT_DELTA``,
+and ``COMPLETED``. The stream assembler consumes those events, privately
+accumulates assistant blocks, and emits provider stream events such as
+``text_start``, ``text_delta``, ``text_end``, and ``stream_done``.
 """
 
 import asyncio
@@ -18,13 +18,11 @@ from ori.providers.openai.normalized_events import (
     MessageAddedNormalizedEvent,
     MessageDoneNormalizedEvent,
     MessageTextDeltaNormalizedEvent,
-    MessageTextPartNormalizedEvent,
     ReasoningAddedNormalizedEvent,
     ReasoningDeltaNormalizedEvent,
     ReasoningDoneNormalizedEvent,
     NormalizedEvent,
     NormalizedEventType,
-    TextPartType,
     ToolCallAddedNormalizedEvent,
     ToolCallArgumentsDeltaNormalizedEvent,
     ToolCallArgumentsDoneNormalizedEvent,
@@ -105,6 +103,35 @@ def test_assemble_stream_preserves_reasoning_deltas_when_done_summary_is_empty()
     assert done_reasoning_block.summary_text == "Draft summary"
 
 
+def test_assemble_stream_emits_text_deltas_without_prior_content_part_event() -> None:
+    """Text deltas are appended and emitted with no preceding content-part event."""
+
+    events = _collect_stream_events(
+        [
+            _created_event("resp_no_part"),
+            _message_added_event("msg_no_part"),
+            _message_text_delta_event("Hello"),
+            _message_done_event("msg_no_part", "Hello"),
+            _completed_event("stop"),
+        ]
+    )
+
+    text_delta = _expect_event_type(events[2], TextDeltaEvent)
+    text_end = _expect_event_type(events[3], TextEndEvent)
+    done = _expect_event_type(events[4], StreamDoneEvent)
+
+    assert [event.type for event in events] == [
+        "stream_start",
+        "text_start",
+        "text_delta",
+        "text_end",
+        "stream_done",
+    ]
+    assert text_delta.delta == "Hello"
+    assert _expect_text_block(text_end.block).text == "Hello"
+    assert _expect_text_block(done.blocks[0]).text == "Hello"
+
+
 def test_assemble_stream_maps_refusal_deltas() -> None:
     """Accumulates refusal deltas onto the active text block."""
 
@@ -112,8 +139,7 @@ def test_assemble_stream_maps_refusal_deltas() -> None:
         [
             _created_event("resp_refusal"),
             _message_added_event("msg_refusal"),
-            _message_text_part_event("refusal"),
-            _message_text_delta_event("refusal", "No"),
+            _message_text_delta_event("No"),
             _message_done_event("msg_refusal", "No thanks"),
             _completed_event("stop"),
         ]
@@ -141,41 +167,6 @@ def test_assemble_stream_maps_refusal_deltas() -> None:
     assert done_text_block.text == "No thanks"
 
 
-def test_assemble_stream_waits_for_supported_text_part_before_deltas() -> None:
-    """Starts text blocks from message events but waits for a supported part."""
-
-    events = _collect_stream_events(
-        [
-            _created_event("resp_unsupported_text_part"),
-            _message_added_event("msg_unsupported_text_part"),
-            _message_text_part_event(None),
-            _message_text_delta_event("output_text", "Ignored"),
-            _message_text_part_event("output_text"),
-            _message_text_delta_event("output_text", "Shown"),
-            _message_done_event("msg_unsupported_text_part", "Shown"),
-            _completed_event("stop"),
-        ]
-    )
-
-    text_start = _expect_event_type(events[1], TextStartEvent)
-    text_delta = _expect_event_type(events[2], TextDeltaEvent)
-    text_end = _expect_event_type(events[3], TextEndEvent)
-    done = _expect_event_type(events[4], StreamDoneEvent)
-
-    assert [event.type for event in events] == [
-        "stream_start",
-        "text_start",
-        "text_delta",
-        "text_end",
-        "stream_done",
-    ]
-    assert text_start.content_index == 0
-    assert text_delta.content_index == 0
-    assert text_delta.delta == "Shown"
-    assert _expect_text_block(text_end.block).text == "Shown"
-    assert _expect_text_block(done.blocks[0]).text == "Shown"
-
-
 def test_assemble_stream_maps_tool_call_events() -> None:
     """Accumulates tool-call events onto terminal stream blocks."""
 
@@ -183,67 +174,6 @@ def test_assemble_stream_maps_tool_call_events() -> None:
 
     _assert_tool_call_event_sequence(events)
     _assert_tool_call_stream_content(events)
-
-
-def test_assemble_stream_ignores_text_deltas_when_refusal_part_is_active() -> None:
-    """Ignores output-text deltas while a refusal part is active."""
-
-    events = _collect_stream_events(
-        [
-            _created_event("resp_refusal"),
-            _message_added_event("msg_refusal"),
-            _message_text_part_event("refusal"),
-            _message_text_delta_event("output_text", "Wrong"),
-            _message_text_delta_event("refusal", "No"),
-            _message_text_delta_event("refusal", " thanks"),
-            _message_done_event("msg_refusal", "No thanks"),
-            _completed_event("stop"),
-        ]
-    )
-
-    text_delta_one = _expect_event_type(events[2], TextDeltaEvent)
-    text_delta_two = _expect_event_type(events[3], TextDeltaEvent)
-    done = _expect_event_type(events[5], StreamDoneEvent)
-
-    assert [event.type for event in events] == [
-        "stream_start",
-        "text_start",
-        "text_delta",
-        "text_delta",
-        "text_end",
-        "stream_done",
-    ]
-    assert text_delta_one.delta == "No"
-    assert text_delta_two.delta == " thanks"
-    assert _expect_text_block(done.blocks[0]).text == "No thanks"
-
-
-def test_assemble_stream_clears_active_text_mode_for_unsupported_parts() -> None:
-    """Clears text accumulation when the current content part becomes unsupported."""
-
-    events = _collect_stream_events(
-        [
-            _created_event("resp_unsupported_part"),
-            _message_added_event("msg_unsupported_part"),
-            _message_text_part_event("output_text"),
-            _message_text_part_event(None),
-            _message_text_delta_event("output_text", "Should be ignored"),
-            _message_done_event("msg_unsupported_part", ""),
-            _completed_event("stop"),
-        ]
-    )
-
-    text_end = _expect_event_type(events[2], TextEndEvent)
-    done = _expect_event_type(events[3], StreamDoneEvent)
-
-    assert [event.type for event in events] == [
-        "stream_start",
-        "text_start",
-        "text_end",
-        "stream_done",
-    ]
-    assert _expect_text_block(text_end.block).text == ""
-    assert _expect_text_block(done.blocks[0]).text == ""
 
 
 def test_assemble_stream_maps_failed_response_into_error_event() -> None:
@@ -271,8 +201,7 @@ def test_assemble_stream_maps_incomplete_length_into_done() -> None:
         [
             _created_event("resp_incomplete"),
             _message_added_event("msg_incomplete"),
-            _message_text_part_event("output_text"),
-            _message_text_delta_event("output_text", "Partial answer"),
+            _message_text_delta_event("Partial answer"),
             _message_done_event("msg_incomplete", "Partial answer"),
             _incomplete_event("length", "OpenAI response incomplete."),
         ]
@@ -319,8 +248,7 @@ def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
             _created_event("resp_done"),
             _completed_event("stop"),
             _message_added_event("msg_after_done"),
-            _message_text_part_event("output_text"),
-            _message_text_delta_event("output_text", "ignored"),
+            _message_text_delta_event("ignored"),
         ]
     )
 
@@ -348,9 +276,8 @@ def _reasoning_text_events() -> list[NormalizedEvent]:
             reasoning_signature='{"id":"rs_123"}',
         ),
         _message_added_event("msg_123"),
-        _message_text_part_event("output_text"),
-        _message_text_delta_event("output_text", "Hello"),
-        _message_text_delta_event("output_text", " world"),
+        _message_text_delta_event("Hello"),
+        _message_text_delta_event(" world"),
         _message_done_event("msg_123", "Hello world"),
         _completed_event("stop"),
     ]
@@ -590,26 +517,13 @@ def _message_added_event(
     }
 
 
-def _message_text_part_event(
-    part_type: TextPartType | None,
-) -> MessageTextPartNormalizedEvent:
-    """Builds a message text-part normalized event."""
-
-    return {
-        "type": NormalizedEventType.MESSAGE_TEXT_PART,
-        "part_type": part_type,
-    }
-
-
 def _message_text_delta_event(
-    part_type: TextPartType,
     delta: str,
 ) -> MessageTextDeltaNormalizedEvent:
     """Builds a message text-delta normalized event."""
 
     return {
         "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-        "part_type": part_type,
         "delta": delta,
     }
 

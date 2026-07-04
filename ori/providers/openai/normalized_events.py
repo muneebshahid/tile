@@ -15,7 +15,6 @@ class NormalizedEventType(StrEnum):
     REASONING_DELTA = "reasoning_delta"
     REASONING_DONE = "reasoning_done"
     MESSAGE_ADDED = "message_added"
-    MESSAGE_TEXT_PART = "message_text_part"
     MESSAGE_TEXT_DELTA = "message_text_delta"
     MESSAGE_DONE = "message_done"
     TOOL_CALL_ADDED = "tool_call_added"
@@ -34,8 +33,6 @@ TERMINAL_NORMALIZED_EVENT_TYPES: frozenset[NormalizedEventType] = frozenset(
         NormalizedEventType.FAILED,
     }
 )
-
-TextPartType: TypeAlias = Literal["output_text", "refusal"]
 
 
 class CreatedNormalizedEvent(TypedDict):
@@ -76,18 +73,10 @@ class MessageAddedNormalizedEvent(TypedDict):
     phase: Phase | None
 
 
-class MessageTextPartNormalizedEvent(TypedDict):
-    """Normalized event emitted when a supported text content part starts."""
-
-    type: Literal[NormalizedEventType.MESSAGE_TEXT_PART]
-    part_type: TextPartType | None
-
-
 class MessageTextDeltaNormalizedEvent(TypedDict):
     """Normalized event emitted for incremental assistant text."""
 
     type: Literal[NormalizedEventType.MESSAGE_TEXT_DELTA]
-    part_type: TextPartType
     delta: str
 
 
@@ -162,7 +151,6 @@ NormalizedEvent: TypeAlias = (
     | ReasoningDeltaNormalizedEvent
     | ReasoningDoneNormalizedEvent
     | MessageAddedNormalizedEvent
-    | MessageTextPartNormalizedEvent
     | MessageTextDeltaNormalizedEvent
     | MessageDoneNormalizedEvent
     | ToolCallAddedNormalizedEvent

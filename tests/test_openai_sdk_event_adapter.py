@@ -213,19 +213,6 @@ def _build_reasoning_delta_cases() -> list[NormalizationCase]:
                 "delta": "Thinking with text...",
             },
         ),
-        NormalizationCase(
-            name="response.reasoning_summary_part.done",
-            raw_event=reasoning_summary_part_done_event(
-                sequence_number=9,
-                item_id="rs_done_part",
-                summary_index=0,
-                text="A step",
-            ),
-            expected_event={
-                "type": NormalizedEventType.REASONING_DELTA,
-                "delta": "\n\n",
-            },
-        ),
     ]
 
 
@@ -265,7 +252,6 @@ def _build_message_cases() -> list[NormalizationCase]:
 
     return [
         *_build_message_start_cases(),
-        *_build_message_part_cases(),
         *_build_message_delta_cases(),
         *_build_message_done_cases(),
     ]
@@ -292,52 +278,6 @@ def _build_message_start_cases() -> list[NormalizationCase]:
     ]
 
 
-def _build_message_part_cases() -> list[NormalizationCase]:
-    """Builds normalization cases for assistant message content parts."""
-
-    return [
-        NormalizationCase(
-            name="response.content_part.added.output_text",
-            raw_event=content_part_added_event(
-                sequence_number=11,
-                item_id="msg_output_text",
-                part_type="output_text",
-                output_index=0,
-            ),
-            expected_event={
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": "output_text",
-            },
-        ),
-        NormalizationCase(
-            name="response.content_part.added.refusal",
-            raw_event=content_part_added_event(
-                sequence_number=12,
-                item_id="msg_refusal",
-                part_type="refusal",
-                output_index=0,
-            ),
-            expected_event={
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": "refusal",
-            },
-        ),
-        NormalizationCase(
-            name="response.content_part.added.unsupported",
-            raw_event=content_part_added_event(
-                sequence_number=13,
-                item_id="msg_unknown",
-                part_type="reasoning_text",
-                output_index=0,
-            ),
-            expected_event={
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": None,
-            },
-        ),
-    ]
-
-
 def _build_message_delta_cases() -> list[NormalizationCase]:
     """Builds normalization cases for assistant message delta events."""
 
@@ -352,7 +292,6 @@ def _build_message_delta_cases() -> list[NormalizationCase]:
             ),
             expected_event={
                 "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                "part_type": "output_text",
                 "delta": "Hello",
             },
         ),
@@ -366,7 +305,6 @@ def _build_message_delta_cases() -> list[NormalizationCase]:
             ),
             expected_event={
                 "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                "part_type": "refusal",
                 "delta": "No",
             },
         ),
@@ -610,3 +548,88 @@ def test_normalize_sdk_events_skips_unmapped_raw_events() -> None:
     )
 
     assert _collect_normalized_events([ignored_event]) == []
+
+
+def test_normalize_sdk_events_skips_content_part_added_events() -> None:
+    """Content-part-added events normalize to None and are not emitted."""
+
+    assert (
+        _collect_normalized_events(
+            [content_part_added_event(1, "msg_1", "output_text", output_index=0)]
+        )
+        == []
+    )
+    assert (
+        _collect_normalized_events(
+            [content_part_added_event(2, "msg_2", "refusal", output_index=0)]
+        )
+        == []
+    )
+    assert (
+        _collect_normalized_events(
+            [content_part_added_event(3, "msg_3", "reasoning_text", output_index=0)]
+        )
+        == []
+    )
+
+
+def test_normalize_sdk_events_single_summary_part_no_trailing_separator() -> None:
+    """Pending separator is discarded when REASONING_DONE follows the last part."""
+
+    events = _collect_normalized_events(
+        [
+            reasoning_summary_delta_event(1, "rs_1", 0, "Step one"),
+            reasoning_summary_part_done_event(2, "rs_1", 0, "Step one"),
+            reasoning_done_event(3, "rs_1", ["Step one"]),
+        ]
+    )
+
+    delta_events = [
+        e for e in events if e["type"] == NormalizedEventType.REASONING_DELTA
+    ]
+    done_events = [e for e in events if e["type"] == NormalizedEventType.REASONING_DONE]
+
+    # No separator delta; only the real delta text
+    assert delta_events == [
+        {"type": NormalizedEventType.REASONING_DELTA, "delta": "Step one"},
+    ]
+    assert len(done_events) == 1
+    # Accumulated delta text equals the REASONING_DONE summary_text
+    accumulated = "".join(
+        e["delta"]  # type: ignore[typeddict-item]
+        for e in delta_events
+    )
+    assert accumulated == done_events[0]["summary_text"]  # type: ignore[typeddict-item]
+
+
+def test_normalize_sdk_events_two_summary_parts_one_separator() -> None:
+    """Separator is injected between summary parts but not after the last part."""
+
+    events = _collect_normalized_events(
+        [
+            reasoning_summary_delta_event(1, "rs_2", 0, "Part one"),
+            reasoning_summary_part_done_event(2, "rs_2", 0, "Part one"),
+            reasoning_summary_delta_event(3, "rs_2", 1, "Part two"),
+            reasoning_summary_part_done_event(4, "rs_2", 1, "Part two"),
+            reasoning_done_event(5, "rs_2", ["Part one", "Part two"]),
+        ]
+    )
+
+    delta_events = [
+        e for e in events if e["type"] == NormalizedEventType.REASONING_DELTA
+    ]
+    done_events = [e for e in events if e["type"] == NormalizedEventType.REASONING_DONE]
+
+    # Exactly one separator between the two parts; none trailing
+    assert delta_events == [
+        {"type": NormalizedEventType.REASONING_DELTA, "delta": "Part one"},
+        {"type": NormalizedEventType.REASONING_DELTA, "delta": "\n\n"},
+        {"type": NormalizedEventType.REASONING_DELTA, "delta": "Part two"},
+    ]
+    assert len(done_events) == 1
+    # Accumulated delta text equals the REASONING_DONE summary_text
+    accumulated = "".join(
+        e["delta"]  # type: ignore[typeddict-item]
+        for e in delta_events
+    )
+    assert accumulated == done_events[0]["summary_text"]  # type: ignore[typeddict-item]
