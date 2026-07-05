@@ -538,39 +538,29 @@ def test_normalize_sdk_events_maps_each_supported_raw_event(
     assert _collect_normalized_events([case.raw_event]) == [case.expected_event]
 
 
-def test_normalize_sdk_events_skips_unmapped_raw_events() -> None:
-    """Skips raw SDK events that the adapter does not currently map."""
-
-    ignored_event = reasoning_summary_part_added_event(
-        sequence_number=1,
-        item_id="rs_ignored",
-        summary_index=0,
-    )
+@pytest.mark.parametrize(
+    "ignored_event",
+    [
+        reasoning_summary_part_added_event(1, "rs_ignored", summary_index=0),
+        reasoning_summary_part_done_event(2, "rs_ignored", 0, "step"),
+        content_part_added_event(3, "msg_1", "output_text", output_index=0),
+        content_part_added_event(4, "msg_2", "refusal", output_index=0),
+        content_part_added_event(5, "msg_3", "reasoning_text", output_index=0),
+    ],
+    ids=[
+        "summary_part_added",
+        "summary_part_done",
+        "content_part_output_text",
+        "content_part_refusal",
+        "content_part_unsupported",
+    ],
+)
+def test_normalize_sdk_events_ignores_unmapped_raw_events(
+    ignored_event: ResponseStreamEvent,
+) -> None:
+    """Drop raw SDK events that have no normalized mapping."""
 
     assert _collect_normalized_events([ignored_event]) == []
-
-
-def test_normalize_sdk_events_skips_content_part_added_events() -> None:
-    """Content-part-added events normalize to None and are not emitted."""
-
-    assert (
-        _collect_normalized_events(
-            [content_part_added_event(1, "msg_1", "output_text", output_index=0)]
-        )
-        == []
-    )
-    assert (
-        _collect_normalized_events(
-            [content_part_added_event(2, "msg_2", "refusal", output_index=0)]
-        )
-        == []
-    )
-    assert (
-        _collect_normalized_events(
-            [content_part_added_event(3, "msg_3", "reasoning_text", output_index=0)]
-        )
-        == []
-    )
 
 
 def test_normalize_sdk_events_passes_summary_parts_through_without_separators() -> None:
