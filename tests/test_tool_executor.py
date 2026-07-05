@@ -1,6 +1,7 @@
 """Tests for model-requested tool execution."""
 
 import pytest
+from pydantic import ValidationError
 
 from ori.tool_executor import ToolExecutor
 from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
@@ -118,6 +119,24 @@ async def test_tool_executor_normalizes_tool_exception() -> None:
     assert outcome.tool_result_turn.tool_name == "fail_weather"
     assert outcome.tool_result_turn.is_error is True
     assert _tool_text(outcome.result) == "boom"
+
+
+@pytest.mark.parametrize("name", ["", "   ", " read", "read ", "\tread\n"])
+def test_tool_definition_rejects_empty_or_padded_names(name: str) -> None:
+    """Fail tool registration for empty or whitespace-padded names."""
+
+    with pytest.raises(ValidationError, match="non-empty without surrounding"):
+        ToolDefinition(
+            name=name,
+            description="Read a file.",
+            input_schema={
+                "type": "object",
+                "properties": {},
+                "required": [],
+                "additionalProperties": False,
+            },
+            fn=_noop,
+        )
 
 
 @pytest.mark.asyncio

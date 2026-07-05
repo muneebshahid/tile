@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, field_validator
 
 from ori.tool_truncation import Truncation, TruncationKeep, TruncationReason
 
@@ -159,3 +159,14 @@ class ToolDefinition(BaseModel):
     input_schema: JsonObject
     defer_loading: bool = False
     fn: ToolFunction
+
+    @field_validator("name")
+    @classmethod
+    def _require_clean_name(cls, name: str) -> str:
+        """Reject empty or whitespace-padded tool names at registration."""
+
+        if not name or name != name.strip():
+            raise ValueError(
+                "Tool name must be non-empty without surrounding whitespace."
+            )
+        return name
