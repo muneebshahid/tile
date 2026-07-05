@@ -108,3 +108,25 @@ def test_accumulate_rejects_chunks_after_finish() -> None:
 
     with pytest.raises(RuntimeError, match="after finish"):
         output.accumulate(b"late")
+
+
+@pytest.mark.parametrize(
+    ("chunk", "expected_total_lines"),
+    [
+        pytest.param(None, 0, id="no-input"),
+        pytest.param(b"x", 1, id="one-byte-no-newline"),
+        pytest.param(b"x\n", 2, id="one-byte-with-newline"),
+    ],
+)
+def test_accumulate_total_lines_for_minimal_inputs(
+    chunk: bytes | None,
+    expected_total_lines: int,
+) -> None:
+    """Report correct total_lines for empty, single-byte, and newline-terminated input."""
+
+    output = OutputAccumulator()
+    if chunk is not None:
+        output.accumulate(chunk)
+    snapshot = output.finish()
+
+    assert snapshot.truncation.total_lines == expected_total_lines

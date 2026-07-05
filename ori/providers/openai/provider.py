@@ -1,6 +1,6 @@
-"""OpenAI provider entrypoints split by transport."""
+"""OpenAI provider entrypoint for the API streaming transport."""
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 from openai import AsyncOpenAI
@@ -10,10 +10,6 @@ from ori.events import StreamFn
 from ori.providers.openai.serialization import serialize_history_items, serialize_tools
 from ori.providers.openai.sdk_event_adapter import normalize_sdk_events
 from ori.providers.openai.stream_assembler import assemble_stream
-from ori.providers.openai.subscription_event_adapter import (
-    SubscriptionEventPayload,
-    normalize_subscription_events,
-)
 from ori.types.contracts import AsyncEventStream, Reasoning
 from ori.types.conversation import ConversationItem
 from ori.types.stream_events import ProviderSource
@@ -50,51 +46,6 @@ def create_stream_api(client: AsyncOpenAI) -> StreamFn:
         )
 
     return stream_api
-
-
-async def stream_subscription(
-    history: Sequence[ConversationItem],
-    model: str,
-    *,
-    instructions: str,
-    reasoning: Reasoning | None = None,
-    tools: Sequence[ToolDefinition] | None = None,
-    raw_stream: AsyncIterator[SubscriptionEventPayload] | None = None,
-) -> AsyncEventStream:
-    """Stream assistant events through the subscription SSE transport."""
-
-    request_params = _build_stream_request_params(
-        history,
-        model,
-        instructions=instructions,
-        reasoning=reasoning,
-        tools=tools,
-    )
-    subscription_stream = await _create_subscription_stream(
-        request_params,
-        raw_stream=raw_stream,
-    )
-    return assemble_stream(
-        normalize_subscription_events(subscription_stream),
-        source=ProviderSource(provider="openai", model=model),
-    )
-
-
-async def _create_subscription_stream(
-    request_params: ResponseCreateParamsStreaming,
-    *,
-    raw_stream: AsyncIterator[SubscriptionEventPayload] | None,
-) -> AsyncIterator[SubscriptionEventPayload]:
-    """Create the raw subscription event stream.
-
-    The concrete HTTP/SSE transport is added in the next phase. The injected
-    raw stream keeps the provider and normalized event handler testable now.
-    """
-
-    _ = request_params
-    if raw_stream is None:
-        raise NotImplementedError("Subscription transport is not implemented yet.")
-    return raw_stream
 
 
 def _build_stream_request_params(

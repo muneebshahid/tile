@@ -213,19 +213,6 @@ def _build_reasoning_delta_cases() -> list[NormalizationCase]:
                 "delta": "Thinking with text...",
             },
         ),
-        NormalizationCase(
-            name="response.reasoning_summary_part.done",
-            raw_event=reasoning_summary_part_done_event(
-                sequence_number=9,
-                item_id="rs_done_part",
-                summary_index=0,
-                text="A step",
-            ),
-            expected_event={
-                "type": NormalizedEventType.REASONING_DELTA,
-                "delta": "\n\n",
-            },
-        ),
     ]
 
 
@@ -265,7 +252,6 @@ def _build_message_cases() -> list[NormalizationCase]:
 
     return [
         *_build_message_start_cases(),
-        *_build_message_part_cases(),
         *_build_message_delta_cases(),
         *_build_message_done_cases(),
     ]
@@ -292,52 +278,6 @@ def _build_message_start_cases() -> list[NormalizationCase]:
     ]
 
 
-def _build_message_part_cases() -> list[NormalizationCase]:
-    """Builds normalization cases for assistant message content parts."""
-
-    return [
-        NormalizationCase(
-            name="response.content_part.added.output_text",
-            raw_event=content_part_added_event(
-                sequence_number=11,
-                item_id="msg_output_text",
-                part_type="output_text",
-                output_index=0,
-            ),
-            expected_event={
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": "output_text",
-            },
-        ),
-        NormalizationCase(
-            name="response.content_part.added.refusal",
-            raw_event=content_part_added_event(
-                sequence_number=12,
-                item_id="msg_refusal",
-                part_type="refusal",
-                output_index=0,
-            ),
-            expected_event={
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": "refusal",
-            },
-        ),
-        NormalizationCase(
-            name="response.content_part.added.unsupported",
-            raw_event=content_part_added_event(
-                sequence_number=13,
-                item_id="msg_unknown",
-                part_type="reasoning_text",
-                output_index=0,
-            ),
-            expected_event={
-                "type": NormalizedEventType.MESSAGE_TEXT_PART,
-                "part_type": None,
-            },
-        ),
-    ]
-
-
 def _build_message_delta_cases() -> list[NormalizationCase]:
     """Builds normalization cases for assistant message delta events."""
 
@@ -352,7 +292,6 @@ def _build_message_delta_cases() -> list[NormalizationCase]:
             ),
             expected_event={
                 "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                "part_type": "output_text",
                 "delta": "Hello",
             },
         ),
@@ -366,7 +305,6 @@ def _build_message_delta_cases() -> list[NormalizationCase]:
             ),
             expected_event={
                 "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                "part_type": "refusal",
                 "delta": "No",
             },
         ),
@@ -600,13 +538,54 @@ def test_normalize_sdk_events_maps_each_supported_raw_event(
     assert _collect_normalized_events([case.raw_event]) == [case.expected_event]
 
 
-def test_normalize_sdk_events_skips_unmapped_raw_events() -> None:
-    """Skips raw SDK events that the adapter does not currently map."""
-
-    ignored_event = reasoning_summary_part_added_event(
-        sequence_number=1,
-        item_id="rs_ignored",
-        summary_index=0,
-    )
+@pytest.mark.parametrize(
+    "ignored_event",
+    [
+        reasoning_summary_part_added_event(1, "rs_ignored", summary_index=0),
+        reasoning_summary_part_done_event(2, "rs_ignored", 0, "step"),
+        content_part_added_event(3, "msg_1", "output_text", output_index=0),
+        content_part_added_event(4, "msg_2", "refusal", output_index=0),
+        content_part_added_event(5, "msg_3", "reasoning_text", output_index=0),
+    ],
+    ids=[
+        "summary_part_added",
+        "summary_part_done",
+        "content_part_output_text",
+        "content_part_refusal",
+        "content_part_unsupported",
+    ],
+)
+def test_normalize_sdk_events_ignores_unmapped_raw_events(
+    ignored_event: ResponseStreamEvent,
+) -> None:
+    """Drop raw SDK events that have no normalized mapping."""
 
     assert _collect_normalized_events([ignored_event]) == []
+
+
+def test_normalize_sdk_events_passes_summary_parts_through_without_separators() -> None:
+    """Forward reasoning deltas verbatim and drop summary part boundaries.
+
+    Part boundaries are not synthesized into the delta stream; the
+    REASONING_DONE summary joins parts with a blank line and is the
+    authoritative text.
+    """
+
+    events = _collect_normalized_events(
+        [
+            reasoning_summary_delta_event(1, "rs_2", 0, "Part one"),
+            reasoning_summary_part_done_event(2, "rs_2", 0, "Part one"),
+            reasoning_summary_delta_event(3, "rs_2", 1, "Part two"),
+            reasoning_summary_part_done_event(4, "rs_2", 1, "Part two"),
+            reasoning_done_event(5, "rs_2", ["Part one", "Part two"]),
+        ]
+    )
+
+    assert events[:2] == [
+        {"type": NormalizedEventType.REASONING_DELTA, "delta": "Part one"},
+        {"type": NormalizedEventType.REASONING_DELTA, "delta": "Part two"},
+    ]
+    done_event = events[2]
+    assert done_event["type"] == NormalizedEventType.REASONING_DONE
+    assert done_event["summary_text"] == "Part one\n\nPart two"  # type: ignore[typeddict-item]
+    assert len(events) == 3

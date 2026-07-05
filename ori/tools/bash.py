@@ -96,9 +96,8 @@ async def _stop_timed_out_process(
     """Terminate a timed-out process and escalate if it does not exit."""
 
     _terminate_process(process)
-    try:
-        await asyncio.wait_for(wait_task, timeout=1)
-    except TimeoutError:
+    done, _ = await asyncio.wait({wait_task}, timeout=1)
+    if not done:
         _kill_process(process)
         await wait_task
 

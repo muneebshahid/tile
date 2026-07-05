@@ -44,10 +44,18 @@ def test_edit_schema_describes_each_replacement() -> None:
     assert item_schema["additionalProperties"] is False
 
 
-def test_edit_resolves_relative_path_against_supplied_cwd(tmp_path: Path) -> None:
-    """Resolve relative edit paths against the supplied tool cwd."""
+@pytest.mark.parametrize(
+    "requested_path",
+    ["sample.txt", "@sample.txt"],
+    ids=["relative", "at-prefixed"],
+)
+def test_edit_resolves_requested_paths_against_cwd(
+    tmp_path: Path,
+    requested_path: str,
+) -> None:
+    """Resolve relative and at-prefixed edit paths against the tool cwd."""
 
-    assert edit._resolve_path("sample.txt", tmp_path) == tmp_path / "sample.txt"
+    assert edit._resolve_path(requested_path, tmp_path) == tmp_path / "sample.txt"
 
 
 def test_edit_expands_home_directory(
@@ -68,12 +76,6 @@ def test_edit_normalizes_unicode_spaces(tmp_path: Path) -> None:
     requested_path = str(file_path).replace(" ", "\u00a0")
 
     assert edit._resolve_path(requested_path, Path.cwd()) == file_path
-
-
-def test_edit_strips_at_prefix(tmp_path: Path) -> None:
-    """Strip leading at signs from referenced edit paths."""
-
-    assert edit._resolve_path("@sample.txt", tmp_path) == tmp_path / "sample.txt"
 
 
 @pytest.mark.asyncio
@@ -113,6 +115,24 @@ async def test_edit_replaces_multiple_disjoint_blocks(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_edit_matches_against_original_content(tmp_path: Path) -> None:
+    """Match later edits against original content instead of earlier replacements."""
+
+    file_path = _write_text(tmp_path / "sample.txt", "foo\nbar\nbaz\n")
+
+    await edit.fn(
+        path=str(file_path),
+        edits=[
+            {"oldText": "foo\n", "newText": "foo bar\n"},
+            {"oldText": "bar\n", "newText": "BAR\n"},
+        ],
+        cwd=Path.cwd(),
+    )
+
+    assert file_path.read_text(encoding="utf-8") == "foo bar\nBAR\nbaz\n"
+
+
+@pytest.mark.asyncio
 async def test_edit_returns_unified_diff_details(tmp_path: Path) -> None:
     """Return a standard unified diff in edit result details."""
 
@@ -137,171 +157,242 @@ async def test_edit_returns_unified_diff_details(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("first\r\nsecond\r\nthird\r\n", "first\r\nREPLACED\r\nthird\r\n"),
+        ("\ufefffirst\nsecond\nthird\n", "\ufefffirst\nREPLACED\nthird\n"),
+    ],
+    ids=["crlf-line-endings", "utf8-bom"],
+)
 @pytest.mark.asyncio
-async def test_edit_matches_against_original_content(tmp_path: Path) -> None:
-    """Match later edits against original content instead of earlier replacements."""
+async def test_edit_preserves_file_encoding_metadata(
+    tmp_path: Path,
+    content: str,
+    expected: str,
+) -> None:
+    """Match LF oldText while preserving CRLF endings and a UTF-8 BOM."""
 
-    file_path = _write_text(tmp_path / "sample.txt", "foo\nbar\nbaz\n")
+    file_path = _write_text(tmp_path / "sample.txt", content)
 
     await edit.fn(
         path=str(file_path),
-        edits=[
-            {"oldText": "foo\n", "newText": "foo bar\n"},
-            {"oldText": "bar\n", "newText": "BAR\n"},
-        ],
+        edits=[{"oldText": "second\n", "newText": "REPLACED\n"}],
         cwd=Path.cwd(),
     )
 
-    assert file_path.read_text(encoding="utf-8") == "foo bar\nBAR\nbaz\n"
+    assert _read_text(file_path) == expected
 
 
-@pytest.mark.asyncio
-async def test_edit_raises_if_text_not_found(tmp_path: Path) -> None:
-    """Raise when oldText is not present in the original file."""
-
-    file_path = _write_text(tmp_path / "sample.txt", "Hello, world!")
-
-    with pytest.raises(RuntimeError, match="Could not find the exact text"):
-        await edit.fn(
-            path=str(file_path),
-            edits=[{"oldText": "missing", "newText": "testing"}],
-            cwd=Path.cwd(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_edit_raises_if_text_is_not_unique(tmp_path: Path) -> None:
-    """Raise when oldText appears more than once."""
-
-    file_path = _write_text(tmp_path / "sample.txt", "foo foo foo")
-
-    with pytest.raises(RuntimeError, match="Found 3 occurrences"):
-        await edit.fn(
-            path=str(file_path),
-            edits=[{"oldText": "foo", "newText": "bar"}],
-            cwd=Path.cwd(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_edit_raises_if_edits_are_empty(tmp_path: Path) -> None:
-    """Reject empty edit lists."""
-
-    file_path = _write_text(tmp_path / "sample.txt", "hello\nworld\n")
-
-    with pytest.raises(RuntimeError, match="edits must contain at least one"):
-        await edit.fn(path=str(file_path), edits=[], cwd=Path.cwd())
-
-
-@pytest.mark.asyncio
-async def test_edit_raises_if_old_text_is_empty(tmp_path: Path) -> None:
-    """Reject empty oldText values."""
-
-    file_path = _write_text(tmp_path / "sample.txt", "hello\nworld\n")
-
-    with pytest.raises(RuntimeError, match="oldText must not be empty"):
-        await edit.fn(
-            path=str(file_path),
-            edits=[{"oldText": "", "newText": "replacement"}],
-            cwd=Path.cwd(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_edit_raises_if_regions_overlap(tmp_path: Path) -> None:
-    """Reject overlapping multi-edit ranges."""
-
-    file_path = _write_text(tmp_path / "sample.txt", "one\ntwo\nthree\n")
-
-    with pytest.raises(RuntimeError, match="overlap"):
-        await edit.fn(
-            path=str(file_path),
-            edits=[
+@pytest.mark.parametrize(
+    ("content", "edits", "error_match"),
+    [
+        (
+            "Hello, world!",
+            [{"oldText": "missing", "newText": "testing"}],
+            "Could not find the exact text",
+        ),
+        (
+            "foo foo foo",
+            [{"oldText": "foo", "newText": "bar"}],
+            "Found 3 occurrences",
+        ),
+        (
+            "hello\nworld\n",
+            [],
+            "edits must contain at least one",
+        ),
+        (
+            "hello\nworld\n",
+            [{"oldText": "", "newText": "replacement"}],
+            "oldText must not be empty",
+        ),
+        (
+            "one\ntwo\nthree\n",
+            [
                 {"oldText": "one\ntwo\n", "newText": "ONE\nTWO\n"},
                 {"oldText": "two\nthree\n", "newText": "TWO\nTHREE\n"},
             ],
-            cwd=Path.cwd(),
-        )
-
-
-@pytest.mark.asyncio
-async def test_edit_does_not_partially_apply_when_one_edit_fails(
-    tmp_path: Path,
-) -> None:
-    """Leave the file unchanged when any requested edit is invalid."""
-
-    original_content = "alpha\nbeta\ngamma\n"
-    file_path = _write_text(tmp_path / "sample.txt", original_content)
-
-    with pytest.raises(RuntimeError, match="Could not find"):
-        await edit.fn(
-            path=str(file_path),
-            edits=[
+            "overlap",
+        ),
+        (
+            "alpha\nbeta\ngamma\n",
+            [
                 {"oldText": "alpha\n", "newText": "ALPHA\n"},
                 {"oldText": "missing\n", "newText": "MISSING\n"},
             ],
-            cwd=Path.cwd(),
-        )
-
-    assert file_path.read_text(encoding="utf-8") == original_content
-
-
+            "Could not find",
+        ),
+        (
+            "abc\ncde\nghi",
+            [{"oldText": "ghi\n", "newText": "xyz\n"}],
+            "Could not find",
+        ),
+        (
+            "log(‘x’);\nother\nlog(‘x’);\n",
+            [{"oldText": "log('x');", "newText": "log('y');"}],
+            "Found 2 occurrences",
+        ),
+    ],
+    ids=[
+        "old-text-missing",
+        "duplicate-occurrences",
+        "empty-edit-list",
+        "empty-old-text",
+        "overlapping-edits",
+        "one-invalid-edit-among-valid",
+        "terminated-old-on-unterminated-file",
+        "fuzzy-ambiguous-window",
+    ],
+)
 @pytest.mark.asyncio
-async def test_edit_matches_lf_text_and_preserves_crlf(tmp_path: Path) -> None:
-    """Match LF oldText against CRLF files and preserve CRLF on write."""
+async def test_edit_rejects_invalid_edits_and_leaves_file_unchanged(
+    tmp_path: Path,
+    content: str,
+    edits: list[dict[str, str]],
+    error_match: str,
+) -> None:
+    """Reject invalid edit requests without modifying the target file."""
 
-    file_path = _write_text(tmp_path / "sample.txt", "first\r\nsecond\r\nthird\r\n")
+    file_path = _write_text(tmp_path / "sample.txt", content)
+
+    with pytest.raises(RuntimeError, match=error_match):
+        await edit.fn(path=str(file_path), edits=edits, cwd=Path.cwd())
+
+    assert _read_text(file_path) == content
+
+
+@pytest.mark.parametrize(
+    ("content", "old_text", "new_text", "expected"),
+    [
+        (
+            "line one   \nline two  \nline three\n",
+            "line one\nline two\n",
+            "replaced\n",
+            "replaced\nline three\n",
+        ),
+        (
+            "console.log(‘hello’);\n",
+            "console.log('hello');",
+            "console.log('world');",
+            "console.log('world');\n",
+        ),
+        (
+            "hello\u00a0world\nrange: 1\u20135\n",
+            "hello world\nrange: 1-5\n",
+            "hello universe\nrange: 10-50\n",
+            "hello universe\nrange: 10-50\n",
+        ),
+        (
+            "ＡＢＣ１２３\ncafe\u0301\n",
+            "ABC123\ncafé\n",
+            "XYZ789\ncoffee\n",
+            "XYZ789\ncoffee\n",
+        ),
+    ],
+    ids=[
+        "trailing-whitespace",
+        "smart-quotes",
+        "unicode-dashes-and-spaces",
+        "nfkc-compatibility",
+    ],
+)
+@pytest.mark.asyncio
+async def test_edit_fuzzy_matches_normalized_line_variants(
+    tmp_path: Path,
+    content: str,
+    old_text: str,
+    new_text: str,
+    expected: str,
+) -> None:
+    """Fall back to fuzzy whole-line matching across normalization variants."""
+
+    file_path = _write_text(tmp_path / "sample.txt", content)
 
     await edit.fn(
         path=str(file_path),
-        edits=[{"oldText": "second\n", "newText": "REPLACED\n"}],
+        edits=[{"oldText": old_text, "newText": new_text}],
         cwd=Path.cwd(),
     )
 
-    assert _read_text(file_path) == "first\r\nREPLACED\r\nthird\r\n"
+    assert file_path.read_text(encoding="utf-8") == expected
 
 
+@pytest.mark.parametrize(
+    ("content", "old_text", "new_text", "expected"),
+    [
+        (
+            "console.log(‘hello’);",
+            "console.log('hello');",
+            "console.log('world');\n",
+            "console.log('world');\n",
+        ),
+        (
+            "alpha\nlog(‘x’);\nomega\n",
+            "log('x');\n",
+            "",
+            "alpha\nomega\n",
+        ),
+        (
+            "line1\nlog(‘x’);\n",
+            "log('x');",
+            "",
+            "line1\n\n",
+        ),
+        (
+            "line1\nlog(‘x’);\nline3\n",
+            "log('x');",
+            "a();\nb();",
+            "line1\na();\nb();\nline3\n",
+        ),
+        (
+            "alpha\nlog(‘x’);",
+            "log('x');",
+            "",
+            "alpha\n",
+        ),
+    ],
+    ids=[
+        "eof-adds-trailing-newline",
+        "terminated-line-deletion",
+        "unterminated-deletion-keeps-empty-line",
+        "unterminated-replacement-keeps-terminator",
+        "last-line-deletion-keeps-prior-terminator",
+    ],
+)
 @pytest.mark.asyncio
-async def test_edit_preserves_utf8_bom(tmp_path: Path) -> None:
-    """Preserve a leading UTF-8 BOM after editing."""
+async def test_edit_fuzzy_maps_terminators_like_exact_replacement(
+    tmp_path: Path,
+    content: str,
+    old_text: str,
+    new_text: str,
+    expected: str,
+) -> None:
+    """Honor old and new text terminators exactly across window edges."""
 
-    file_path = _write_text(tmp_path / "sample.txt", "\ufefffirst\nsecond\nthird\n")
+    file_path = _write_text(tmp_path / "sample.txt", content)
 
     await edit.fn(
         path=str(file_path),
-        edits=[{"oldText": "second\n", "newText": "REPLACED\n"}],
+        edits=[{"oldText": old_text, "newText": new_text}],
         cwd=Path.cwd(),
     )
 
-    assert file_path.read_text(encoding="utf-8") == "\ufefffirst\nREPLACED\nthird\n"
+    assert _read_text(file_path) == expected
 
 
 @pytest.mark.asyncio
-async def test_edit_fuzzy_matches_trailing_whitespace(tmp_path: Path) -> None:
-    """Fallback to fuzzy matching when trailing whitespace differs."""
+async def test_edit_fuzzy_preserves_untouched_regions_and_diffs_original(
+    tmp_path: Path,
+) -> None:
+    """Leave lines outside the window byte-identical and diff original content."""
 
     file_path = _write_text(
-        tmp_path / "sample.txt", "line one   \nline two  \nline three\n"
+        tmp_path / "sample.txt",
+        "alpha ‘one’  \nconsole.log(‘hello’);\nomega “end”\t\n",
     )
 
-    await edit.fn(
-        path=str(file_path),
-        edits=[{"oldText": "line one\nline two\n", "newText": "replaced\n"}],
-        cwd=Path.cwd(),
-    )
-
-    assert file_path.read_text(encoding="utf-8") == "replaced\nline three\n"
-
-
-@pytest.mark.asyncio
-async def test_edit_fuzzy_matches_smart_quotes(tmp_path: Path) -> None:
-    """Fallback to fuzzy matching for smart quote variants."""
-
-    file_path = _write_text(
-        tmp_path / "sample.txt", "console.log(\u2018hello\u2019);\n"
-    )
-
-    await edit.fn(
+    tool_result = await edit.fn(
         path=str(file_path),
         edits=[
             {
@@ -312,44 +403,31 @@ async def test_edit_fuzzy_matches_smart_quotes(tmp_path: Path) -> None:
         cwd=Path.cwd(),
     )
 
-    assert file_path.read_text(encoding="utf-8") == "console.log('world');\n"
+    assert file_path.read_text(encoding="utf-8") == (
+        "alpha ‘one’  \nconsole.log('world');\nomega “end”\t\n"
+    )
+    details = _edit_details(tool_result)
+    assert "-console.log(‘hello’);\n" in details.diff
+    assert "+console.log('world');\n" in details.diff
+    assert "-alpha" not in details.diff
+    assert "+alpha" not in details.diff
 
 
 @pytest.mark.asyncio
-async def test_edit_fuzzy_matches_unicode_dashes_and_spaces(tmp_path: Path) -> None:
-    """Fallback to fuzzy matching for Unicode dashes and spaces."""
+async def test_edit_fuzzy_skips_unterminated_final_line_for_terminated_old(
+    tmp_path: Path,
+) -> None:
+    """Match only the terminated occurrence when the final line lacks a newline."""
 
-    file_path = _write_text(
-        tmp_path / "sample.txt", "hello\u00a0world\nrange: 1\u20135\n"
-    )
-
-    await edit.fn(
-        path=str(file_path),
-        edits=[
-            {
-                "oldText": "hello world\nrange: 1-5\n",
-                "newText": "hello universe\nrange: 10-50\n",
-            }
-        ],
-        cwd=Path.cwd(),
-    )
-
-    assert file_path.read_text(encoding="utf-8") == "hello universe\nrange: 10-50\n"
-
-
-@pytest.mark.asyncio
-async def test_edit_fuzzy_matches_unicode_compatibility_forms(tmp_path: Path) -> None:
-    """Fallback to fuzzy matching for NFKC-equivalent text."""
-
-    file_path = _write_text(tmp_path / "sample.txt", "ＡＢＣ１２３\ncafe\u0301\n")
+    file_path = _write_text(tmp_path / "sample.txt", "log(‘x’);\nabc\nlog(‘x’);")
 
     await edit.fn(
         path=str(file_path),
-        edits=[{"oldText": "ABC123\ncafé\n", "newText": "XYZ789\ncoffee\n"}],
+        edits=[{"oldText": "log('x');\n", "newText": "log('y');\n"}],
         cwd=Path.cwd(),
     )
 
-    assert file_path.read_text(encoding="utf-8") == "XYZ789\ncoffee\n"
+    assert _read_text(file_path) == "log('y');\nabc\nlog(‘x’);"
 
 
 @pytest.mark.asyncio
@@ -358,7 +436,7 @@ async def test_edit_prefers_exact_match_over_fuzzy_match(tmp_path: Path) -> None
 
     file_path = _write_text(
         tmp_path / "sample.txt",
-        "const x = 'exact';\nconst y = \u2018other\u2019;\n",
+        "const x = 'exact';\nconst y = ‘other’;\n",
     )
 
     await edit.fn(
@@ -374,17 +452,17 @@ async def test_edit_prefers_exact_match_over_fuzzy_match(tmp_path: Path) -> None
 
     assert (
         file_path.read_text(encoding="utf-8")
-        == "const x = 'changed';\nconst y = \u2018other\u2019;\n"
+        == "const x = 'changed';\nconst y = ‘other’;\n"
     )
 
 
 @pytest.mark.asyncio
 async def test_edit_fuzzy_matches_multiple_edits(tmp_path: Path) -> None:
-    """Use fuzzy-normalized content for all edits once fallback is needed."""
+    """Match every edit in fuzzy line space once the fallback is needed."""
 
     file_path = _write_text(
         tmp_path / "sample.txt",
-        "console.log(\u2018hello\u2019);\nhello\u00a0world\n",
+        "console.log(‘hello’);\nhello\u00a0world\n",
     )
 
     await edit.fn(
@@ -402,6 +480,47 @@ async def test_edit_fuzzy_matches_multiple_edits(tmp_path: Path) -> None:
     assert file_path.read_text(encoding="utf-8") == (
         "console.log('world');\nhello universe\n"
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "old_text", "new_text"),
+    [
+        ("line1\nline2\n", "line2", ""),
+        ("line1\nline2\n", "line2\n", ""),
+        ("line1\nline2\nline3\n", "line2", "x\ny"),
+        ("line1\nline2\nline3\n", "line2", "x\n"),
+        ("line1\nline2\nline3\n", "line2\n", "x\n"),
+        ("line1\nline2\nline3\n", "line2\n", "x"),
+        ("line1\nline2", "line2", "x\n"),
+        ("line1\nline2", "line2", ""),
+        ("line1\nline2", "line2", "x"),
+        ("only", "only", "changed\n"),
+    ],
+)
+def test_fuzzy_replacement_equals_exact_replacement(
+    content: str,
+    old_text: str,
+    new_text: str,
+) -> None:
+    """Produce byte-identical results from both paths whenever both match."""
+
+    replacements = [edit.EditReplacement(oldText=old_text, newText=new_text)]
+
+    exact = edit._apply_exact_replacements(content, replacements, "sample.txt")
+    fuzzy = edit._apply_fuzzy_replacements(content, replacements, "sample.txt")
+
+    assert fuzzy.new_content == exact.new_content
+
+
+def test_fuzzy_rejects_missing_trailing_newline_like_exact() -> None:
+    """Fail both paths when old text claims a newline the content lacks."""
+
+    replacements = [edit.EditReplacement(oldText="ghi\n", newText="xyz\n")]
+
+    with pytest.raises(edit.MatchNotFound):
+        edit._apply_exact_replacements("abc\nghi", replacements, "sample.txt")
+    with pytest.raises(edit.MatchNotFound):
+        edit._apply_fuzzy_replacements("abc\nghi", replacements, "sample.txt")
 
 
 def _write_text(path: Path, content: str) -> Path:

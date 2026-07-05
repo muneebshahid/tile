@@ -32,7 +32,7 @@ async def execute(
         cwd=cwd,
     )
     stdout_bytes, stderr_bytes = await process.communicate()
-    exit_code = process.returncode or 0
+    exit_code = process.returncode if process.returncode is not None else 0
     if exit_code not in allowed_exit_codes:
         error = (
             stderr_bytes.decode().strip()

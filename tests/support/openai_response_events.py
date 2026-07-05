@@ -321,7 +321,7 @@ def message_added_event(
 def content_part_added_event(
     sequence_number: int,
     item_id: str,
-    part_type: str,
+    content_kind: str,
     *,
     output_index: int = 1,
     content_index: int = 0,
@@ -335,26 +335,8 @@ def content_part_added_event(
             "output_index": output_index,
             "item_id": item_id,
             "content_index": content_index,
-            "part": _content_part(part_type),
+            "part": _content_part(content_kind),
         }
-    )
-
-
-def unsupported_content_part_added_event(
-    sequence_number: int,
-    item_id: str,
-    *,
-    output_index: int = 1,
-    content_index: int = 0,
-) -> ResponseContentPartAddedEvent:
-    """Build a raw unsupported content part added event."""
-
-    return content_part_added_event(
-        sequence_number,
-        item_id,
-        "reasoning_text",
-        output_index=output_index,
-        content_index=content_index,
     )
 
 
@@ -558,11 +540,11 @@ def _response_payload(
     }
 
 
-def _content_part(part_type: str) -> JsonObject:
+def _content_part(content_kind: str) -> JsonObject:
     """Build a raw assistant content part payload."""
 
-    if part_type == "output_text":
+    if content_kind == "output_text":
         return {"type": "output_text", "text": "", "annotations": []}
-    if part_type == "refusal":
+    if content_kind == "refusal":
         return {"type": "refusal", "refusal": ""}
-    return {"type": part_type, "text": "internal"}
+    return {"type": content_kind, "text": "internal"}

@@ -48,13 +48,13 @@ class LoadedFile:
 
 
 @dataclass(frozen=True)
-class MatchedEdit:
-    """A validated replacement location in the original normalized content."""
+class MatchedSpan:
+    """A validated character replacement span in the original content."""
 
     edit_index: int
-    match_index: int
-    match_length: int
-    new_text: str
+    start: int
+    end: int
+    replacement: str
 
 
 @dataclass(frozen=True)
@@ -154,30 +154,253 @@ def _apply_replacements_with_fallback(
     replacements: list[EditReplacement],
     display_path: str,
 ) -> ReplacementApplication:
-    """Apply exact replacements, then retry in fuzzy-normalized space if needed."""
+    """Apply exact replacements, then retry fuzzy whole-line matching if needed."""
 
+    _validate_non_empty_old_text(replacements, display_path)
     try:
-        return _apply_replacements(content, replacements, display_path)
+        return _apply_exact_replacements(content, replacements, display_path)
     except MatchNotFound:
-        return _apply_replacements(
-            _normalize_for_fuzzy_match(content),
-            _fuzzy_normalized_replacements(replacements),
-            display_path,
-        )
+        return _apply_fuzzy_replacements(content, replacements, display_path)
 
 
-def _apply_replacements(
+def _apply_exact_replacements(
     content: str,
     replacements: list[EditReplacement],
     display_path: str,
 ) -> ReplacementApplication:
-    """Validate and apply replacements against original content."""
+    """Apply replacements matched exactly in character space."""
 
-    matched_edits = _match_replacements(content, replacements, display_path)
-    new_content = _replace_matched_edits(content, matched_edits)
+    spans = _match_exact_spans(content, replacements, display_path)
+    new_content = _splice_text_spans(content, spans)
+    return _build_application(content, new_content, replacements, display_path)
+
+
+def _apply_fuzzy_replacements(
+    content: str,
+    replacements: list[EditReplacement],
+    display_path: str,
+) -> ReplacementApplication:
+    """Apply replacements matched as fuzzy-normalized whole lines.
+
+    Normalization is used only to locate matching line windows. The windows
+    map back to character spans in the original content, so the replacement
+    itself is the same character splice the exact path performs.
+    """
+
+    spans = _match_fuzzy_spans(content, replacements, display_path)
+    new_content = _splice_text_spans(content, spans)
+    return _build_application(content, new_content, replacements, display_path)
+
+
+def _build_application(
+    content: str,
+    new_content: str,
+    replacements: list[EditReplacement],
+    display_path: str,
+) -> ReplacementApplication:
+    """Reject no-op replacements and pair original with edited content."""
+
     if content == new_content:
         raise RuntimeError(_no_change_error(display_path, len(replacements)))
     return ReplacementApplication(base_content=content, new_content=new_content)
+
+
+def _match_exact_spans(
+    content: str,
+    replacements: list[EditReplacement],
+    display_path: str,
+) -> list[MatchedSpan]:
+    """Find a unique character span for every requested replacement."""
+
+    spans: list[MatchedSpan] = []
+    for index, replacement in enumerate(replacements):
+        old_text = _normalize_to_lf(replacement.oldText)
+        starts = _find_text_starts(content, old_text)
+        start = _require_unique_match(starts, display_path, index, len(replacements))
+        spans.append(
+            MatchedSpan(
+                edit_index=index,
+                start=start,
+                end=start + len(old_text),
+                replacement=_normalize_to_lf(replacement.newText),
+            )
+        )
+    _validate_non_overlapping(spans, display_path)
+    return spans
+
+
+def _match_fuzzy_spans(
+    content: str,
+    replacements: list[EditReplacement],
+    display_path: str,
+) -> list[MatchedSpan]:
+    """Find a unique fuzzy-normalized line window for every requested replacement.
+
+    Lines carry their own trailing newline, so terminators are matched as
+    part of each line and a matched window maps directly to its character
+    span.
+    """
+
+    original_lines = _terminated_lines(content)
+    normalized_lines = [_normalize_for_fuzzy_match(line) for line in original_lines]
+    line_offsets = _line_start_offsets(original_lines)
+    spans: list[MatchedSpan] = []
+    for index, replacement in enumerate(replacements):
+        window = [
+            _normalize_for_fuzzy_match(line)
+            for line in _terminated_lines(_normalize_to_lf(replacement.oldText))
+        ]
+        starts = _find_window_starts(normalized_lines, window)
+        start_line = _require_unique_match(
+            starts, display_path, index, len(replacements)
+        )
+        start, end = _window_char_span(
+            original_lines,
+            line_offsets,
+            start_line=start_line,
+            last_line=start_line + len(window) - 1,
+            old_terminated=window[-1].endswith("\n"),
+        )
+        spans.append(
+            MatchedSpan(
+                edit_index=index,
+                start=start,
+                end=end,
+                replacement=_normalize_to_lf(replacement.newText),
+            )
+        )
+    _validate_non_overlapping(spans, display_path)
+    return spans
+
+
+def _terminated_lines(text: str) -> list[str]:
+    """Split text into lines that each keep their own trailing newline."""
+
+    parts = text.split("\n")
+    lines = [f"{part}\n" for part in parts[:-1]]
+    if parts[-1] != "":
+        lines.append(parts[-1])
+    return lines
+
+
+def _line_start_offsets(lines: list[str]) -> list[int]:
+    """Return the character offset where each line starts."""
+
+    offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
+    return offsets
+
+
+def _window_char_span(
+    original_lines: list[str],
+    line_offsets: list[int],
+    *,
+    start_line: int,
+    last_line: int,
+    old_terminated: bool,
+) -> tuple[int, int]:
+    """Map a matched line window to its character span in the content.
+
+    The span covers the matched lines. When the old text does not claim a
+    trailing newline but the matched final line has one, that newline stays
+    outside the span.
+    """
+
+    start = line_offsets[start_line]
+    end = line_offsets[last_line] + len(original_lines[last_line])
+    if not old_terminated and original_lines[last_line].endswith("\n"):
+        end -= 1
+    return start, end
+
+
+def _find_text_starts(content: str, old_text: str) -> list[int]:
+    """Return non-overlapping character offsets where the old text occurs."""
+
+    starts: list[int] = []
+    offset = content.find(old_text)
+    while offset != -1:
+        starts.append(offset)
+        offset = content.find(old_text, offset + len(old_text))
+    return starts
+
+
+def _find_window_starts(normalized_lines: list[str], window: list[str]) -> list[int]:
+    """Return start indexes where the window matches consecutive lines."""
+
+    return [
+        start
+        for start in range(len(normalized_lines) - len(window) + 1)
+        if _window_matches_at(normalized_lines, window, start)
+    ]
+
+
+def _window_matches_at(
+    normalized_lines: list[str],
+    window: list[str],
+    start: int,
+) -> bool:
+    """Return whether the window matches the lines starting at one index."""
+
+    *head, last = window
+    if normalized_lines[start : start + len(head)] != head:
+        return False
+    return _last_window_line_matches(normalized_lines[start + len(head)], last)
+
+
+def _last_window_line_matches(file_line: str, old_line: str) -> bool:
+    """Match the window's final line, honoring only a claimed terminator.
+
+    An old line that claims a trailing newline requires one; an old line
+    without one also matches a terminated file line, leaving the newline
+    outside the replacement span.
+    """
+
+    if old_line.endswith("\n"):
+        return file_line == old_line
+    return file_line == old_line or file_line == f"{old_line}\n"
+
+
+def _require_unique_match(
+    starts: list[int],
+    display_path: str,
+    edit_index: int,
+    total_edits: int,
+) -> int:
+    """Return the single match start or raise a lookup error."""
+
+    if not starts:
+        raise MatchNotFound(_not_found_error(display_path, edit_index, total_edits))
+    if len(starts) > 1:
+        raise RuntimeError(
+            _duplicate_error(display_path, edit_index, total_edits, len(starts))
+        )
+    return starts[0]
+
+
+def _validate_non_overlapping(
+    spans: list[MatchedSpan],
+    display_path: str,
+) -> None:
+    """Reject overlapping replacement spans."""
+
+    ordered = sorted(spans, key=lambda span: span.start)
+    for previous, current in zip(ordered, ordered[1:]):
+        if previous.end > current.start:
+            raise RuntimeError(
+                _overlap_error(previous.edit_index, current.edit_index, display_path)
+            )
+
+
+def _splice_text_spans(content: str, spans: list[MatchedSpan]) -> str:
+    """Apply character spans in reverse order so earlier offsets stay stable."""
+
+    result = content
+    for span in sorted(spans, key=lambda span: span.start, reverse=True):
+        result = result[: span.start] + span.replacement + result[span.end :]
+    return result
 
 
 def _write_loaded_file(path: Path, loaded_file: LoadedFile, content: str) -> None:
@@ -213,19 +436,6 @@ def _write_text(path: Path, content: str) -> None:
         file.write(content)
 
 
-def _match_replacements(
-    content: str,
-    replacements: list[EditReplacement],
-    display_path: str,
-) -> list[MatchedEdit]:
-    """Find every replacement in original content before mutating anything."""
-
-    _validate_non_empty_old_text(replacements, display_path)
-    matched_edits = _find_matches(content, replacements, display_path)
-    _validate_non_overlapping(matched_edits, display_path)
-    return matched_edits
-
-
 def _validate_non_empty_old_text(
     replacements: list[EditReplacement],
     display_path: str,
@@ -237,65 +447,6 @@ def _validate_non_empty_old_text(
             raise RuntimeError(
                 _empty_old_text_error(display_path, index, len(replacements))
             )
-
-
-def _find_matches(
-    content: str,
-    replacements: list[EditReplacement],
-    display_path: str,
-) -> list[MatchedEdit]:
-    """Find unique locations for every requested replacement."""
-
-    matched_edits: list[MatchedEdit] = []
-    for index, replacement in enumerate(replacements):
-        old_text = _normalize_to_lf(replacement.oldText)
-        occurrences = content.count(old_text)
-        if occurrences == 0:
-            raise MatchNotFound(
-                _not_found_error(display_path, index, len(replacements))
-            )
-        if occurrences > 1:
-            raise RuntimeError(
-                _duplicate_error(display_path, index, len(replacements), occurrences)
-            )
-        matched_edits.append(
-            MatchedEdit(
-                edit_index=index,
-                match_index=content.find(old_text),
-                match_length=len(old_text),
-                new_text=_normalize_to_lf(replacement.newText),
-            )
-        )
-    return matched_edits
-
-
-def _validate_non_overlapping(
-    matched_edits: list[MatchedEdit],
-    display_path: str,
-) -> None:
-    """Reject overlapping edit ranges."""
-
-    sorted_edits = sorted(matched_edits, key=lambda edit: edit.match_index)
-    for previous, current in zip(sorted_edits, sorted_edits[1:]):
-        if previous.match_index + previous.match_length > current.match_index:
-            raise RuntimeError(
-                f"edits[{previous.edit_index}] and edits[{current.edit_index}] "
-                f"overlap in {display_path}. Merge them into one edit or target "
-                "disjoint regions."
-            )
-
-
-def _replace_matched_edits(content: str, matched_edits: list[MatchedEdit]) -> str:
-    """Apply matched edits in reverse order so original offsets remain stable."""
-
-    new_content = content
-    for edit in sorted(matched_edits, key=lambda item: item.match_index, reverse=True):
-        new_content = (
-            new_content[: edit.match_index]
-            + edit.new_text
-            + new_content[edit.match_index + edit.match_length :]
-        )
-    return new_content
 
 
 def _strip_bom(content: str) -> tuple[str, str]:
@@ -330,20 +481,6 @@ def _restore_line_endings(content: str, line_ending: LineEnding) -> str:
     if line_ending == "\r\n":
         return content.replace("\n", "\r\n")
     return content
-
-
-def _fuzzy_normalized_replacements(
-    replacements: list[EditReplacement],
-) -> list[EditReplacement]:
-    """Normalize oldText values for fuzzy matching while preserving newText."""
-
-    return [
-        EditReplacement(
-            oldText=_normalize_for_fuzzy_match(_normalize_to_lf(replacement.oldText)),
-            newText=replacement.newText,
-        )
-        for replacement in replacements
-    ]
 
 
 def _normalize_for_fuzzy_match(text: str) -> str:
@@ -383,11 +520,15 @@ def _not_found_error(path: str, edit_index: int, total_edits: int) -> str:
     if total_edits == 1:
         return (
             f"Could not find the exact text in {path}. The old text must match "
-            "exactly including all whitespace and newlines."
+            "exactly including all whitespace and newlines. Near matches that "
+            "differ in quotes, dashes, or whitespace are only found when the "
+            "old text covers whole lines."
         )
     return (
         f"Could not find edits[{edit_index}] in {path}. The oldText must match "
-        "exactly including all whitespace and newlines."
+        "exactly including all whitespace and newlines. Near matches that "
+        "differ in quotes, dashes, or whitespace are only found when oldText "
+        "covers whole lines."
     )
 
 
@@ -417,6 +558,15 @@ def _empty_old_text_error(path: str, edit_index: int, total_edits: int) -> str:
     if total_edits == 1:
         return f"oldText must not be empty in {path}."
     return f"edits[{edit_index}].oldText must not be empty in {path}."
+
+
+def _overlap_error(first_index: int, second_index: int, path: str) -> str:
+    """Return the overlapping-edits error message."""
+
+    return (
+        f"edits[{first_index}] and edits[{second_index}] overlap in {path}. "
+        "Merge them into one edit or target disjoint regions."
+    )
 
 
 def _no_change_error(path: str, total_edits: int) -> str:

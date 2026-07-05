@@ -12,13 +12,11 @@ from ori.providers.openai.normalized_events import (
     MessageAddedNormalizedEvent,
     MessageDoneNormalizedEvent,
     MessageTextDeltaNormalizedEvent,
-    MessageTextPartNormalizedEvent,
     NormalizedEvent,
     NormalizedEventType,
     ReasoningDeltaNormalizedEvent,
     ReasoningDoneNormalizedEvent,
     TERMINAL_NORMALIZED_EVENT_TYPES,
-    TextPartType,
     ToolCallAddedNormalizedEvent,
     ToolCallArgumentsDeltaNormalizedEvent,
     ToolCallArgumentsDoneNormalizedEvent,
@@ -57,7 +55,6 @@ class StreamAssemblyState:
     blocks: list[AssistantBlock] = field(default_factory=list)
     active_block: AssistantBlock | None = None
     active_block_index: int | None = None
-    active_text_part_type: TextPartType | None = None
 
 
 async def assemble_stream(
@@ -97,9 +94,6 @@ def _yield_stream_event(
         case NormalizedEventType.MESSAGE_ADDED:
             message_added_event = cast(MessageAddedNormalizedEvent, event)
             return _start_text_block(state, message_added_event)
-        case NormalizedEventType.MESSAGE_TEXT_PART:
-            text_part_event = cast(MessageTextPartNormalizedEvent, event)
-            _activate_text_part(state, text_part_event["part_type"])
         case NormalizedEventType.MESSAGE_TEXT_DELTA:
             text_delta_event = cast(MessageTextDeltaNormalizedEvent, event)
             return _append_text_delta(state, text_delta_event)
@@ -193,19 +187,8 @@ def _start_text_block(
     """Start a text block and return its stream event."""
 
     block = TextBlock(text="")
-    state.active_text_part_type = None
     content_index = _append_active_block(state, block)
     return TextStartEvent(content_index=content_index)
-
-
-def _activate_text_part(
-    state: StreamAssemblyState,
-    part_type: TextPartType | None,
-) -> None:
-    """Track the active supported text part for subsequent deltas."""
-
-    if isinstance(state.active_block, TextBlock):
-        state.active_text_part_type = part_type
 
 
 def _append_text_delta(
@@ -215,11 +198,7 @@ def _append_text_delta(
     """Append text to the active text block."""
 
     block = state.active_block
-    if (
-        not isinstance(block, TextBlock)
-        or state.active_block_index is None
-        or state.active_text_part_type != event["part_type"]
-    ):
+    if not isinstance(block, TextBlock) or state.active_block_index is None:
         return None
 
     delta = event["delta"]
@@ -245,7 +224,6 @@ def _finalize_text_block(
     event_block = block.model_copy(deep=True)
     content_index = state.active_block_index
     _clear_active_block(state)
-    state.active_text_part_type = None
     return TextEndEvent(content_index=content_index, block=event_block)
 
 
@@ -260,7 +238,6 @@ def _start_tool_call_block(
         name=event["name"],
         arguments=event["arguments"],
     )
-    state.active_text_part_type = None
     content_index = _append_active_block(state, block)
     return ToolCallStartEvent(
         content_index=content_index,
