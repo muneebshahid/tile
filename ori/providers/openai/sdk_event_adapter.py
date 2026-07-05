@@ -1,6 +1,5 @@
 import json
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass
 from typing import cast
 
 from openai.types.responses import (
@@ -15,7 +14,6 @@ from openai.types.responses import (
     ResponseOutputItemAddedEvent,
     ResponseOutputItemDoneEvent,
     ResponseReasoningTextDeltaEvent,
-    ResponseReasoningSummaryPartDoneEvent,
     ResponseReasoningSummaryTextDeltaEvent,
     ResponseStreamEvent,
     ResponseRefusalDeltaEvent,
@@ -40,189 +38,136 @@ from ori.types.stream_events import Phase, StopReason
 from ori.types.tools import JsonObject
 
 
-@dataclass
-class _AdapterState:
-    """Mutable state for normalization decisions that span raw events."""
-
-    pending_reasoning_separator: bool = False
-
-
 async def normalize_sdk_events(
     raw_stream: AsyncIterator[ResponseStreamEvent],
 ) -> AsyncIterator[NormalizedEvent]:
     """Normalize raw SDK events into transport-independent provider events."""
 
-    state = _AdapterState()
     async for event in raw_stream:
-        for normalized_event in _normalize_sdk_event(state, event):
+        normalized_event = _normalize_sdk_event(event)
+        if normalized_event is not None:
             yield normalized_event
 
 
-def _normalize_sdk_event(
-    state: _AdapterState,
-    event: ResponseStreamEvent,
-) -> list[NormalizedEvent]:
-    """Convert one raw SDK event into zero or more normalized events."""
+def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
+    """Convert one raw SDK event into the shared normalized-event union.
+
+    Reasoning deltas pass through exactly as sent by the provider. Summary
+    part boundaries are not surfaced as deltas, so mid-stream text may lack
+    the paragraph separators present in the final ``REASONING_DONE`` summary,
+    which joins parts with a blank line and is authoritative.
+    """
 
     match event:
         case ResponseCreatedEvent():
-            return [
-                {
-                    "type": NormalizedEventType.CREATED,
-                    "response_id": event.response.id,
-                }
-            ]
+            return {
+                "type": NormalizedEventType.CREATED,
+                "response_id": event.response.id,
+            }
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
-            return [
-                {
-                    "type": NormalizedEventType.REASONING_ADDED,
-                    "item_id": event.item.id,
-                }
-            ]
+            return {
+                "type": NormalizedEventType.REASONING_ADDED,
+                "item_id": event.item.id,
+            }
         case (
             ResponseReasoningSummaryTextDeltaEvent(delta=delta)
             | ResponseReasoningTextDeltaEvent(delta=delta)
         ):
-            return _reasoning_delta_events(state, delta)
-        case ResponseReasoningSummaryPartDoneEvent():
-            state.pending_reasoning_separator = True
-            return []
+            return {
+                "type": NormalizedEventType.REASONING_DELTA,
+                "delta": delta,
+            }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseReasoningItem
         ):
-            state.pending_reasoning_separator = False
-            return [
-                {
-                    "type": NormalizedEventType.REASONING_DONE,
-                    "item_id": event.item.id,
-                    "summary_text": _join_reasoning_summary_text(event.item.summary),
-                    "reasoning_signature": _serialize_reasoning_item(event.item),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.REASONING_DONE,
+                "item_id": event.item.id,
+                "summary_text": _join_reasoning_summary_text(event.item.summary),
+                "reasoning_signature": _serialize_reasoning_item(event.item),
+            }
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseOutputMessage
         ):
-            return [
-                {
-                    "type": NormalizedEventType.MESSAGE_ADDED,
-                    "item_id": event.item.id,
-                    "phase": _extract_message_phase(event.item),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.MESSAGE_ADDED,
+                "item_id": event.item.id,
+                "phase": _extract_message_phase(event.item),
+            }
         case ResponseTextDeltaEvent():
-            return [
-                {
-                    "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                    "delta": event.delta,
-                }
-            ]
+            return {
+                "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
+                "delta": event.delta,
+            }
         case ResponseRefusalDeltaEvent():
-            return [
-                {
-                    "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
-                    "delta": event.delta,
-                }
-            ]
+            return {
+                "type": NormalizedEventType.MESSAGE_TEXT_DELTA,
+                "delta": event.delta,
+            }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseOutputMessage
         ):
-            return [
-                {
-                    "type": NormalizedEventType.MESSAGE_DONE,
-                    "item_id": event.item.id,
-                    "text": _join_message_text(event.item.content),
-                    "phase": _extract_message_phase(event.item),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.MESSAGE_DONE,
+                "item_id": event.item.id,
+                "text": _join_message_text(event.item.content),
+                "phase": _extract_message_phase(event.item),
+            }
         case ResponseOutputItemAddedEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            return [
-                {
-                    "type": NormalizedEventType.TOOL_CALL_ADDED,
-                    "provider_item_id": event.item.id,
-                    "call_id": event.item.call_id,
-                    "name": event.item.name,
-                    "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.TOOL_CALL_ADDED,
+                "provider_item_id": event.item.id,
+                "call_id": event.item.call_id,
+                "name": event.item.name,
+                "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
+            }
         case ResponseFunctionCallArgumentsDeltaEvent():
-            return [
-                {
-                    "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA,
-                    "delta": event.delta,
-                }
-            ]
+            return {
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DELTA,
+                "delta": event.delta,
+            }
         case ResponseFunctionCallArgumentsDoneEvent():
-            return [
-                {
-                    "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
-                    "arguments": _parse_tool_call_arguments(event.arguments),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.TOOL_CALL_ARGUMENTS_DONE,
+                "arguments": _parse_tool_call_arguments(event.arguments),
+            }
         case ResponseOutputItemDoneEvent() if isinstance(
             event.item, ResponseFunctionToolCall
         ):
-            return [
-                {
-                    "type": NormalizedEventType.TOOL_CALL_DONE,
-                    "provider_item_id": event.item.id,
-                    "call_id": event.item.call_id,
-                    "name": event.item.name,
-                    "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.TOOL_CALL_DONE,
+                "provider_item_id": event.item.id,
+                "call_id": event.item.call_id,
+                "name": event.item.name,
+                "arguments": _parse_tool_call_arguments(event.item.arguments or ""),
+            }
         case ResponseCompletedEvent():
-            return [
-                {
-                    "type": NormalizedEventType.COMPLETED,
-                    "stop_reason": _extract_stop_reason(event),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.COMPLETED,
+                "stop_reason": _extract_stop_reason(event),
+            }
         case ResponseIncompleteEvent():
-            return [
-                {
-                    "type": NormalizedEventType.INCOMPLETE,
-                    "stop_reason": _extract_stop_reason(event),
-                    "error_message": _extract_incomplete_error_message(event),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.INCOMPLETE,
+                "stop_reason": _extract_stop_reason(event),
+                "error_message": _extract_incomplete_error_message(event),
+            }
         case ResponseErrorEvent():
-            return [
-                {
-                    "type": NormalizedEventType.FAILED,
-                    "message": _extract_stream_error_message(event),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.FAILED,
+                "message": _extract_stream_error_message(event),
+            }
         case ResponseFailedEvent():
-            return [
-                {
-                    "type": NormalizedEventType.FAILED,
-                    "message": _extract_error_message(event),
-                }
-            ]
+            return {
+                "type": NormalizedEventType.FAILED,
+                "message": _extract_error_message(event),
+            }
 
-    return []
-
-
-def _reasoning_delta_events(
-    state: _AdapterState,
-    delta: str,
-) -> list[NormalizedEvent]:
-    """Return one reasoning delta, preceded by a deferred part separator.
-
-    Summary part boundaries defer their separator so it lands between parts
-    and never trails the final part.
-    """
-
-    events: list[NormalizedEvent] = []
-    if state.pending_reasoning_separator:
-        state.pending_reasoning_separator = False
-        events.append({"type": NormalizedEventType.REASONING_DELTA, "delta": "\n\n"})
-    events.append({"type": NormalizedEventType.REASONING_DELTA, "delta": delta})
-    return events
+    return None
 
 
 def _parse_tool_call_arguments(arguments: str) -> JsonObject:

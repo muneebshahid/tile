@@ -573,37 +573,13 @@ def test_normalize_sdk_events_skips_content_part_added_events() -> None:
     )
 
 
-def test_normalize_sdk_events_single_summary_part_no_trailing_separator() -> None:
-    """Pending separator is discarded when REASONING_DONE follows the last part."""
+def test_normalize_sdk_events_passes_summary_parts_through_without_separators() -> None:
+    """Forward reasoning deltas verbatim and drop summary part boundaries.
 
-    events = _collect_normalized_events(
-        [
-            reasoning_summary_delta_event(1, "rs_1", 0, "Step one"),
-            reasoning_summary_part_done_event(2, "rs_1", 0, "Step one"),
-            reasoning_done_event(3, "rs_1", ["Step one"]),
-        ]
-    )
-
-    delta_events = [
-        e for e in events if e["type"] == NormalizedEventType.REASONING_DELTA
-    ]
-    done_events = [e for e in events if e["type"] == NormalizedEventType.REASONING_DONE]
-
-    # No separator delta; only the real delta text
-    assert delta_events == [
-        {"type": NormalizedEventType.REASONING_DELTA, "delta": "Step one"},
-    ]
-    assert len(done_events) == 1
-    # Accumulated delta text equals the REASONING_DONE summary_text
-    accumulated = "".join(
-        e["delta"]  # type: ignore[typeddict-item]
-        for e in delta_events
-    )
-    assert accumulated == done_events[0]["summary_text"]  # type: ignore[typeddict-item]
-
-
-def test_normalize_sdk_events_two_summary_parts_one_separator() -> None:
-    """Separator is injected between summary parts but not after the last part."""
+    Part boundaries are not synthesized into the delta stream; the
+    REASONING_DONE summary joins parts with a blank line and is the
+    authoritative text.
+    """
 
     events = _collect_normalized_events(
         [
@@ -615,21 +591,11 @@ def test_normalize_sdk_events_two_summary_parts_one_separator() -> None:
         ]
     )
 
-    delta_events = [
-        e for e in events if e["type"] == NormalizedEventType.REASONING_DELTA
-    ]
-    done_events = [e for e in events if e["type"] == NormalizedEventType.REASONING_DONE]
-
-    # Exactly one separator between the two parts; none trailing
-    assert delta_events == [
+    assert events[:2] == [
         {"type": NormalizedEventType.REASONING_DELTA, "delta": "Part one"},
-        {"type": NormalizedEventType.REASONING_DELTA, "delta": "\n\n"},
         {"type": NormalizedEventType.REASONING_DELTA, "delta": "Part two"},
     ]
-    assert len(done_events) == 1
-    # Accumulated delta text equals the REASONING_DONE summary_text
-    accumulated = "".join(
-        e["delta"]  # type: ignore[typeddict-item]
-        for e in delta_events
-    )
-    assert accumulated == done_events[0]["summary_text"]  # type: ignore[typeddict-item]
+    done_event = events[2]
+    assert done_event["type"] == NormalizedEventType.REASONING_DONE
+    assert done_event["summary_text"] == "Part one\n\nPart two"  # type: ignore[typeddict-item]
+    assert len(events) == 3

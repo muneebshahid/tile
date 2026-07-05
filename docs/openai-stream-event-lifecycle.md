@@ -52,7 +52,7 @@ sequenceDiagram
 
 ## Reasoning Item
 
-Reasoning summary deltas and reasoning text deltas both normalize to `REASONING_DELTA`. A reasoning summary part completion becomes a paragraph-separator reasoning delta.
+Reasoning summary deltas and reasoning text deltas both normalize to `REASONING_DELTA` and pass through verbatim. Summary part boundaries are not surfaced as deltas, so mid-stream delta text may lack the paragraph separators present in the final summary; `REASONING_DONE` joins parts with a blank line and is the authoritative text.
 
 ```mermaid
 sequenceDiagram
@@ -81,12 +81,7 @@ sequenceDiagram
     Agent-->>Agent: emit MessageUpdateEvent
 
     SDK->>Adapter: ResponseReasoningSummaryPartDoneEvent
-    Adapter->>Norm: REASONING_DELTA(delta="\\n\\n")
-    Norm->>Asm: REASONING_DELTA
-    Asm-->>Asm: append paragraph separator
-    Asm->>Stream: ReasoningDeltaEvent(content_index, delta)
-    Stream->>Agent: reasoning_delta
-    Agent-->>Agent: emit MessageUpdateEvent
+    Adapter-->>Adapter: ignored (no normalized event)
 
     SDK->>Adapter: ResponseOutputItemDoneEvent(item=reasoning)
     Adapter->>Norm: REASONING_DONE(summary_text, reasoning_signature)
@@ -99,7 +94,7 @@ sequenceDiagram
 
 ## Text And Refusal Item
 
-`MESSAGE_TEXT_PART` selects which text channel is active. Output-text deltas are ignored while refusal is active, refusal deltas are ignored while output text is active, and unsupported parts set the active part to `None`.
+Output-text and refusal deltas both normalize to `MESSAGE_TEXT_DELTA` and append to the active text block; the final `MESSAGE_DONE` text concatenates output-text and refusal parts.
 
 ```mermaid
 sequenceDiagram
@@ -286,7 +281,7 @@ sequenceDiagram
 | `ResponseOutputItemAddedEvent` with reasoning item | `REASONING_ADDED` | `ReasoningStartEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningSummaryTextDeltaEvent` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
 | `ResponseReasoningTextDeltaEvent` | `REASONING_DELTA` | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
-| `ResponseReasoningSummaryPartDoneEvent` | `REASONING_DELTA` with paragraph separator | `ReasoningDeltaEvent` | `MessageUpdateEvent` |
+| `ResponseReasoningSummaryPartDoneEvent` | ignored | — | — |
 | `ResponseOutputItemDoneEvent` with reasoning item | `REASONING_DONE` | `ReasoningEndEvent` | `MessageUpdateEvent` |
 | `ResponseOutputItemAddedEvent` with message item | `MESSAGE_ADDED` | Starts the text block | `TextStartEvent` |
 | `ResponseTextDeltaEvent` | `MESSAGE_TEXT_DELTA` | `TextDeltaEvent` | `MessageUpdateEvent` |
