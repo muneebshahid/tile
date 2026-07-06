@@ -8,9 +8,10 @@ import pytest
 
 import ori.tools.bash as bash
 from ori.tools.bash import BashDetails
-from ori.types.tools import ToolResult, ToolTextContent
+from ori.types.tools import ToolResult
 from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from ori.tools.support.truncation import OUTPUT_LINE_LIMIT
+from tests.support.tool_results import tool_text
 
 
 def test_bash_schema_requires_only_command() -> None:
@@ -45,7 +46,7 @@ async def test_fn_runs_command_from_supplied_cwd(tmp_path: Path) -> None:
     (tmp_path / "sample.txt").write_text("content", encoding="utf-8")
 
     tool_result = await bash.fn(command="pwd && ls", cwd=tmp_path)
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result.splitlines() == [str(tmp_path.resolve()), "sample.txt"]
     assert tool_result.details is None
@@ -55,7 +56,7 @@ async def test_fn_runs_command_from_supplied_cwd(tmp_path: Path) -> None:
 async def test_fn_combines_stderr_with_stdout(tmp_path: Path) -> None:
     """Return stdout and stderr in one text result."""
 
-    result = _text(
+    result = tool_text(
         await bash.fn(command="printf 'out'; printf 'err' >&2", cwd=tmp_path)
     )
 
@@ -67,7 +68,7 @@ async def test_fn_returns_no_output_marker(tmp_path: Path) -> None:
     """Return an explicit marker when a successful command emits nothing."""
 
     tool_result = await bash.fn(command="true", cwd=tmp_path)
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "(no output)"
     assert tool_result.details is None
@@ -84,7 +85,7 @@ async def test_fn_truncates_to_tail_output(
     execution.return_value = _snapshot(output)
 
     tool_result = await bash.fn(command="generate-output", cwd=tmp_path)
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result.startswith("line 2\n")
     assert result.endswith("\n\n[Showing lines 3-2002 of 2002]")
@@ -168,15 +169,6 @@ async def test_stop_timed_out_process_escalates_to_kill_when_sigterm_ignored() -
     await bash._stop_timed_out_process(process, wait_task)
 
     assert process.returncode is not None
-
-
-def _text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text
 
 
 def _bash_details(result: ToolResult) -> BashDetails:

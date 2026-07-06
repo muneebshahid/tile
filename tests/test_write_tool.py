@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import ori.tools.write as write
-from ori.types.tools import ToolResult, ToolTextContent
+from tests.support.tool_results import tool_text
 
 
 def test_write_schema_requires_path_and_content() -> None:
@@ -30,7 +30,9 @@ async def test_write_creates_file_and_parent_directories(tmp_path: Path) -> None
 
     file_path = tmp_path / "nested" / "sample.txt"
 
-    result = _text(await write.fn(path=str(file_path), content="hello", cwd=Path.cwd()))
+    result = tool_text(
+        await write.fn(path=str(file_path), content="hello", cwd=Path.cwd())
+    )
 
     assert file_path.read_text(encoding="utf-8") == "hello"
     assert result == f"Successfully wrote 5 bytes to {file_path}"
@@ -43,7 +45,9 @@ async def test_write_overwrites_existing_file(tmp_path: Path) -> None:
     file_path = tmp_path / "sample.txt"
     file_path.write_text("old", encoding="utf-8")
 
-    result = _text(await write.fn(path=str(file_path), content="new", cwd=Path.cwd()))
+    result = tool_text(
+        await write.fn(path=str(file_path), content="new", cwd=Path.cwd())
+    )
 
     assert file_path.read_text(encoding="utf-8") == "new"
     assert result == f"Successfully wrote 3 bytes to {file_path}"
@@ -55,7 +59,7 @@ async def test_write_reports_utf8_byte_count(tmp_path: Path) -> None:
 
     file_path = tmp_path / "sample.txt"
 
-    result = _text(await write.fn(path=str(file_path), content="é", cwd=Path.cwd()))
+    result = tool_text(await write.fn(path=str(file_path), content="é", cwd=Path.cwd()))
 
     assert result == f"Successfully wrote 2 bytes to {file_path}"
 
@@ -69,7 +73,7 @@ async def test_write_resolves_relative_paths(
 
     monkeypatch.chdir(tmp_path)
 
-    result = _text(
+    result = tool_text(
         await write.fn(path="relative/sample.txt", content="hello", cwd=tmp_path)
     )
 
@@ -91,7 +95,7 @@ async def test_write_resolves_relative_path_against_supplied_cwd(
     other.mkdir()
     monkeypatch.chdir(other)
 
-    result = _text(
+    result = tool_text(
         await write.fn(path="relative/sample.txt", content="hello", cwd=project)
     )
 
@@ -110,7 +114,9 @@ async def test_write_expands_home_directory(
 
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    result = _text(await write.fn(path="~/sample.txt", content="hello", cwd=Path.cwd()))
+    result = tool_text(
+        await write.fn(path="~/sample.txt", content="hello", cwd=Path.cwd())
+    )
 
     file_path = tmp_path / "sample.txt"
     assert file_path.read_text(encoding="utf-8") == "hello"
@@ -130,12 +136,3 @@ async def test_write_raises_when_parent_path_is_file(tmp_path: Path) -> None:
             content="hello",
             cwd=Path.cwd(),
         )
-
-
-def _text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text

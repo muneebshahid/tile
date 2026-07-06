@@ -11,9 +11,12 @@ from typing import Literal
 from pydantic import BaseModel
 
 from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
-from ori.tools.support.paths import resolve_to_cwd
+from ori.tools.support.paths import (
+    normalize_at_prefix,
+    normalize_unicode_spaces,
+    resolve_to_cwd,
+)
 
-UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202F\u205F\u3000]")
 FUZZY_UNICODE_SPACES = re.compile(r"[\u00A0\u2002-\u200A\u202F\u205F\u3000]")
 SMART_SINGLE_QUOTES = re.compile(r"[\u2018\u2019\u201A\u201B]")
 SMART_DOUBLE_QUOTES = re.compile(r"[\u201C\u201D\u201E\u201F]")
@@ -41,8 +44,8 @@ class EditDetails(ToolDetails):
 class EditReplacement(BaseModel):
     """A single exact text replacement requested by the model."""
 
-    oldText: str
-    newText: str
+    old_text: str
+    new_text: str
 
 
 @dataclass(frozen=True)
@@ -82,7 +85,7 @@ class ReplacementApplication:
 
 
 class MatchNotFound(RuntimeError):
-    """Raised when a replacement oldText cannot be found."""
+    """Raised when a replacement old_text cannot be found."""
 
 
 async def _execute(
@@ -114,7 +117,7 @@ def _build_result(result: EditExecutionResult, path: str) -> ToolResult:
 def _resolve_path(path: str, cwd: Path) -> Path:
     """Resolve a user path against the tool working directory."""
 
-    normalized_path = _normalize_unicode_spaces(_normalize_at_prefix(path))
+    normalized_path = normalize_unicode_spaces(normalize_at_prefix(path))
     return resolve_to_cwd(normalized_path, cwd)
 
 
@@ -221,7 +224,7 @@ def _match_exact_spans(
 
     spans: list[MatchedSpan] = []
     for index, replacement in enumerate(replacements):
-        old_text = _normalize_to_lf(replacement.oldText)
+        old_text = _normalize_to_lf(replacement.old_text)
         starts = _find_text_starts(content, old_text)
         start = _require_unique_match(starts, display_path, index, len(replacements))
         spans.append(
@@ -229,7 +232,7 @@ def _match_exact_spans(
                 edit_index=index,
                 start=start,
                 end=start + len(old_text),
-                replacement=_normalize_to_lf(replacement.newText),
+                replacement=_normalize_to_lf(replacement.new_text),
             )
         )
     _validate_non_overlapping(spans, display_path)
@@ -255,7 +258,7 @@ def _match_fuzzy_spans(
     for index, replacement in enumerate(replacements):
         window = [
             _normalize_for_fuzzy_match(line)
-            for line in _terminated_lines(_normalize_to_lf(replacement.oldText))
+            for line in _terminated_lines(_normalize_to_lf(replacement.old_text))
         ]
         starts = _find_window_starts(normalized_lines, window)
         start_line = _require_unique_match(
@@ -273,7 +276,7 @@ def _match_fuzzy_spans(
                 edit_index=index,
                 start=start,
                 end=end,
-                replacement=_normalize_to_lf(replacement.newText),
+                replacement=_normalize_to_lf(replacement.new_text),
             )
         )
     _validate_non_overlapping(spans, display_path)
@@ -447,10 +450,10 @@ def _validate_non_empty_old_text(
     replacements: list[EditReplacement],
     display_path: str,
 ) -> None:
-    """Reject empty oldText values."""
+    """Reject empty old_text values."""
 
     for index, replacement in enumerate(replacements):
-        if replacement.oldText == "":
+        if replacement.old_text == "":
             raise RuntimeError(
                 _empty_old_text_error(display_path, index, len(replacements))
             )
@@ -507,20 +510,6 @@ def _strip_trailing_line_whitespace(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.split("\n"))
 
 
-def _normalize_at_prefix(path: str) -> str:
-    """Strip a leading at sign used when users paste referenced paths."""
-
-    if path.startswith("@"):
-        return path[1:]
-    return path
-
-
-def _normalize_unicode_spaces(path: str) -> str:
-    """Normalize uncommon Unicode spaces to ordinary spaces."""
-
-    return UNICODE_SPACES.sub(" ", path)
-
-
 def _not_found_error(path: str, edit_index: int, total_edits: int) -> str:
     """Return the not-found edit error message."""
 
@@ -532,9 +521,9 @@ def _not_found_error(path: str, edit_index: int, total_edits: int) -> str:
             "old text covers whole lines."
         )
     return (
-        f"Could not find edits[{edit_index}] in {path}. The oldText must match "
+        f"Could not find edits[{edit_index}] in {path}. The old_text must match "
         "exactly including all whitespace and newlines. Near matches that "
-        "differ in quotes, dashes, or whitespace are only found when oldText "
+        "differ in quotes, dashes, or whitespace are only found when old_text "
         "covers whole lines."
     )
 
@@ -554,17 +543,17 @@ def _duplicate_error(
         )
     return (
         f"Found {occurrences} occurrences of edits[{edit_index}] in {path}. "
-        "Each oldText must be unique. Please provide more context to make it "
+        "Each old_text must be unique. Please provide more context to make it "
         "unique."
     )
 
 
 def _empty_old_text_error(path: str, edit_index: int, total_edits: int) -> str:
-    """Return the empty oldText edit error message."""
+    """Return the empty old_text edit error message."""
 
     if total_edits == 1:
-        return f"oldText must not be empty in {path}."
-    return f"edits[{edit_index}].oldText must not be empty in {path}."
+        return f"old_text must not be empty in {path}."
+    return f"edits[{edit_index}].old_text must not be empty in {path}."
 
 
 def _overlap_error(first_index: int, second_index: int, path: str) -> str:
@@ -587,7 +576,7 @@ def _no_change_error(path: str, total_edits: int) -> str:
 tool = ToolDefinition(
     name="edit",
     description=(
-        "Edit a single file using exact text replacement. Every edits[].oldText "
+        "Edit a single file using exact text replacement. Every edits[].old_text "
         "must match a unique, non-overlapping region of the original file. If "
         "two changes affect the same block or nearby lines, merge them into one "
         "edit instead of emitting overlapping edits. Do not include large "
@@ -611,21 +600,21 @@ tool = ToolDefinition(
                 "items": {
                     "type": "object",
                     "properties": {
-                        "oldText": {
+                        "old_text": {
                             "type": "string",
                             "description": (
                                 "Exact text for one targeted replacement. It "
                                 "must be unique in the original file and must "
-                                "not overlap with any other edits[].oldText in "
+                                "not overlap with any other edits[].old_text in "
                                 "the same call."
                             ),
                         },
-                        "newText": {
+                        "new_text": {
                             "type": "string",
                             "description": "Replacement text for this targeted edit.",
                         },
                     },
-                    "required": ["oldText", "newText"],
+                    "required": ["old_text", "new_text"],
                     "additionalProperties": False,
                 },
             },

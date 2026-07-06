@@ -10,6 +10,7 @@ import ori.tools.read as read
 import ori.tools.support.truncation as truncation
 from ori.tools.read import ReadDetails
 from ori.types.tools import ToolImageContent, ToolResult, ToolTextContent
+from tests.support.tool_results import tool_text
 
 
 def test_read_schema_requires_only_path() -> None:
@@ -36,7 +37,7 @@ async def test_read_returns_file_contents(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "sample.txt", ["one", "two", "three"])
 
     tool_result = await read.fn(path=str(file_path), cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "one\ntwo\nthree"
     assert tool_result.details is None
@@ -56,7 +57,7 @@ async def test_read_resolves_relative_path_against_supplied_cwd(
     _write_lines(project / "sample.txt", ["content"])
     monkeypatch.chdir(other)
 
-    result = _text(await read.fn(path="sample.txt", cwd=project))
+    result = tool_text(await read.fn(path="sample.txt", cwd=project))
 
     assert result == "content"
 
@@ -67,7 +68,7 @@ async def test_read_starts_from_one_indexed_offset(tmp_path: Path) -> None:
 
     file_path = _write_lines(tmp_path / "sample.txt", ["one", "two", "three"])
 
-    result = _text(await read.fn(path=str(file_path), offset=2, cwd=Path.cwd()))
+    result = tool_text(await read.fn(path=str(file_path), offset=2, cwd=Path.cwd()))
 
     assert result == "two\nthree"
 
@@ -79,7 +80,7 @@ async def test_read_reports_remaining_lines_after_limit(tmp_path: Path) -> None:
     file_path = _write_numbered_lines(tmp_path / "sample.txt", count=100)
 
     tool_result = await read.fn(path=str(file_path), limit=10, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == (
         "\n".join(f"line {index}" for index in range(1, 11))
@@ -105,7 +106,7 @@ async def test_read_handles_offset_and_limit_together(tmp_path: Path) -> None:
         limit=20,
         cwd=Path.cwd(),
     )
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == (
         "\n".join(f"line {index}" for index in range(41, 61))
@@ -137,7 +138,7 @@ async def test_read_reports_line_truncation(tmp_path: Path) -> None:
     )
 
     tool_result = await read.fn(path=str(file_path), cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result.endswith(
         "\n\n[Showing lines 1-2000 of 2001. Use offset=2001 to continue.]"
@@ -155,7 +156,7 @@ async def test_read_reports_byte_truncation(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "sample.txt", ["x" * 200 for _ in range(500)])
 
     tool_result = await read.fn(path=str(file_path), cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert "50.0KB limit" in result
     assert result.endswith("to continue.]")
@@ -172,7 +173,7 @@ async def test_read_reports_first_line_exceeds_byte_limit(tmp_path: Path) -> Non
     file_path = _write_lines(tmp_path / "sample.txt", ["x" * (50 * 1024 + 1)])
 
     tool_result = await read.fn(path=str(file_path), cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == (
         f"[Line 1 is 50.0KB, exceeds 50.0KB limit. Use bash: "
@@ -218,7 +219,7 @@ async def test_read_strips_at_prefix_for_referenced_paths(tmp_path: Path) -> Non
 
     file_path = _write_lines(tmp_path / "sample.txt", ["content"])
 
-    result = _text(await read.fn(path=f"@{file_path}", cwd=Path.cwd()))
+    result = tool_text(await read.fn(path=f"@{file_path}", cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -233,7 +234,7 @@ async def test_read_expands_home_directory(
     monkeypatch.setenv("HOME", str(tmp_path))
     _write_lines(tmp_path / "sample.txt", ["content"])
 
-    result = _text(await read.fn(path="~/sample.txt", cwd=Path.cwd()))
+    result = tool_text(await read.fn(path="~/sample.txt", cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -245,7 +246,7 @@ async def test_read_normalizes_unicode_spaces(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "my file.txt", ["content"])
     requested_path = str(file_path).replace(" ", "\u00a0")
 
-    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
+    result = tool_text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -260,7 +261,7 @@ async def test_read_tries_macos_screenshot_ampm_spacing(tmp_path: Path) -> None:
     )
     requested_path = str(file_path).replace("\u202fAM.", " AM.")
 
-    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
+    result = tool_text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -273,7 +274,7 @@ async def test_read_tries_nfd_filename_variant(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / decomposed_name, ["content"])
     requested_path = str(file_path.with_name("café.txt"))
 
-    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
+    result = tool_text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -285,7 +286,7 @@ async def test_read_tries_curly_quote_filename_variant(tmp_path: Path) -> None:
     file_path = _write_lines(tmp_path / "Capture d\u2019ecran.txt", ["content"])
     requested_path = str(file_path).replace("\u2019", "'")
 
-    result = _text(await read.fn(path=requested_path, cwd=Path.cwd()))
+    result = tool_text(await read.fn(path=requested_path, cwd=Path.cwd()))
 
     assert result == "content"
 
@@ -325,15 +326,6 @@ def _write_numbered_lines(path: Path, count: int) -> Path:
     """Write numbered lines to a UTF-8 test file and return its path."""
 
     return _write_lines(path, [f"line {index}" for index in range(1, count + 1)])
-
-
-def _text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text
 
 
 def _read_details(result: ToolResult) -> ReadDetails:

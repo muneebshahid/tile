@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from pydantic import BaseModel
@@ -49,15 +49,6 @@ class ToolOutputDetails(BaseModel):
     ) -> ToolOutputDetails:
         """Create output details from matching truncation metadata."""
 
-        return cls(
-            truncated=truncation.truncated,
-            truncated_by=truncation.truncated_by,
-            keep=truncation.keep,
-            total_lines=truncation.total_lines,
-            total_bytes=truncation.total_bytes,
-            output_lines=truncation.output_lines,
-            output_bytes=truncation.output_bytes,
-            edge_line_exceeds_limit=truncation.edge_line_exceeds_limit,
-            max_lines=truncation.max_lines,
-            max_bytes=truncation.max_bytes,
-        )
+        fields = asdict(truncation)
+        del fields["content"]
+        return cls(**fields)
