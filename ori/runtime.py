@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Literal, TypeAlias
 from uuid import uuid4
 
-from ori.types.contracts import Reasoning
 from ori.types.conversation import (
     AssistantTurn,
     ConversationItem,
@@ -169,7 +168,6 @@ class AgentRuntime:
         model: str,
         history_store: HistoryStore | None = None,
         tools: Sequence[ToolDefinition] = (),
-        reasoning: Reasoning | None = None,
         system_prompt: str = PROMPT,
         cwd: Path | str | None = None,
     ) -> None:
@@ -181,7 +179,6 @@ class AgentRuntime:
             history_store if history_store is not None else InMemoryHistoryStore()
         )
         self._tool_executor = ToolExecutor(tools)
-        self._reasoning = reasoning
         self._system_prompt = system_prompt
         self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
@@ -262,7 +259,6 @@ class AgentRuntime:
             stream_fn=self._stream_fn,
             model=self._model,
             tool_executor=self._tool_executor,
-            reasoning=self._reasoning,
             system_prompt=self._system_prompt,
             cwd=self._cwd,
         ):

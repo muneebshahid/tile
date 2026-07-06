@@ -33,8 +33,9 @@ from openai.types.responses.response_reasoning_item import (
 from ori.providers.openai.normalized_events import (
     NormalizedEvent,
     NormalizedEventType,
+    Phase,
 )
-from ori.types.stream_events import Phase, StopReason
+from ori.types.stream_events import StopReason
 from ori.types.tools import JsonObject
 
 

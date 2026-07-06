@@ -28,7 +28,6 @@ from ori.events import (
     TurnEndEvent,
     TurnStartEvent,
 )
-from ori.types.contracts import Reasoning
 from ori.types.conversation import (
     ConversationItem,
     ToolResultTurn,
@@ -93,7 +92,6 @@ def _collect_run_events(
     *,
     stream_fn: StreamFn,
     model: str = "gpt-5.4",
-    reasoning: Reasoning | None = None,
     tools: Sequence[ToolDefinition] = (),
     system_prompt: str = "Base prompt.",
     cwd: Path | str | None = None,
@@ -110,7 +108,6 @@ def _collect_run_events(
                 stream_fn=stream_fn,
                 model=model,
                 tool_executor=ToolExecutor(tools),
-                reasoning=reasoning,
                 system_prompt=system_prompt,
                 cwd=cwd,
             )

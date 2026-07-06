@@ -49,11 +49,13 @@ def _collect_events(
     tools: Sequence[ToolDefinition] | None = None,
 ) -> list[ProviderStreamEvent]:
     async def _collect() -> list[ProviderStreamEvent]:
-        stream_api = create_stream_api(cast("AsyncOpenAI", client))
+        stream_api = create_stream_api(
+            cast("AsyncOpenAI", client),
+            reasoning={"effort": "medium"},
+        )
         event_stream = await stream_api(
             history=[UserMessage(content="hello")],
             model="gpt-5.4",
-            reasoning={"effort": "medium"},
             instructions="Follow the repo conventions.",
             tools=tools,
         )

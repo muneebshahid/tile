@@ -6,7 +6,7 @@ from typing import cast
 from unittest.mock import AsyncMock
 
 from ori.events import StreamFn
-from ori.types.contracts import AsyncEventStream, Reasoning
+from ori.types.contracts import AsyncEventStream
 from ori.types.conversation import ConversationItem
 from ori.types.stream_events import (
     AssistantBlock,
@@ -100,12 +100,11 @@ class GatedProviderStreamMock(ProviderStreamMock):
         _model: str,
         *,
         instructions: str,
-        reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
     ) -> AsyncEventStream:
         """Return the next provider stream after its release event is set."""
 
-        _ = instructions, reasoning, tools
+        _ = instructions, tools
         index = self._next_stream_index
         self._next_stream_index += 1
         await self._releases[index].wait()
