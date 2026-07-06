@@ -1,12 +1,12 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class Settings:
     """Example runner configuration read from process environment variables."""
 
-    openai_api_key: str | None
+    openai_api_key: str | None = field(repr=False)
     openai_base_url: str
     openai_model: str
     chatgpt_backend: str

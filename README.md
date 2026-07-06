@@ -77,6 +77,16 @@ async for event in run.events():
 status = await run.wait()  # "completed" | "failed" | "aborted"
 ```
 
+## Security Posture
+
+Ori's built-in tools are deliberately unconfined. `bash` executes arbitrary
+shell commands with the permissions of the process running the agent, and the
+file tools accept absolute paths — the session working directory is a default,
+not a sandbox. Run Ori only where you would run the model's commands yourself,
+and use OS-level isolation such as a container or VM when you need a boundary.
+Resource exhaustion from trusted local input is out of scope for now. Tool
+authorization hooks arrive with the runtime hooks release.
+
 ## Development
 
 Install dependencies:

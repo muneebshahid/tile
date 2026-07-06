@@ -110,6 +110,28 @@ def test_process_image_returns_omission_when_no_candidate_fits() -> None:
         )
 
 
+def test_process_image_reports_decode_failure_with_cause() -> None:
+    """Chain the underlying decode error instead of claiming a size failure."""
+
+    with pytest.raises(ImageProcessingError, match="could not be processed") as error:
+        process_image(b"not an image", "image/png")
+
+    assert isinstance(error.value.__cause__, OSError)
+
+
+def test_process_image_wraps_decompression_bomb_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wrap Pillow decompression-bomb rejections as processing errors."""
+
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+
+    with pytest.raises(ImageProcessingError, match="could not be processed") as error:
+        process_image(_png(width=8, height=8), "image/png")
+
+    assert isinstance(error.value.__cause__, Image.DecompressionBombError)
+
+
 def _jpeg(width: int, height: int) -> bytes:
     """Return JPEG bytes for a solid-color image."""
 

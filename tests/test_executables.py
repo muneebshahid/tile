@@ -61,6 +61,67 @@ async def test_execute_runs_process_from_supplied_cwd(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_kills_process_at_stdout_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop collecting stdout at the cap and return complete lines."""
+
+    monkeypatch.setattr(executables, "STDOUT_BYTE_CAP", 8192)
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", "import sys\nwhile True: sys.stdout.write('x' * 1023 + '\\n')"],
+        cwd=Path.cwd(),
+    )
+
+    assert result
+    assert result.endswith("\n")
+    assert all(line == "x" * 1023 for line in result.splitlines())
+
+
+@pytest.mark.asyncio
+async def test_execute_replaces_invalid_utf8_output() -> None:
+    """Decode non-UTF-8 output with replacement characters instead of failing."""
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", r"import sys; sys.stdout.buffer.write(b'bad \xff byte\n')"],
+        cwd=Path.cwd(),
+    )
+
+    assert result == "bad � byte\n"
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_when_capped_output_has_no_line_break(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail loudly instead of returning empty output for a giant single line."""
+
+    monkeypatch.setattr(executables, "STDOUT_BYTE_CAP", 4096)
+
+    with pytest.raises(RuntimeError, match="without a complete line"):
+        await executables.execute(
+            sys.executable,
+            ["-c", "import sys\nwhile True: sys.stdout.write('x' * 1024)"],
+            cwd=Path.cwd(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_execute_drains_stderr_larger_than_pipe_buffers() -> None:
+    """Avoid deadlock when a process floods stderr before exiting cleanly."""
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", "import sys; sys.stderr.write('e' * 300000); print('done')"],
+        cwd=Path.cwd(),
+    )
+
+    assert result == "done\n"
+
+
+@pytest.mark.asyncio
 async def test_execute_raises_on_disallowed_exit_code() -> None:
     """Raise stderr output when a process exits with a disallowed code."""
 
