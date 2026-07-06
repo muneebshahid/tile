@@ -25,6 +25,7 @@ from ori.events import (
 from ori.types.conversation import UserMessage
 from ori.types.stream_events import (
     ProviderStreamEvent,
+    TextBlock,
 )
 from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
 from tests.support.agent_streams import (
@@ -32,6 +33,8 @@ from tests.support.agent_streams import (
     ProviderStreamMock,
     error_stream,
     final_text_stream,
+    stream_done,
+    stream_start,
     tool_call_stream,
 )
 from tests.support.conversation_assertions import (
@@ -361,6 +364,92 @@ def test_run_failure_captures_error_and_frees_session() -> None:
 
         second = await session.prompt("again")
         assert await second.wait() == "failed"
+
+    asyncio.run(_run())
+
+
+def test_run_exposes_output_text_and_conversation_items() -> None:
+    """Expose the run's produced conversation items and final message text."""
+
+    async def _run() -> None:
+        """Complete a tool-loop run and read its output from the handle."""
+
+        runtime, _ = _runtime_with_streams(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_final", "Munich is sunny."),
+            ],
+            tools=_sample_tools(),
+        )
+        session = runtime.session(session_id="run-output")
+
+        run = await session.prompt("check weather")
+        assert await run.wait() == "completed"
+
+        assert run.output_text == "Munich is sunny."
+        items = run.conversation_items
+        assert len(items) == 3
+        assert expect_assistant_turn(items[0]).response_id == "resp_tool"
+        assert expect_tool_result_turn(items[1]).call_id == "call_weather"
+        assert expect_assistant_turn(items[2]).response_id == "resp_final"
+
+    asyncio.run(_run())
+
+
+def test_run_output_is_empty_until_first_message_completes() -> None:
+    """Report no output while the run has not completed an assistant message."""
+
+    async def _run() -> None:
+        """Inspect a gated run before and after its provider stream releases."""
+
+        releases = [asyncio.Event()]
+        runtime, provider = _runtime_with_gated_streams(releases)
+        session = runtime.session(session_id="pending-output")
+
+        run = await session.prompt("hello")
+        await _wait_for_invocation_count(provider, 1)
+        assert run.output_text is None
+        assert run.conversation_items == ()
+
+        releases[0].set()
+        assert await run.wait() == "completed"
+        assert run.output_text == "answer 0"
+        assert expect_assistant_turn(run.conversation_items[0]).response_id == "resp_0"
+
+    asyncio.run(_run())
+
+
+def test_run_output_text_joins_text_blocks_with_blank_lines() -> None:
+    """Join multiple text blocks of the final message with blank lines."""
+
+    async def _run() -> None:
+        """Complete a run whose final message carries two text blocks."""
+
+        runtime, _ = _runtime_with_streams(
+            [
+                [
+                    stream_start("resp_multi"),
+                    stream_done(
+                        "resp_multi",
+                        blocks=[
+                            TextBlock(text="part one"),
+                            TextBlock(text="part two"),
+                        ],
+                    ),
+                ]
+            ],
+        )
+        session = runtime.session(session_id="multi-block-output")
+
+        run = await session.prompt("hello")
+
+        assert await run.wait() == "completed"
+        assert run.output_text == "part one\n\npart two"
 
     asyncio.run(_run())
 

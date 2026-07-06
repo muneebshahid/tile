@@ -10,7 +10,8 @@ from typing import Literal, TypeAlias
 from uuid import uuid4
 
 from ori.types.contracts import Reasoning
-from ori.types.conversation import ConversationItem, UserMessage
+from ori.types.conversation import AssistantTurn, ConversationItem, UserMessage
+from ori.types.stream_events import TextBlock
 from ori.types.tools import ToolDefinition
 from ori.agent import run_agent
 from ori.history import HistoryStore, InMemoryHistoryStore, SessionRecord
@@ -75,6 +76,27 @@ class Run:
         """Return the failure message when the run has failed."""
 
         return self._error_message
+
+    @property
+    def output_text(self) -> str | None:
+        """Return the text of the run's latest completed assistant message.
+
+        Text blocks are joined with a blank line. Returns None before the
+        first assistant message completes.
+        """
+
+        for event in reversed(self._events):
+            if isinstance(event, MessageEndEvent):
+                return _assistant_text(event.assistant_turn)
+        return None
+
+    @property
+    def conversation_items(self) -> tuple[ConversationItem, ...]:
+        """Return the conversation items this run has produced so far."""
+
+        return tuple(
+            item for event in self._events for item in _conversation_items_for(event)
+        )
 
     async def events(self) -> AsyncIterator[AgentEvent]:
         """Yield run events from the start, following live until the run ends."""
@@ -270,13 +292,9 @@ class AgentRuntime:
     def _persist_stable_event(self, session_id: str, event: AgentEvent) -> None:
         """Persist replayable history items from stable agent events."""
 
-        if isinstance(event, MessageEndEvent):
-            self._history_store.append_history(session_id, [event.assistant_turn])
-        if isinstance(event, ToolExecutionEndEvent):
-            self._history_store.append_history(
-                session_id,
-                [event.outcome.tool_result_turn],
-            )
+        items = _conversation_items_for(event)
+        if items:
+            self._history_store.append_history(session_id, list(items))
 
     def _build_session(self, record: SessionRecord) -> Session:
         """Build a session handle from a stored record."""
@@ -334,3 +352,21 @@ class Session:
             target_session_id=session_id,
             name=name,
         )
+
+
+def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
+    """Return the replayable conversation items carried by one agent event."""
+
+    if isinstance(event, MessageEndEvent):
+        return (event.assistant_turn,)
+    if isinstance(event, ToolExecutionEndEvent):
+        return (event.outcome.tool_result_turn,)
+    return ()
+
+
+def _assistant_text(turn: AssistantTurn) -> str:
+    """Join the text blocks of one assistant turn with blank lines."""
+
+    return "\n\n".join(
+        block.text for block in turn.blocks if isinstance(block, TextBlock)
+    )
