@@ -3,8 +3,10 @@
 from enum import StrEnum
 from typing import Literal, TypeAlias, TypedDict
 
-from ori.types.stream_events import Phase, StopReason
+from ori.types.stream_events import StopReason
 from ori.types.tools import JsonObject
+
+Phase: TypeAlias = Literal["commentary", "final_answer"]
 
 
 class NormalizedEventType(StrEnum):

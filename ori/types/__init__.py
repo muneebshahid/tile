@@ -1,6 +1,6 @@
 """Provider-neutral AI contracts for runtimes, providers, and tools."""
 
-from ori.types.contracts import AsyncEventStream, Reasoning
+from ori.types.contracts import AsyncEventStream
 from ori.types.conversation import (
     AssistantTurn,
     ConversationItem,
@@ -12,7 +12,6 @@ from ori.types.stream_events import (
     AssistantBlock,
     AssistantBlockBase,
     BlockStreamEvent,
-    Phase,
     ProviderMetadata,
     ProviderSource,
     ProviderStreamEvent,
@@ -73,12 +72,10 @@ __all__ = [
     "ImageMimeType",
     "JsonObject",
     "LsDetails",
-    "Phase",
     "ProviderMetadata",
     "ProviderSource",
     "ProviderStreamEvent",
     "ReadDetails",
-    "Reasoning",
     "ReasoningBlock",
     "ReasoningDeltaEvent",
     "ReasoningEndEvent",

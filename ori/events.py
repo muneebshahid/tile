@@ -5,7 +5,7 @@ from typing import Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel
 
-from ori.types.contracts import AsyncEventStream, Reasoning
+from ori.types.contracts import AsyncEventStream
 from ori.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
 from ori.types.stream_events import StreamUpdateEvent
 from ori.types.tools import (
@@ -25,7 +25,6 @@ class StreamFn(Protocol):
         model: str,
         *,
         instructions: str,
-        reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
     ) -> Awaitable[AsyncEventStream]: ...
 

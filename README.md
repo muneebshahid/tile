@@ -63,8 +63,9 @@ from ori.types import ToolDefinition, ToolResult
 runtime-error contracts. `ori.events` exposes structured runtime events
 yielded by `Run.events()`. `ori.types` exposes provider-neutral conversation,
 stream, and tool contracts. `ori.providers.openai` exposes
-`create_stream_api`, which binds a caller-constructed `AsyncOpenAI` client to
-the runtime's stream-function contract: `create_stream_api(AsyncOpenAI(...))`.
+`create_stream_api`, which binds a caller-constructed `AsyncOpenAI` client and
+optional provider reasoning options to the runtime's stream-function contract:
+`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.
 
 Prompt execution is task-owned: `Session.prompt(...)` submits a run and
 returns immediately, the runtime drives it to completion, and any number of

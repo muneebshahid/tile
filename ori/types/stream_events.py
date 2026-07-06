@@ -8,7 +8,6 @@ from pydantic import BaseModel, Field
 
 from ori.types.tools import JsonObject
 
-Phase: TypeAlias = Literal["commentary", "final_answer"]
 StopReason: TypeAlias = Literal["stop", "length", "tool_use", "error", "aborted"]
 
 

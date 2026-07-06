@@ -28,9 +28,9 @@ from ori.providers.openai.normalized_events import (
     ToolCallArgumentsDoneNormalizedEvent,
     ToolCallDoneNormalizedEvent,
 )
+from ori.providers.openai.normalized_events import Phase
 from ori.providers.openai.stream_assembler import assemble_stream
 from ori.types.stream_events import (
-    Phase,
     ProviderSource,
     ProviderStreamEvent,
     ReasoningDeltaEvent,

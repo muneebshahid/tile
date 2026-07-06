@@ -27,6 +27,7 @@ from openai.types.responses.response_reasoning_item_param import (
     ResponseReasoningItemParam,
 )
 
+from ori.providers.openai.normalized_events import Phase
 from ori.types.conversation import (
     AssistantTurn,
     ConversationItem,
@@ -34,7 +35,6 @@ from ori.types.conversation import (
     UserMessage,
 )
 from ori.types.stream_events import (
-    Phase,
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,

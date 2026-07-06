@@ -3,7 +3,6 @@
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
-from ori.types.contracts import Reasoning
 from ori.types.conversation import AssistantTurn, ConversationItem
 from ori.types.stream_events import (
     AssistantBlock,
@@ -59,7 +58,6 @@ async def run_agent(
     stream_fn: StreamFn,
     model: str,
     tool_executor: ToolExecutor,
-    reasoning: Reasoning | None = None,
     system_prompt: str = PROMPT,
     cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
@@ -74,7 +72,6 @@ async def run_agent(
         stream_fn=stream_fn,
         model=model,
         instructions=instructions,
-        reasoning=reasoning,
         tool_executor=tool_executor,
     ):
         yield event
@@ -87,7 +84,6 @@ async def _run_agent_loop(
     stream_fn: StreamFn,
     model: str,
     instructions: str,
-    reasoning: Reasoning | None,
     tool_executor: ToolExecutor,
 ) -> AsyncIterator[AgentEvent]:
     """Call the provider until the assistant stops requesting tools."""
@@ -98,7 +94,6 @@ async def _run_agent_loop(
             tuple(run_history),
             model,
             instructions=instructions,
-            reasoning=reasoning,
             tools=tool_executor.tools,
         )
 

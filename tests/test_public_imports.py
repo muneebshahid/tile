@@ -19,7 +19,6 @@ from ori.types import (
     ConversationItem,
     ProviderSource,
     ProviderStreamEvent,
-    Reasoning,
     StreamDoneEvent,
     StreamStartEvent,
     TextBlock,
@@ -58,12 +57,11 @@ def _fake_stream_fn() -> StreamFn:
         model: str,
         *,
         instructions: str,
-        reasoning: Reasoning | None,
         tools: Sequence[ToolDefinition] | None,
     ) -> AsyncEventStream:
         """Return a deterministic assistant response."""
 
-        _ = instructions, reasoning
+        _ = instructions
         assert len(history) == 1
         assert model == "gpt-5.4"
         assert tools is not None
