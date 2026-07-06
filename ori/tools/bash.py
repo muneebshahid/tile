@@ -14,12 +14,15 @@ from ori.tools.support.truncation import (
 )
 from ori.tool_truncation import Truncation
 
+# Timeout applied when the model omits one, so hung commands cannot wedge a run.
+DEFAULT_TIMEOUT_SECONDS: float = 120
+
 
 async def fn(command: str, timeout: float | None = None, *, cwd: Path) -> ToolResult:
     """Execute a shell command from the agent working directory."""
 
     resolved_cwd = _resolve_cwd(cwd)
-    result = await _execute(command, timeout, resolved_cwd)
+    result = await _execute(command, _effective_timeout(timeout), resolved_cwd)
     return _build_result(result)
 
 
@@ -34,7 +37,7 @@ def _resolve_cwd(cwd: Path) -> Path:
 
 async def _execute(
     command: str,
-    timeout: float | None,
+    timeout: float,
     cwd: Path,
 ) -> OutputSnapshot:
     """Execute a shell command and return captured output for successful exits."""
@@ -53,9 +56,9 @@ async def _execute(
 
 async def _wait_for_process(
     process: asyncio.subprocess.Process,
-    timeout: float | None,
+    timeout: float,
 ) -> tuple[OutputSnapshot, bool]:
-    """Wait for a shell process while enforcing the optional timeout."""
+    """Wait for a shell process while enforcing the timeout."""
 
     output = OutputAccumulator()
     output_task = asyncio.create_task(_read_output(process, output))
@@ -63,10 +66,7 @@ async def _wait_for_process(
     timed_out = False
 
     try:
-        await asyncio.wait_for(
-            asyncio.shield(wait_task),
-            timeout=_effective_timeout(timeout),
-        )
+        await asyncio.wait_for(asyncio.shield(wait_task), timeout=timeout)
     except TimeoutError:
         timed_out = True
         await _stop_timed_out_process(process, wait_task)
@@ -122,7 +122,7 @@ def _raise_for_execution_failure(
     snapshot: OutputSnapshot,
     exit_code: int | None,
     timed_out: bool,
-    timeout: float | None,
+    timeout: float,
 ) -> None:
     """Raise when shell execution timed out or exited unsuccessfully."""
 
@@ -186,19 +186,17 @@ def _append_status(output: str, status: str) -> str:
     return status
 
 
-def _timeout_status(timeout: float | None) -> str:
+def _timeout_status(timeout: float) -> str:
     """Return a timeout failure status message."""
 
-    if timeout is None:
-        return "Command timed out"
     return f"Command timed out after {timeout:g} seconds"
 
 
-def _effective_timeout(timeout: float | None) -> float | None:
-    """Return a positive timeout value or no timeout."""
+def _effective_timeout(timeout: float | None) -> float:
+    """Return a positive model-supplied timeout or the default."""
 
     if timeout is None or timeout <= 0:
-        return None
+        return DEFAULT_TIMEOUT_SECONDS
     return timeout
 
 
@@ -251,7 +249,7 @@ tool = ToolDefinition(
             },
             "timeout": {
                 "type": "number",
-                "description": "Timeout in seconds. Optional, with no default timeout.",
+                "description": "Timeout in seconds. Defaults to 120 seconds when omitted.",
             },
         },
         "required": ["command"],

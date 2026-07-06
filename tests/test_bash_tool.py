@@ -93,7 +93,11 @@ async def test_fn_truncates_to_tail_output(
     assert details.output.keep == "tail"
     assert details.output.output_lines == OUTPUT_LINE_LIMIT
     assert details.output.total_lines == OUTPUT_LINE_LIMIT + 2
-    execution.assert_awaited_once_with("generate-output", None, tmp_path.resolve())
+    execution.assert_awaited_once_with(
+        "generate-output",
+        bash.DEFAULT_TIMEOUT_SECONDS,
+        tmp_path.resolve(),
+    )
 
 
 @pytest.mark.asyncio
@@ -126,6 +130,26 @@ async def test_fn_raises_with_timeout_status(tmp_path: Path) -> None:
         await bash.fn(command="printf 'start'; sleep 2", timeout=0.1, cwd=tmp_path)
 
     assert str(error.value) == "start\n\nCommand timed out after 0.1 seconds"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [None, 0, -5], ids=["omitted", "zero", "negative"])
+async def test_fn_applies_default_timeout(
+    execution: AsyncMock,
+    tmp_path: Path,
+    timeout: float | None,
+) -> None:
+    """Fall back to the default timeout for omitted or non-positive values."""
+
+    execution.return_value = _snapshot("ok")
+
+    await bash.fn(command="true", timeout=timeout, cwd=tmp_path)
+
+    execution.assert_awaited_once_with(
+        "true",
+        bash.DEFAULT_TIMEOUT_SECONDS,
+        tmp_path.resolve(),
+    )
 
 
 @pytest.mark.asyncio

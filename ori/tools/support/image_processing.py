@@ -17,6 +17,7 @@ DEFAULT_MAX_BASE64_BYTES = int(4.5 * 1024 * 1024)
 DEFAULT_JPEG_QUALITY = 80
 DOWNSCALE_FACTOR = 0.75
 JPEG_QUALITY_STEPS = (DEFAULT_JPEG_QUALITY, 85, 70, 55, 40)
+SIZE_LIMIT_MESSAGE = "could not be resized below the inline image size limit"
 
 
 def process_image(
@@ -34,12 +35,12 @@ def process_image(
 
         while _exceeds_base64_size(image, effective_options):
             if _is_minimum_size(image):
-                raise ImageProcessingError
+                raise ImageProcessingError(SIZE_LIMIT_MESSAGE)
             _shrink_by_factor(image, effective_options)
 
         return image
-    except Exception:
-        raise ImageProcessingError from None
+    except OSError as error:
+        raise ImageProcessingError(f"could not be processed ({error})") from error
 
 
 @dataclass(frozen=True)
@@ -80,9 +81,6 @@ class ProcessedImage:
 
 class ImageProcessingError(Exception):
     """Raised when an image cannot be prepared for inline model input."""
-
-    def __init__(self) -> None:
-        super().__init__("could not be resized below the inline image size limit")
 
 
 def _create_processed_image(data: bytes, mime_type: ImageMimeType) -> ProcessedImage:
@@ -142,7 +140,7 @@ def _shrink_by_factor(
 
     width, height = _next_dimensions(image.width, image.height)
     if width == image.width and height == image.height:
-        raise ImageProcessingError
+        raise ImageProcessingError(SIZE_LIMIT_MESSAGE)
 
     _resize(image, width, height, options)
 

@@ -110,6 +110,15 @@ def test_process_image_returns_omission_when_no_candidate_fits() -> None:
         )
 
 
+def test_process_image_reports_decode_failure_with_cause() -> None:
+    """Chain the underlying decode error instead of claiming a size failure."""
+
+    with pytest.raises(ImageProcessingError, match="could not be processed") as error:
+        process_image(b"not an image", "image/png")
+
+    assert isinstance(error.value.__cause__, OSError)
+
+
 def _jpeg(width: int, height: int) -> bytes:
     """Return JPEG bytes for a solid-color image."""
 

@@ -61,6 +61,38 @@ async def test_execute_runs_process_from_supplied_cwd(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_kills_process_at_stdout_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stop collecting stdout at the cap and return complete lines."""
+
+    monkeypatch.setattr(executables, "STDOUT_BYTE_CAP", 8192)
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", "import sys\nwhile True: sys.stdout.write('x' * 1023 + '\\n')"],
+        cwd=Path.cwd(),
+    )
+
+    assert result
+    assert result.endswith("\n")
+    assert all(line == "x" * 1023 for line in result.splitlines())
+
+
+@pytest.mark.asyncio
+async def test_execute_drains_stderr_larger_than_pipe_buffers() -> None:
+    """Avoid deadlock when a process floods stderr before exiting cleanly."""
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", "import sys; sys.stderr.write('e' * 300000); print('done')"],
+        cwd=Path.cwd(),
+    )
+
+    assert result == "done\n"
+
+
+@pytest.mark.asyncio
 async def test_execute_raises_on_disallowed_exit_code() -> None:
     """Raise stderr output when a process exits with a disallowed code."""
 
