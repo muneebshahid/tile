@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, TypeAlias
@@ -28,12 +28,19 @@ class SessionBusyError(RuntimeError):
 class Run:
     """Handle for one task-owned prompt execution.
 
-    Execution is driven by a runtime-owned task, not by event consumption.
+    The run owns the task that pumps its event source into a replayable log.
     Subscribers observe events; dropping a subscriber never affects the run.
     """
 
-    def __init__(self, *, run_id: str, session_id: str) -> None:
-        """Create a run handle in the running state."""
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        events: AsyncIterator[AgentEvent],
+        on_done: Callable[[Run], None],
+    ) -> None:
+        """Start a run that drives the given event source to completion."""
 
         self._run_id = run_id
         self._session_id = session_id
@@ -41,7 +48,9 @@ class Run:
         self._status: RunStatus = "running"
         self._error_message: str | None = None
         self._changed = asyncio.Event()
-        self._task: asyncio.Task[None] | None = None
+        self._on_done = on_done
+        self._task = asyncio.create_task(self._pump(events))
+        self._task.add_done_callback(self._finalize)
 
     @property
     def id(self) -> str:
@@ -83,22 +92,31 @@ class Run:
     async def wait(self) -> RunStatus:
         """Wait until the run reaches a terminal status and return it."""
 
-        await asyncio.wait({self._require_task()})
+        await asyncio.wait({self._task})
         return self._status
 
     def abort(self) -> None:
-        """Request cancellation of the active run task."""
+        """Request cancellation of the run task."""
 
-        task = self._require_task()
-        if not task.done():
-            task.cancel()
+        if not self._task.done():
+            self._task.cancel()
 
-    def _require_task(self) -> asyncio.Task[None]:
-        """Return the execution task attached by the runtime."""
+    async def _pump(self, events: AsyncIterator[AgentEvent]) -> None:
+        """Drive the event source to completion, recording each event."""
 
-        if self._task is None:
-            raise RuntimeError(f"Run has no execution task: {self._run_id}")
-        return self._task
+        async for event in events:
+            self._publish(event)
+
+    def _finalize(self, task: asyncio.Task[None]) -> None:
+        """Notify the owner, then record the terminal run status."""
+
+        self._on_done(self)
+        if task.cancelled():
+            self._finish("aborted")
+        elif (error := task.exception()) is not None:
+            self._finish("failed", error_message=str(error))
+        else:
+            self._finish("completed")
 
     def _publish(self, event: AgentEvent) -> None:
         """Append one event to the run log and wake subscribers."""
@@ -197,23 +215,23 @@ class AgentRuntime:
         self._start_prompt(session_id)
         try:
             self._append_user_message(session_id, content)
-            run = Run(run_id=str(uuid4()), session_id=session_id)
-            task = asyncio.create_task(self._execute_run(run))
+            run = Run(
+                run_id=str(uuid4()),
+                session_id=session_id,
+                events=self._run_events(session_id),
+                on_done=self._release_run,
+            )
         except BaseException:
             self._finish_prompt(session_id)
             raise
-        run._task = task
         self._active_runs.add(run)
-        task.add_done_callback(
-            lambda finished_task: self._finalize_run(run, finished_task)
-        )
         return run
 
-    async def _execute_run(self, run: Run) -> None:
-        """Drive one prompt run to completion and persist stable history."""
+    async def _run_events(self, session_id: str) -> AsyncIterator[AgentEvent]:
+        """Yield agent events for one prompt run, persisting stable history."""
 
         async for event in run_agent(
-            self._history_store.get_history(run.session_id),
+            self._history_store.get_history(session_id),
             stream_fn=self._stream_fn,
             model=self._model,
             tool_executor=self._tool_executor,
@@ -221,20 +239,14 @@ class AgentRuntime:
             system_prompt=self._system_prompt,
             cwd=self._cwd,
         ):
-            self._persist_stable_event(run.session_id, event)
-            run._publish(event)
+            self._persist_stable_event(session_id, event)
+            yield event
 
-    def _finalize_run(self, run: Run, task: asyncio.Task[None]) -> None:
-        """Release active-prompt state and record the terminal run status."""
+    def _release_run(self, run: Run) -> None:
+        """Clear the session busy marker and drop the runtime's run reference."""
 
         self._finish_prompt(run.session_id)
         self._active_runs.discard(run)
-        if task.cancelled():
-            run._finish("aborted")
-        elif (error := task.exception()) is not None:
-            run._finish("failed", error_message=str(error))
-        else:
-            run._finish("completed")
 
     def _start_prompt(self, session_id: str) -> None:
         """Mark a session prompt active or reject overlapping prompt work."""
