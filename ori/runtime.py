@@ -10,9 +10,14 @@ from typing import Literal, TypeAlias
 from uuid import uuid4
 
 from ori.types.contracts import Reasoning
-from ori.types.conversation import AssistantTurn, ConversationItem, UserMessage
-from ori.types.stream_events import TextBlock
-from ori.types.tools import ToolDefinition
+from ori.types.conversation import (
+    AssistantTurn,
+    ConversationItem,
+    ToolResultTurn,
+    UserMessage,
+)
+from ori.types.stream_events import TextBlock, ToolCallBlock
+from ori.types.tools import ToolDefinition, ToolTextContent
 from ori.agent import run_agent
 from ori.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from ori.prompt import PROMPT
@@ -265,10 +270,26 @@ class AgentRuntime:
             yield event
 
     def _release_run(self, run: Run) -> None:
-        """Clear the session busy marker and drop the runtime's run reference."""
+        """Heal unanswered tool calls, then release the session and the run."""
 
+        self._heal_unanswered_tool_calls(run)
         self._finish_prompt(run.session_id)
         self._active_runs.discard(run)
+
+    def _heal_unanswered_tool_calls(self, run: Run) -> None:
+        """Persist error results for tool calls the run left unanswered."""
+
+        results = [
+            ToolResultTurn(
+                call_id=call.call_id,
+                tool_name=call.name,
+                content=[ToolTextContent(text="Tool execution did not complete.")],
+                is_error=True,
+            )
+            for call in _unanswered_tool_calls(run.conversation_items)
+        ]
+        if results:
+            self._history_store.append_history(run.session_id, results)
 
     def _start_prompt(self, session_id: str) -> None:
         """Mark a session prompt active or reject overlapping prompt work."""
@@ -352,6 +373,21 @@ class Session:
             target_session_id=session_id,
             name=name,
         )
+
+
+def _unanswered_tool_calls(
+    items: Sequence[ConversationItem],
+) -> list[ToolCallBlock]:
+    """Return tool calls from assistant turns that have no matching result."""
+
+    answered = {item.call_id for item in items if isinstance(item, ToolResultTurn)}
+    return [
+        block
+        for item in items
+        if isinstance(item, AssistantTurn)
+        for block in item.blocks
+        if isinstance(block, ToolCallBlock) and block.call_id not in answered
+    ]
 
 
 def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:

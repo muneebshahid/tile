@@ -27,7 +27,12 @@ from ori.types.stream_events import (
     ProviderStreamEvent,
     TextBlock,
 )
-from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from ori.types.tools import (
+    ToolDefinition,
+    ToolFunction,
+    ToolResult,
+    ToolTextContent,
+)
 from tests.support.agent_streams import (
     GatedProviderStreamMock,
     ProviderStreamMock,
@@ -119,19 +124,23 @@ class FalsyHistoryStore(InMemoryHistoryStore):
 def _sample_tools() -> list[ToolDefinition]:
     """Build deterministic tool definitions for runtime tests."""
 
-    return [
-        ToolDefinition(
-            name="get_weather",
-            description="Return a deterministic weather report.",
-            input_schema={
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-                "additionalProperties": False,
-            },
-            fn=_get_weather,
-        )
-    ]
+    return [_weather_tool(_get_weather)]
+
+
+def _weather_tool(fn: ToolFunction) -> ToolDefinition:
+    """Build the deterministic weather tool around one implementation."""
+
+    return ToolDefinition(
+        name="get_weather",
+        description="Return a deterministic weather report.",
+        input_schema={
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+        fn=fn,
+    )
 
 
 async def _get_weather(city: str) -> ToolResult:
@@ -338,6 +347,55 @@ def test_run_abort_marks_run_aborted_and_frees_session() -> None:
 
         second = await session.prompt("second")
         releases[1].set()
+        assert await second.wait() == "completed"
+
+    asyncio.run(_run())
+
+
+def test_run_abort_heals_unanswered_tool_calls() -> None:
+    """Persist error results for tool calls left unanswered by an abort."""
+
+    async def _run() -> None:
+        """Abort a run while its tool call is still executing."""
+
+        gate = asyncio.Event()
+
+        async def _blocked_weather(city: str) -> ToolResult:
+            """Wait for a release gate that never opens."""
+
+            _ = city
+            await gate.wait()
+            raise AssertionError("Tool must not complete.")
+
+        runtime, _ = _runtime_with_streams(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_next", "answered later"),
+            ],
+            tools=[_weather_tool(_blocked_weather)],
+        )
+        session = runtime.session(session_id="abort-mid-tool")
+
+        run = await session.prompt("check weather")
+        async for event in run.events():
+            if isinstance(event, ToolExecutionStartEvent):
+                break
+        run.abort()
+        assert await run.wait() == "aborted"
+
+        healed = expect_tool_result_turn(session.history[2])
+        assert healed.call_id == "call_weather"
+        assert healed.is_error is True
+        content = healed.content[0]
+        assert isinstance(content, ToolTextContent)
+        assert content.text == "Tool execution did not complete."
+
+        second = await session.prompt("try again")
         assert await second.wait() == "completed"
 
     asyncio.run(_run())
@@ -820,19 +878,6 @@ def test_tool_execution_start_precedes_persisted_result() -> None:
             await gate.wait()
             return ToolResult.text(f"{city}: sunny")
 
-        tools = [
-            ToolDefinition(
-                name="get_weather",
-                description="Return a deterministic weather report.",
-                input_schema={
-                    "type": "object",
-                    "properties": {"city": {"type": "string"}},
-                    "required": ["city"],
-                    "additionalProperties": False,
-                },
-                fn=_blocked_weather,
-            )
-        ]
         runtime, _ = _runtime_with_streams(
             [
                 tool_call_stream(
@@ -843,7 +888,7 @@ def test_tool_execution_start_precedes_persisted_result() -> None:
                 ),
                 final_text_stream("resp_final", "Munich is sunny."),
             ],
-            tools=tools,
+            tools=[_weather_tool(_blocked_weather)],
         )
         session = runtime.session(session_id="blocked-tool")
 
