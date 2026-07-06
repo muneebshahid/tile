@@ -80,6 +80,35 @@ async def test_execute_kills_process_at_stdout_cap(
 
 
 @pytest.mark.asyncio
+async def test_execute_replaces_invalid_utf8_output() -> None:
+    """Decode non-UTF-8 output with replacement characters instead of failing."""
+
+    result = await executables.execute(
+        sys.executable,
+        ["-c", r"import sys; sys.stdout.buffer.write(b'bad \xff byte\n')"],
+        cwd=Path.cwd(),
+    )
+
+    assert result == "bad � byte\n"
+
+
+@pytest.mark.asyncio
+async def test_execute_raises_when_capped_output_has_no_line_break(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail loudly instead of returning empty output for a giant single line."""
+
+    monkeypatch.setattr(executables, "STDOUT_BYTE_CAP", 4096)
+
+    with pytest.raises(RuntimeError, match="without a complete line"):
+        await executables.execute(
+            sys.executable,
+            ["-c", "import sys\nwhile True: sys.stdout.write('x' * 1024)"],
+            cwd=Path.cwd(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_execute_drains_stderr_larger_than_pipe_buffers() -> None:
     """Avoid deadlock when a process floods stderr before exiting cleanly."""
 

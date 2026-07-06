@@ -45,14 +45,14 @@ async def execute(
     stderr_bytes = await stderr_task
 
     if capped:
-        return _decode_complete_lines(stdout_bytes)
+        return _decode_complete_lines(stdout_bytes, executable)
     if exit_code not in allowed_exit_codes:
         error = (
             stderr_bytes.decode(errors="replace").strip()
             or f"{executable} exited with code {exit_code}"
         )
         raise RuntimeError(error)
-    return stdout_bytes.decode()
+    return stdout_bytes.decode(errors="replace")
 
 
 async def _read_capped_stdout(stream: StreamReader | None) -> tuple[bytes, bool]:
@@ -89,10 +89,13 @@ def _kill_process(process: asyncio.subprocess.Process) -> None:
         process.kill()
 
 
-def _decode_complete_lines(data: bytes) -> str:
+def _decode_complete_lines(data: bytes, executable: str) -> str:
     """Decode capped output up to its last complete line."""
 
     end = data.rfind(b"\n")
     if end == -1:
-        return ""
-    return data[: end + 1].decode()
+        raise RuntimeError(
+            f"{executable} output exceeded {STDOUT_BYTE_CAP} bytes "
+            "without a complete line"
+        )
+    return data[: end + 1].decode(errors="replace")

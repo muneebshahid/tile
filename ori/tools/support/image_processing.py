@@ -39,7 +39,7 @@ def process_image(
             _shrink_by_factor(image, effective_options)
 
         return image
-    except OSError as error:
+    except (OSError, Image.DecompressionBombError) as error:
         raise ImageProcessingError(f"could not be processed ({error})") from error
 
 
