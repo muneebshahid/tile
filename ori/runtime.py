@@ -1,23 +1,162 @@
-"""Runtime and session facade for the stateless agent runner."""
+"""Runtime, session, and run facades for the stateless agent runner."""
 
 from __future__ import annotations
-from collections.abc import AsyncIterator, Sequence
+
+import asyncio
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, TypeAlias
 from uuid import uuid4
 
 from ori.types.contracts import Reasoning
-from ori.types.conversation import ConversationItem, UserMessage
-from ori.types.tools import ToolDefinition
+from ori.types.conversation import (
+    AssistantTurn,
+    ConversationItem,
+    ToolResultTurn,
+    UserMessage,
+)
+from ori.types.stream_events import TextBlock, ToolCallBlock
+from ori.types.tools import ToolDefinition, ToolTextContent
 from ori.agent import run_agent
 from ori.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from ori.prompt import PROMPT
 from ori.tool_executor import ToolExecutor
 from ori.events import AgentEvent, MessageEndEvent, StreamFn, ToolExecutionEndEvent
 
+RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
+
 
 class SessionBusyError(RuntimeError):
-    """Raised when a prompt starts while the same session is already active."""
+    """Raised when a prompt is submitted while the same session is already active."""
+
+
+class Run:
+    """Handle for one task-owned prompt execution.
+
+    The run owns the task that pumps its event source into a replayable log.
+    Subscribers observe events; dropping a subscriber never affects the run.
+    """
+
+    def __init__(
+        self,
+        *,
+        run_id: str,
+        session_id: str,
+        events: AsyncIterator[AgentEvent],
+        on_done: Callable[[Run], None],
+    ) -> None:
+        """Start a run that drives the given event source to completion."""
+
+        self._run_id = run_id
+        self._session_id = session_id
+        self._events: list[AgentEvent] = []
+        self._status: RunStatus = "running"
+        self._error_message: str | None = None
+        self._changed = asyncio.Event()
+        self._on_done = on_done
+        self._task = asyncio.create_task(self._pump(events))
+        self._task.add_done_callback(self._finalize)
+
+    @property
+    def id(self) -> str:
+        """Return the stable run id."""
+
+        return self._run_id
+
+    @property
+    def session_id(self) -> str:
+        """Return the id of the session this run belongs to."""
+
+        return self._session_id
+
+    @property
+    def status(self) -> RunStatus:
+        """Return the current run status."""
+
+        return self._status
+
+    @property
+    def error_message(self) -> str | None:
+        """Return the failure message when the run has failed."""
+
+        return self._error_message
+
+    @property
+    def output_text(self) -> str | None:
+        """Return the text of the run's latest completed assistant message.
+
+        Text blocks are joined with a blank line. Returns None before the
+        first assistant message completes.
+        """
+
+        for event in reversed(self._events):
+            if isinstance(event, MessageEndEvent):
+                return _assistant_text(event.assistant_turn)
+        return None
+
+    @property
+    def conversation_items(self) -> tuple[ConversationItem, ...]:
+        """Return the conversation items this run has produced so far."""
+
+        return tuple(
+            item for event in self._events for item in _conversation_items_for(event)
+        )
+
+    async def events(self) -> AsyncIterator[AgentEvent]:
+        """Yield run events from the start, following live until the run ends."""
+
+        index = 0
+        while True:
+            self._changed.clear()
+            while index < len(self._events):
+                yield self._events[index]
+                index += 1
+            if self._status != "running":
+                return
+            await self._changed.wait()
+
+    async def wait(self) -> RunStatus:
+        """Wait until the run reaches a terminal status and return it."""
+
+        await asyncio.wait({self._task})
+        return self._status
+
+    def abort(self) -> None:
+        """Request cancellation of the run task."""
+
+        if not self._task.done():
+            self._task.cancel()
+
+    async def _pump(self, events: AsyncIterator[AgentEvent]) -> None:
+        """Drive the event source to completion, recording each event."""
+
+        async for event in events:
+            self._publish(event)
+
+    def _finalize(self, task: asyncio.Task[None]) -> None:
+        """Notify the owner, then record the terminal run status."""
+
+        self._on_done(self)
+        if task.cancelled():
+            self._finish("aborted")
+        elif (error := task.exception()) is not None:
+            self._finish("failed", error_message=str(error))
+        else:
+            self._finish("completed")
+
+    def _publish(self, event: AgentEvent) -> None:
+        """Append one event to the run log and wake subscribers."""
+
+        self._events.append(event)
+        self._changed.set()
+
+    def _finish(self, status: RunStatus, error_message: str | None = None) -> None:
+        """Record the terminal status and wake subscribers."""
+
+        self._status = status
+        self._error_message = error_message
+        self._changed.set()
 
 
 class AgentRuntime:
@@ -46,6 +185,7 @@ class AgentRuntime:
         self._system_prompt = system_prompt
         self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
+        self._active_runs: set[Run] = set()
 
     @property
     def sessions(self) -> tuple[Session, ...]:
@@ -96,30 +236,60 @@ class AgentRuntime:
         )
         return self._build_session(record)
 
-    async def _prompt_session(
-        self,
-        session_id: str,
-        content: str,
-    ) -> AsyncIterator[AgentEvent]:
-        """Run one prompt in a session and persist completed items."""
+    def _submit_prompt(self, session_id: str, content: str) -> Run:
+        """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
         try:
             self._append_user_message(session_id, content)
-
-            async for event in run_agent(
-                self._history_store.get_history(session_id),
-                stream_fn=self._stream_fn,
-                model=self._model,
-                tool_executor=self._tool_executor,
-                reasoning=self._reasoning,
-                system_prompt=self._system_prompt,
-                cwd=self._cwd,
-            ):
-                self._persist_stable_event(session_id, event)
-                yield event
-        finally:
+            run = Run(
+                run_id=str(uuid4()),
+                session_id=session_id,
+                events=self._run_events(session_id),
+                on_done=self._release_run,
+            )
+        except BaseException:
             self._finish_prompt(session_id)
+            raise
+        self._active_runs.add(run)
+        return run
+
+    async def _run_events(self, session_id: str) -> AsyncIterator[AgentEvent]:
+        """Yield agent events for one prompt run, persisting stable history."""
+
+        async for event in run_agent(
+            self._history_store.get_history(session_id),
+            stream_fn=self._stream_fn,
+            model=self._model,
+            tool_executor=self._tool_executor,
+            reasoning=self._reasoning,
+            system_prompt=self._system_prompt,
+            cwd=self._cwd,
+        ):
+            self._persist_stable_event(session_id, event)
+            yield event
+
+    def _release_run(self, run: Run) -> None:
+        """Heal unanswered tool calls, then release the session and the run."""
+
+        self._heal_unanswered_tool_calls(run)
+        self._finish_prompt(run.session_id)
+        self._active_runs.discard(run)
+
+    def _heal_unanswered_tool_calls(self, run: Run) -> None:
+        """Persist error results for tool calls the run left unanswered."""
+
+        results = [
+            ToolResultTurn(
+                call_id=call.call_id,
+                tool_name=call.name,
+                content=[ToolTextContent(text="Tool execution did not complete.")],
+                is_error=True,
+            )
+            for call in _unanswered_tool_calls(run.conversation_items)
+        ]
+        if results:
+            self._history_store.append_history(run.session_id, results)
 
     def _start_prompt(self, session_id: str) -> None:
         """Mark a session prompt active or reject overlapping prompt work."""
@@ -143,13 +313,9 @@ class AgentRuntime:
     def _persist_stable_event(self, session_id: str, event: AgentEvent) -> None:
         """Persist replayable history items from stable agent events."""
 
-        if isinstance(event, MessageEndEvent):
-            self._history_store.append_history(session_id, [event.assistant_turn])
-        if isinstance(event, ToolExecutionEndEvent):
-            self._history_store.append_history(
-                session_id,
-                [event.outcome.tool_result_turn],
-            )
+        items = _conversation_items_for(event)
+        if items:
+            self._history_store.append_history(session_id, list(items))
 
     def _build_session(self, record: SessionRecord) -> Session:
         """Build a session handle from a stored record."""
@@ -189,11 +355,10 @@ class Session:
 
         return self._runtime.history_for(self.id)
 
-    async def prompt(self, content: str) -> AsyncIterator[AgentEvent]:
-        """Run one prompt in this session."""
+    async def prompt(self, content: str) -> Run:
+        """Submit one prompt to this session and return its run handle."""
 
-        async for event in self._runtime._prompt_session(self.id, content):
-            yield event
+        return self._runtime._submit_prompt(self.id, content)
 
     def fork(
         self,
@@ -208,3 +373,36 @@ class Session:
             target_session_id=session_id,
             name=name,
         )
+
+
+def _unanswered_tool_calls(
+    items: Sequence[ConversationItem],
+) -> list[ToolCallBlock]:
+    """Return tool calls from assistant turns that have no matching result."""
+
+    answered = {item.call_id for item in items if isinstance(item, ToolResultTurn)}
+    return [
+        block
+        for item in items
+        if isinstance(item, AssistantTurn)
+        for block in item.blocks
+        if isinstance(block, ToolCallBlock) and block.call_id not in answered
+    ]
+
+
+def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
+    """Return the replayable conversation items carried by one agent event."""
+
+    if isinstance(event, MessageEndEvent):
+        return (event.assistant_turn,)
+    if isinstance(event, ToolExecutionEndEvent):
+        return (event.outcome.tool_result_turn,)
+    return ()
+
+
+def _assistant_text(turn: AssistantTurn) -> str:
+    """Join the text blocks of one assistant turn with blank lines."""
+
+    return "\n\n".join(
+        block.text for block in turn.blocks if isinstance(block, TextBlock)
+    )

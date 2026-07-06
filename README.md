@@ -53,18 +53,29 @@ Use the package facades for application code. Deep module paths are internal and
 may move as Ori grows.
 
 ```python
-from ori import AgentRuntime, HistoryStore, InMemoryHistoryStore
+from ori import AgentRuntime, HistoryStore, InMemoryHistoryStore, Run
 from ori.events import AgentEvent, MessageEndEvent, StreamFn
 from ori.providers.openai import create_stream_api
 from ori.types import ToolDefinition, ToolResult
 ```
 
-`ori` exposes the runtime, session, history-store, and runtime-error contracts.
-`ori.events` exposes structured runtime events yielded by `Session.prompt(...)`.
-`ori.types` exposes provider-neutral conversation, stream, and tool contracts.
-`ori.providers.openai` exposes `create_stream_api`, which binds a
-caller-constructed `AsyncOpenAI` client to the runtime's stream-function
-contract: `create_stream_api(AsyncOpenAI(...))`.
+`ori` exposes the runtime, session, run-handle, history-store, and
+runtime-error contracts. `ori.events` exposes structured runtime events
+yielded by `Run.events()`. `ori.types` exposes provider-neutral conversation,
+stream, and tool contracts. `ori.providers.openai` exposes
+`create_stream_api`, which binds a caller-constructed `AsyncOpenAI` client to
+the runtime's stream-function contract: `create_stream_api(AsyncOpenAI(...))`.
+
+Prompt execution is task-owned: `Session.prompt(...)` submits a run and
+returns immediately, the runtime drives it to completion, and any number of
+subscribers can observe it.
+
+```python
+run = await session.prompt("Inspect the current repository")
+async for event in run.events():
+    ...
+status = await run.wait()  # "completed" | "failed" | "aborted"
+```
 
 ## Development
 

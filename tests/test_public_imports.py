@@ -7,6 +7,7 @@ from ori import (
     AgentRuntime,
     HistoryStore,
     InMemoryHistoryStore,
+    Run,
     Session,
     SessionBusyError,
     SessionNotFoundError,
@@ -98,7 +99,8 @@ async def _stream_events(
 async def _collect_prompt_events(session: Session) -> list[AgentEvent]:
     """Collect all runtime events for one prompt."""
 
-    return [event async for event in session.prompt("hello")]
+    run: Run = await session.prompt("hello")
+    return [event async for event in run.events()]
 
 
 async def _fake_tool() -> ToolResult:

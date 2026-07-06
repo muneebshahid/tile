@@ -1,7 +1,9 @@
-"""Tests for runtime-owned sessions and in-memory history."""
+"""Tests for runtime-owned sessions, task-owned runs, and in-memory history."""
 
 import asyncio
 from collections.abc import Sequence
+from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,23 +12,34 @@ from ori.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from ori.runtime import AgentRuntime, Session, SessionBusyError
+from ori.runtime import AgentRuntime, Run, SessionBusyError
 from ori.events import (
     AgentEndEvent,
     AgentEvent,
+    AgentStartEvent,
     MessageEndEvent,
+    StreamFn,
     ToolExecutionEndEvent,
+    ToolExecutionStartEvent,
 )
 from ori.types.conversation import UserMessage
 from ori.types.stream_events import (
     ProviderStreamEvent,
+    TextBlock,
 )
-from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from ori.types.tools import (
+    ToolDefinition,
+    ToolFunction,
+    ToolResult,
+    ToolTextContent,
+)
 from tests.support.agent_streams import (
     GatedProviderStreamMock,
     ProviderStreamMock,
     error_stream,
     final_text_stream,
+    stream_done,
+    stream_start,
     tool_call_stream,
 )
 from tests.support.conversation_assertions import (
@@ -41,78 +54,35 @@ def _collect_prompt_events(
     session_id: str,
     content: str,
 ) -> list[AgentEvent]:
-    """Collect events from one runtime session prompt."""
+    """Run one session prompt to completion and collect its events."""
 
     async def _collect() -> list[AgentEvent]:
-        """Collect prompt events from the async generator."""
+        """Submit the prompt and drain its run event subscription."""
 
         session = runtime.get_session(session_id)
-        return [event async for event in session.prompt(content)]
+        run = await session.prompt(content)
+        return [event async for event in run.events()]
 
     return asyncio.run(_collect())
 
 
-def _collect_until_agent_end(
-    session_id: str,
-    runtime: AgentRuntime,
-    content: str,
-) -> list[AgentEvent]:
-    """Collect prompt events and stop immediately after the terminal event."""
+async def _collect_run_events(run: Run) -> list[AgentEvent]:
+    """Collect every event from one run subscription."""
 
-    async def _collect() -> list[AgentEvent]:
-        """Collect events until the first agent end event is observed."""
-
-        events: list[AgentEvent] = []
-        session = runtime.get_session(session_id)
-        async for event in session.prompt(content):
-            events.append(event)
-            if isinstance(event, AgentEndEvent):
-                break
-        return events
-
-    return asyncio.run(_collect())
+    return [event async for event in run.events()]
 
 
-def _collect_until_message_end(
-    session_id: str,
-    runtime: AgentRuntime,
-    content: str,
-) -> list[AgentEvent]:
-    """Collect prompt events and stop immediately after message completion."""
+async def _wait_for_invocation_count(
+    provider: ProviderStreamMock,
+    expected_count: int,
+) -> None:
+    """Wait briefly for async prompt work to reach a provider call."""
 
-    async def _collect() -> list[AgentEvent]:
-        """Collect events until the first message end event is observed."""
-
-        events: list[AgentEvent] = []
-        session = runtime.get_session(session_id)
-        async for event in session.prompt(content):
-            events.append(event)
-            if isinstance(event, MessageEndEvent):
-                break
-        return events
-
-    return asyncio.run(_collect())
-
-
-def _collect_until_tool_execution_end(
-    session_id: str,
-    runtime: AgentRuntime,
-    content: str,
-) -> list[AgentEvent]:
-    """Collect prompt events and stop after the first tool result is emitted."""
-
-    async def _collect() -> list[AgentEvent]:
-        """Collect events until the first tool execution end event is observed."""
-
-        events: list[AgentEvent] = []
-        session = runtime.get_session(session_id)
-        async for event in session.prompt(content):
-            events.append(event)
-            if isinstance(event, ToolExecutionEndEvent):
-                break
-        return events
-
-    return asyncio.run(_collect())
+    for _ in range(20):
+        if provider.await_count >= expected_count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"Expected {expected_count} provider invocation(s).")
 
 
 def _runtime_with_streams(
@@ -135,23 +105,11 @@ def _runtime_with_gated_streams(
     return AgentRuntime(stream_fn=provider.fn, model="gpt-5.4"), provider
 
 
-async def _consume_prompt(session: Session, content: str) -> list[AgentEvent]:
-    """Collect every event from one session prompt."""
+def _runtime_with_failing_provider(error: Exception) -> AgentRuntime:
+    """Build a runtime whose provider call raises before streaming."""
 
-    return [event async for event in session.prompt(content)]
-
-
-async def _wait_for_invocation_count(
-    provider: ProviderStreamMock,
-    expected_count: int,
-) -> None:
-    """Wait briefly for async prompt work to reach a provider call."""
-
-    for _ in range(20):
-        if provider.await_count >= expected_count:
-            return
-        await asyncio.sleep(0)
-    raise AssertionError(f"Expected {expected_count} provider invocation(s).")
+    failing_stream_fn = cast("StreamFn", AsyncMock(side_effect=error))
+    return AgentRuntime(stream_fn=failing_stream_fn, model="gpt-5.4")
 
 
 class FalsyHistoryStore(InMemoryHistoryStore):
@@ -166,19 +124,23 @@ class FalsyHistoryStore(InMemoryHistoryStore):
 def _sample_tools() -> list[ToolDefinition]:
     """Build deterministic tool definitions for runtime tests."""
 
-    return [
-        ToolDefinition(
-            name="get_weather",
-            description="Return a deterministic weather report.",
-            input_schema={
-                "type": "object",
-                "properties": {"city": {"type": "string"}},
-                "required": ["city"],
-                "additionalProperties": False,
-            },
-            fn=_get_weather,
-        )
-    ]
+    return [_weather_tool(_get_weather)]
+
+
+def _weather_tool(fn: ToolFunction) -> ToolDefinition:
+    """Build the deterministic weather tool around one implementation."""
+
+    return ToolDefinition(
+        name="get_weather",
+        description="Return a deterministic weather report.",
+        input_schema={
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": False,
+        },
+        fn=fn,
+    )
 
 
 async def _get_weather(city: str) -> ToolResult:
@@ -276,44 +238,341 @@ def test_history_store_rejects_unknown_session_writes() -> None:
         store.append_history("missing", [UserMessage(content="hello")])
 
 
+def test_run_completes_and_reports_status() -> None:
+    """Complete a submitted run and expose run identity and terminal status."""
+
+    async def _run() -> None:
+        """Submit one prompt and wait for its terminal status."""
+
+        runtime, _ = _runtime_with_streams(
+            [final_text_stream("resp_one", "hello back")],
+        )
+        session = runtime.session(session_id="run-status")
+
+        run = await session.prompt("hello")
+
+        assert run.session_id == "run-status"
+        assert run.id
+        assert await run.wait() == "completed"
+        assert run.status == "completed"
+        assert run.error_message is None
+
+    asyncio.run(_run())
+
+
+def test_run_events_replay_from_start_for_late_subscribers() -> None:
+    """Replay the full event log to subscribers joining after completion."""
+
+    async def _run() -> None:
+        """Wait for run completion before subscribing."""
+
+        runtime, _ = _runtime_with_streams(
+            [final_text_stream("resp_one", "hello back")],
+        )
+        session = runtime.session(session_id="late-subscriber")
+
+        run = await session.prompt("hello")
+        await run.wait()
+        events = await _collect_run_events(run)
+
+        assert isinstance(events[0], AgentStartEvent)
+        assert isinstance(events[-1], AgentEndEvent)
+        assert any(isinstance(event, MessageEndEvent) for event in events)
+
+    asyncio.run(_run())
+
+
+def test_run_events_supports_multiple_subscribers() -> None:
+    """Deliver the identical event sequence to concurrent subscribers."""
+
+    async def _run() -> None:
+        """Subscribe twice to the same run concurrently."""
+
+        runtime, _ = _runtime_with_streams(
+            [final_text_stream("resp_one", "hello back")],
+        )
+        session = runtime.session(session_id="fan-out")
+
+        run = await session.prompt("hello")
+        first, second = await asyncio.gather(
+            _collect_run_events(run),
+            _collect_run_events(run),
+        )
+
+        assert first == second
+        assert isinstance(first[-1], AgentEndEvent)
+
+    asyncio.run(_run())
+
+
+def test_run_completes_when_subscriber_stops_early() -> None:
+    """Keep executing and persisting after a subscriber stops consuming."""
+
+    async def _run() -> None:
+        """Abandon a subscription after the first event."""
+
+        runtime, _ = _runtime_with_streams(
+            [final_text_stream("resp_one", "hello back")],
+        )
+        session = runtime.session(session_id="early-stop")
+
+        run = await session.prompt("hello")
+        async for _ in run.events():
+            break
+
+        assert await run.wait() == "completed"
+        session_history = session.history
+        assert expect_user_message(session_history[0]).content == "hello"
+        assert expect_assistant_turn(session_history[1]).response_id == "resp_one"
+
+    asyncio.run(_run())
+
+
+def test_run_abort_marks_run_aborted_and_frees_session() -> None:
+    """Abort an active run and allow the session to accept the next prompt."""
+
+    async def _run() -> None:
+        """Abort a gated run that would otherwise never complete."""
+
+        releases = [asyncio.Event(), asyncio.Event()]
+        runtime, provider = _runtime_with_gated_streams(releases)
+        session = runtime.session(session_id="abort")
+
+        run = await session.prompt("first")
+        await _wait_for_invocation_count(provider, 1)
+        run.abort()
+
+        assert await run.wait() == "aborted"
+        assert run.status == "aborted"
+
+        second = await session.prompt("second")
+        releases[1].set()
+        assert await second.wait() == "completed"
+
+    asyncio.run(_run())
+
+
+def test_run_abort_heals_unanswered_tool_calls() -> None:
+    """Persist error results for tool calls left unanswered by an abort."""
+
+    async def _run() -> None:
+        """Abort a run while its tool call is still executing."""
+
+        gate = asyncio.Event()
+
+        async def _blocked_weather(city: str) -> ToolResult:
+            """Wait for a release gate that never opens."""
+
+            _ = city
+            await gate.wait()
+            raise AssertionError("Tool must not complete.")
+
+        runtime, _ = _runtime_with_streams(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_next", "answered later"),
+            ],
+            tools=[_weather_tool(_blocked_weather)],
+        )
+        session = runtime.session(session_id="abort-mid-tool")
+
+        run = await session.prompt("check weather")
+        async for event in run.events():
+            if isinstance(event, ToolExecutionStartEvent):
+                break
+        run.abort()
+        assert await run.wait() == "aborted"
+
+        healed = expect_tool_result_turn(session.history[2])
+        assert healed.call_id == "call_weather"
+        assert healed.is_error is True
+        content = healed.content[0]
+        assert isinstance(content, ToolTextContent)
+        assert content.text == "Tool execution did not complete."
+
+        second = await session.prompt("try again")
+        assert await second.wait() == "completed"
+
+    asyncio.run(_run())
+
+
+def test_run_failure_captures_error_and_frees_session() -> None:
+    """Record provider call failures as run data instead of raising."""
+
+    async def _run() -> None:
+        """Submit a prompt whose provider call raises immediately."""
+
+        runtime = _runtime_with_failing_provider(ConnectionError("connection refused"))
+        session = runtime.session(session_id="provider-failure")
+
+        run = await session.prompt("hello")
+
+        assert await run.wait() == "failed"
+        assert run.error_message == "connection refused"
+        events = await _collect_run_events(run)
+        assert isinstance(events[0], AgentStartEvent)
+
+        session_history = session.history
+        assert expect_user_message(session_history[0]).content == "hello"
+
+        second = await session.prompt("again")
+        assert await second.wait() == "failed"
+
+    asyncio.run(_run())
+
+
+def test_run_exposes_output_text_and_conversation_items() -> None:
+    """Expose the run's produced conversation items and final message text."""
+
+    async def _run() -> None:
+        """Complete a tool-loop run and read its output from the handle."""
+
+        runtime, _ = _runtime_with_streams(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_final", "Munich is sunny."),
+            ],
+            tools=_sample_tools(),
+        )
+        session = runtime.session(session_id="run-output")
+
+        run = await session.prompt("check weather")
+        assert await run.wait() == "completed"
+
+        assert run.output_text == "Munich is sunny."
+        items = run.conversation_items
+        assert len(items) == 3
+        assert expect_assistant_turn(items[0]).response_id == "resp_tool"
+        assert expect_tool_result_turn(items[1]).call_id == "call_weather"
+        assert expect_assistant_turn(items[2]).response_id == "resp_final"
+
+    asyncio.run(_run())
+
+
+def test_run_output_is_empty_until_first_message_completes() -> None:
+    """Report no output while the run has not completed an assistant message."""
+
+    async def _run() -> None:
+        """Inspect a gated run before and after its provider stream releases."""
+
+        releases = [asyncio.Event()]
+        runtime, provider = _runtime_with_gated_streams(releases)
+        session = runtime.session(session_id="pending-output")
+
+        run = await session.prompt("hello")
+        await _wait_for_invocation_count(provider, 1)
+        assert run.output_text is None
+        assert run.conversation_items == ()
+
+        releases[0].set()
+        assert await run.wait() == "completed"
+        assert run.output_text == "answer 0"
+        assert expect_assistant_turn(run.conversation_items[0]).response_id == "resp_0"
+
+    asyncio.run(_run())
+
+
+def test_run_output_text_joins_text_blocks_with_blank_lines() -> None:
+    """Join multiple text blocks of the final message with blank lines."""
+
+    async def _run() -> None:
+        """Complete a run whose final message carries two text blocks."""
+
+        runtime, _ = _runtime_with_streams(
+            [
+                [
+                    stream_start("resp_multi"),
+                    stream_done(
+                        "resp_multi",
+                        blocks=[
+                            TextBlock(text="part one"),
+                            TextBlock(text="part two"),
+                        ],
+                    ),
+                ]
+            ],
+        )
+        session = runtime.session(session_id="multi-block-output")
+
+        run = await session.prompt("hello")
+
+        assert await run.wait() == "completed"
+        assert run.output_text == "part one\n\npart two"
+
+    asyncio.run(_run())
+
+
 def test_session_prompt_persists_assistant_turn_at_message_end() -> None:
-    """Persist assistant history as soon as the message is stable."""
+    """Persist assistant history before the message end event is published."""
 
-    runtime, provider = _runtime_with_streams(
-        [final_text_stream("resp_one", "hello back")],
-    )
-    session = runtime.session(session_id="repo-debug", name="debug")
+    async def _run() -> None:
+        """Assert persistence at the moment the subscriber observes the event."""
 
-    events = _collect_until_message_end(
-        runtime=runtime, session_id=session.id, content="hello"
-    )
+        runtime, provider = _runtime_with_streams(
+            [final_text_stream("resp_one", "hello back")],
+        )
+        session = runtime.session(session_id="repo-debug", name="debug")
 
-    agent_end = events[-1]
-    assert isinstance(agent_end, MessageEndEvent)
+        run = await session.prompt("hello")
+        async for event in run.events():
+            if isinstance(event, MessageEndEvent):
+                assert event.assistant_turn in session.history
+        await run.wait()
 
-    session_history = session.history
-    assert expect_user_message(session_history[0]).content == "hello"
-    assert expect_assistant_turn(session_history[1]).response_id == "resp_one"
+        session_history = session.history
+        assert expect_user_message(session_history[0]).content == "hello"
+        assert expect_assistant_turn(session_history[1]).response_id == "resp_one"
+        request_history = provider.history(0)
+        assert expect_user_message(request_history[0]).content == "hello"
 
-    request_history = provider.history(0)
-    assert expect_user_message(request_history[0]).content == "hello"
+    asyncio.run(_run())
 
 
-def test_session_prompt_persists_agent_end_before_consumer_stops() -> None:
-    """Keep history persisted when a consumer stops at the terminal event."""
+def test_session_prompt_persists_tool_result_at_execution_end() -> None:
+    """Persist tool result history before the execution end event is published."""
 
-    runtime, _ = _runtime_with_streams(
-        [final_text_stream("resp_one", "hello back")],
-    )
-    session = runtime.session(session_id="early-stop")
+    async def _run() -> None:
+        """Assert persistence at the moment the subscriber observes the event."""
 
-    events = _collect_until_agent_end(session.id, runtime, "hello")
+        runtime, _ = _runtime_with_streams(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_final", "Munich is sunny."),
+            ],
+            tools=_sample_tools(),
+        )
+        session = runtime.session(session_id="tool-execution-history")
 
-    assert isinstance(events[-1], AgentEndEvent)
+        run = await session.prompt("check weather")
+        observed_tool_end = False
+        async for event in run.events():
+            if isinstance(event, ToolExecutionEndEvent):
+                observed_tool_end = True
+                assert event.outcome.tool_result_turn in session.history
+        await run.wait()
 
-    session_history = session.history
-    assert expect_user_message(session_history[0]).content == "hello"
-    assert expect_assistant_turn(session_history[1]).response_id == "resp_one"
+        assert observed_tool_end
+        session_history = session.history
+        assert expect_user_message(session_history[0]).content == "check weather"
+        assert expect_assistant_turn(session_history[1]).response_id == "resp_tool"
+        assert expect_tool_result_turn(session_history[2]).call_id == "call_weather"
+
+    asyncio.run(_run())
 
 
 def test_session_prompt_replays_prior_history_on_next_prompt() -> None:
@@ -390,34 +649,29 @@ def test_session_prompt_replays_tool_history_on_later_prompt() -> None:
 
 
 def test_session_prompt_rejects_overlapping_same_session_prompts() -> None:
-    """Reject same-session prompts while a prompt is already active."""
+    """Reject same-session prompt submission while a run is already active."""
 
     async def _run() -> None:
-        """Run overlapping prompts through one event loop."""
+        """Submit overlapping prompts through one event loop."""
 
         releases = [asyncio.Event(), asyncio.Event()]
-        runtime, provider = _runtime_with_gated_streams(releases)
+        runtime, _ = _runtime_with_gated_streams(releases)
         session = runtime.session(session_id="overlap")
 
-        first_task = asyncio.create_task(_consume_prompt(session, "first"))
-        await _wait_for_invocation_count(provider, 1)
-        second_task = asyncio.create_task(_consume_prompt(session, "second"))
-
+        first = await session.prompt("first")
         with pytest.raises(SessionBusyError, match="overlap"):
-            await second_task
+            await session.prompt("second")
+
         blocked_session_history = session.history
         assert expect_user_message(blocked_session_history[0]).content == "first"
         assert len(blocked_session_history) == 1
 
         releases[0].set()
-        await first_task
+        assert await first.wait() == "completed"
 
-        second_after_completion = asyncio.create_task(
-            _consume_prompt(session, "second")
-        )
-        await _wait_for_invocation_count(provider, 2)
+        second = await session.prompt("second")
         releases[1].set()
-        await second_after_completion
+        assert await second.wait() == "completed"
 
         completed_session_history = session.history
         assert expect_user_message(completed_session_history[0]).content == "first"
@@ -430,67 +684,6 @@ def test_session_prompt_rejects_overlapping_same_session_prompts() -> None:
         )
 
     asyncio.run(_run())
-
-
-def test_session_prompt_rejects_reentry_while_yielding_terminal_event() -> None:
-    """Reject reentrant prompts while the active prompt is yielding events."""
-
-    async def _run() -> None:
-        """Start a nested prompt from inside terminal event handling."""
-
-        runtime, provider = _runtime_with_streams(
-            [
-                final_text_stream("resp_first", "first answer"),
-                final_text_stream("resp_second", "second answer"),
-            ],
-        )
-        session = runtime.session(session_id="reentry")
-
-        async for event in session.prompt("first"):
-            if isinstance(event, AgentEndEvent):
-                with pytest.raises(SessionBusyError, match="reentry"):
-                    await _consume_prompt(session, "second")
-
-        await _consume_prompt(session, "second")
-
-        assert provider.await_count == 2
-        session_history = session.history
-        assert expect_user_message(session_history[0]).content == "first"
-        assert expect_assistant_turn(session_history[1]).response_id == "resp_first"
-        assert expect_user_message(session_history[2]).content == "second"
-        assert expect_assistant_turn(session_history[3]).response_id == "resp_second"
-
-    asyncio.run(_run())
-
-
-def test_session_prompt_persists_tool_result_at_execution_end() -> None:
-    """Persist tool result history as soon as tool execution is stable."""
-
-    runtime, _ = _runtime_with_streams(
-        [
-            tool_call_stream(
-                response_id="resp_tool",
-                call_id="call_weather",
-                tool_name="get_weather",
-                arguments={"city": "Munich"},
-            ),
-            final_text_stream("resp_final", "Munich is sunny."),
-        ],
-        tools=_sample_tools(),
-    )
-    session = runtime.session(session_id="tool-execution-history")
-
-    events = _collect_until_tool_execution_end(session.id, runtime, "check weather")
-
-    tool_execution_end = events[-1]
-    assert isinstance(tool_execution_end, ToolExecutionEndEvent)
-
-    session_history = session.history
-    assert len(session_history) == 3
-    assert expect_user_message(session_history[0]).content == "check weather"
-    assert expect_assistant_turn(session_history[1]).response_id == "resp_tool"
-    assert expect_tool_result_turn(session_history[2]).call_id == "call_weather"
-    assert tool_execution_end.outcome.tool_result_turn == session_history[2]
 
 
 def test_session_prompt_persists_stream_error_history() -> None:
@@ -669,3 +862,47 @@ def test_runtime_fork_session_rejects_missing_source_session() -> None:
 
     with pytest.raises(SessionNotFoundError, match="missing"):
         runtime.fork_session(source_session_id="missing", target_session_id="fork")
+
+
+def test_tool_execution_start_precedes_persisted_result() -> None:
+    """Observe tool execution start before its result lands in history."""
+
+    async def _run() -> None:
+        """Block the tool so the intermediate state is observable."""
+
+        gate = asyncio.Event()
+
+        async def _blocked_weather(city: str) -> ToolResult:
+            """Wait for the release gate before answering."""
+
+            await gate.wait()
+            return ToolResult.text(f"{city}: sunny")
+
+        runtime, _ = _runtime_with_streams(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_final", "Munich is sunny."),
+            ],
+            tools=[_weather_tool(_blocked_weather)],
+        )
+        session = runtime.session(session_id="blocked-tool")
+
+        run = await session.prompt("check weather")
+        async for event in run.events():
+            if isinstance(event, ToolExecutionStartEvent):
+                break
+
+        session_history = session.history
+        assert len(session_history) == 2
+        assert expect_assistant_turn(session_history[1]).response_id == "resp_tool"
+
+        gate.set()
+        assert await run.wait() == "completed"
+        assert expect_tool_result_turn(session.history[2]).call_id == "call_weather"
+
+    asyncio.run(_run())
