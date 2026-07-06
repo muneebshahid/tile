@@ -1,5 +1,8 @@
 # Tile
 
+[![CI](https://github.com/muneebshahid/tile/actions/workflows/ci.yml/badge.svg)](https://github.com/muneebshahid/tile/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > ⚠️ **Work in Progress** — This project is under active development and APIs may change.
 
 A small Python-native runtime for tool-using agent sessions.
