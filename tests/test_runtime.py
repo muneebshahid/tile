@@ -190,6 +190,15 @@ def test_runtime_creates_generated_and_explicit_sessions() -> None:
     ]
 
 
+def test_runtime_get_session_rejects_unknown_id() -> None:
+    """Raise a session lookup error for unknown session ids."""
+
+    runtime, _ = _runtime_with_streams([])
+
+    with pytest.raises(SessionNotFoundError, match="Unknown session: missing"):
+        runtime.get_session("missing")
+
+
 def test_session_history_is_read_only_snapshot() -> None:
     """Expose defensive history copies without leaking mutable stored items."""
 

@@ -17,7 +17,20 @@ from ori.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from ori.types.conversation import AssistantTurn, UserMessage
+from ori.types.conversation import (
+    AssistantTurn,
+    ConversationItem,
+    ToolResultTurn,
+    UserMessage,
+)
+from ori.types.stream_events import (
+    ProviderMetadata,
+    ProviderSource,
+    ReasoningBlock,
+    TextBlock,
+    ToolCallBlock,
+)
+from ori.types.tools import ToolImageContent, ToolTextContent
 from tests.support.agent_streams import ProviderStreamMock, final_text_stream
 from tests.support.conversation_assertions import (
     expect_assistant_turn,
@@ -131,6 +144,79 @@ def test_history_store_returns_defensive_history_snapshots(
     stored_history = store.get_history("snapshot")
     assert isinstance(history, tuple)
     assert expect_user_message(stored_history[0]).content == "hello"
+
+
+def test_history_store_round_trips_all_conversation_item_variants(
+    tmp_path: Path,
+    store_factory: HistoryStoreFactory,
+) -> None:
+    """Persist and reload every conversation item variant without loss."""
+
+    store = store_factory(tmp_path)
+    store.ensure_session(session_id="variants")
+    items = _conversation_item_variants()
+
+    store.append_history("variants", items)
+
+    assert list(store.get_history("variants")) == items
+
+
+def _conversation_item_variants() -> list[ConversationItem]:
+    """Build one fully populated example of every conversation item variant."""
+
+    completed_turn = AssistantTurn(
+        source=ProviderSource(provider="openai", model="gpt-5.4"),
+        blocks=[
+            ReasoningBlock(summary_text="Consider the weather."),
+            TextBlock(
+                text="Checking the weather.",
+                provider_metadata=ProviderMetadata(data={"phase": "final_answer"}),
+            ),
+            ToolCallBlock(
+                call_id="call_1",
+                name="get_weather",
+                arguments={"city": "Munich"},
+                provider_metadata=ProviderMetadata(data={"provider_item_id": "fc_1"}),
+            ),
+        ],
+        response_id="resp_1",
+        stop_reason="tool_use",
+    )
+    failed_turn = AssistantTurn(
+        stop_reason="error",
+        status="error",
+        error_message="provider exploded",
+    )
+    tool_result_turn = ToolResultTurn(
+        call_id="call_1",
+        tool_name="get_weather",
+        content=[
+            ToolTextContent(text="sunny"),
+            ToolImageContent(data="aGVsbG8=", mime_type="image/png"),
+        ],
+        is_error=True,
+    )
+    return [
+        UserMessage(content="What is the weather in Munich?"),
+        completed_turn,
+        failed_turn,
+        tool_result_turn,
+    ]
+
+
+def test_history_store_rejects_copy_from_unknown_source(
+    tmp_path: Path,
+    store_factory: HistoryStoreFactory,
+) -> None:
+    """Reject history copies from unknown sources without creating the target."""
+
+    store = store_factory(tmp_path)
+
+    with pytest.raises(SessionNotFoundError, match="Unknown session: missing"):
+        store.copy_history(source_session_id="missing", target_session_id="fork")
+
+    with pytest.raises(SessionNotFoundError, match="Unknown session: fork"):
+        store.get_session("fork")
 
 
 def test_history_store_copies_history_to_new_session(
