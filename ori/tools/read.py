@@ -7,12 +7,11 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
+from ori.tools.details import ReadDetails, ToolOutputDetails
 from ori.types.tools import (
     ImageMimeType,
-    ReadDetails,
     ToolDefinition,
     ToolImageContent,
-    ToolOutputDetails,
     ToolResult,
 )
 from ori.tools.support.image_processing import (

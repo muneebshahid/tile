@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from ori.types.tools import FindDetails, ToolDefinition, ToolOutputDetails, ToolResult
+from ori.tools.details import FindDetails, ToolOutputDetails
+from ori.types.tools import ToolDefinition, ToolResult
 from ori.tools.support.executables import execute, require_executable
 from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,

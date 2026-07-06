@@ -3,12 +3,8 @@
 import asyncio
 from pathlib import Path
 
-from ori.types.tools import (
-    LsDetails,
-    ToolDefinition,
-    ToolOutputDetails,
-    ToolResult,
-)
+from ori.tools.details import LsDetails, ToolOutputDetails
+from ori.types.tools import ToolDefinition, ToolResult
 
 from ori.tools.support.paths import resolve_to_cwd
 from ori.tools.support.truncation import (

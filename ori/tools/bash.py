@@ -6,7 +6,8 @@ import signal
 import sys
 from pathlib import Path
 
-from ori.types.tools import BashDetails, ToolDefinition, ToolOutputDetails, ToolResult
+from ori.tools.details import BashDetails, ToolOutputDetails
+from ori.types.tools import ToolDefinition, ToolResult
 from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,

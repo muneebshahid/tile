@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Sequence
 from typing import Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SerializeAsAny
 
 from ori.types.contracts import AsyncEventStream
 from ori.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
@@ -11,8 +11,8 @@ from ori.types.stream_events import StreamUpdateEvent
 from ori.types.tools import (
     JsonObject,
     ToolDefinition,
+    ToolDetails,
     ToolResult,
-    ToolResultDetails,
 )
 
 
@@ -57,7 +57,7 @@ class ToolExecutionOutcome(BaseModel):
     """Full runtime outcome for a tool execution."""
 
     tool_result_turn: ToolResultTurn
-    details: ToolResultDetails | None = None
+    details: SerializeAsAny[ToolDetails] | None = None
 
     @property
     def result(self) -> ToolResult:

@@ -10,7 +10,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from ori.types.tools import EditDetails, ToolDefinition, ToolResult
+from ori.tools.details import EditDetails
+from ori.types.tools import ToolDefinition, ToolResult
 from ori.tools.support.paths import resolve_to_cwd
 
 UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202F\u205F\u3000]")

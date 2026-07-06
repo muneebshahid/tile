@@ -48,10 +48,9 @@ from ori.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from ori.tools.details import ReadDetails, ToolOutputDetails
 from ori.types.tools import (
-    ReadDetails,
     ToolDefinition,
-    ToolOutputDetails,
     ToolResult,
     ToolTextContent,
 )
