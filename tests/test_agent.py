@@ -10,10 +10,12 @@ import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import TypeVar
 
 from tile.agent import run_agent
+from tile.prompt import AUTO_MODE
 from tile.tool_executor import ToolExecutor
 from tile.events import (
     AgentEndEvent,
@@ -94,7 +96,8 @@ def _collect_run_events(
     stream_fn: StreamFn,
     model: str = "gpt-5.4",
     tools: Sequence[ToolDefinition] = (),
-    system_prompt: str = "Base prompt.",
+    instructions: str = "Base prompt.",
+    auto_mode: bool = False,
     cwd: Path | str | None = None,
 ) -> list[AgentEvent]:
     """Collect all events emitted by one stateless agent run."""
@@ -109,7 +112,8 @@ def _collect_run_events(
                 stream_fn=stream_fn,
                 model=model,
                 tool_executor=ToolExecutor(tools),
-                system_prompt=system_prompt,
+                instructions=instructions,
+                auto_mode=auto_mode,
                 cwd=cwd,
             )
         ]
@@ -624,10 +628,8 @@ def test_agent_run_handles_multiple_tool_use_turns() -> None:
     assert expect_tool_result_turn(final_request_history[4]).call_id == "call_2"
 
 
-def test_agent_leaves_instructions_unchanged_without_cwd_variable(
-    tmp_path: Path,
-) -> None:
-    """Do not append the working directory unless the prompt requests it."""
+def test_agent_appends_environment_to_instructions(tmp_path: Path) -> None:
+    """Append the date and working directory after the instructions."""
 
     provider = ProviderStreamMock(
         [
@@ -639,58 +641,60 @@ def test_agent_leaves_instructions_unchanged_without_cwd_variable(
     _collect_run_events(
         history,
         stream_fn=provider.fn,
-        system_prompt="Base prompt.",
-        cwd=tmp_path,
-    )
-
-    assert provider.instructions() == "Base prompt."
-
-
-def test_agent_formats_cwd_prompt_variable(tmp_path: Path) -> None:
-    """Apply cwd prompt variables before sending model instructions."""
-
-    provider = ProviderStreamMock(
-        [
-            empty_stream("resp_done"),
-        ]
-    )
-    history = [UserMessage(content="Hello")]
-
-    _collect_run_events(
-        history,
-        stream_fn=provider.fn,
-        system_prompt="Current working directory: {cwd}",
-        cwd=tmp_path,
-    )
-
-    assert provider.instructions() == f"Current working directory: {tmp_path}"
-
-
-def test_agent_preserves_literal_braces_in_system_prompt(tmp_path: Path) -> None:
-    """Leave non-cwd braces untouched in custom system prompts."""
-
-    provider = ProviderStreamMock(
-        [
-            empty_stream("resp_done"),
-        ]
-    )
-    history = [UserMessage(content="Hello")]
-    system_prompt = (
-        'Respond with JSON like {"status": "ok"}. '
-        "Use code blocks like function f() { return 1; }. "
-        "Current working directory: {cwd}"
-    )
-
-    _collect_run_events(
-        history,
-        stream_fn=provider.fn,
-        system_prompt=system_prompt,
+        instructions="Base prompt.",
         cwd=tmp_path,
     )
 
     assert provider.instructions() == (
-        'Respond with JSON like {"status": "ok"}. '
-        "Use code blocks like function f() { return 1; }. "
+        f"Base prompt.\n\n"
+        f"Current date: {date.today().isoformat()}\n"
+        f"Current working directory: {tmp_path}"
+    )
+
+
+def test_agent_prepends_auto_mode_to_instructions(tmp_path: Path) -> None:
+    """Place the auto-mode block before the instructions when enabled."""
+
+    provider = ProviderStreamMock(
+        [
+            empty_stream("resp_done"),
+        ]
+    )
+    history = [UserMessage(content="Hello")]
+
+    _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        instructions="Base prompt.",
+        auto_mode=True,
+        cwd=tmp_path,
+    )
+
+    assert provider.instructions().startswith(f"{AUTO_MODE}\n\nBase prompt.")
+
+
+def test_agent_includes_project_context_from_cwd(tmp_path: Path) -> None:
+    """Inject discovered project context between instructions and environment."""
+
+    (tmp_path / "AGENTS.md").write_text("Project rules.", encoding="utf-8")
+    provider = ProviderStreamMock(
+        [
+            empty_stream("resp_done"),
+        ]
+    )
+    history = [UserMessage(content="Hello")]
+
+    _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        instructions="Base prompt.",
+        cwd=tmp_path,
+    )
+
+    assert provider.instructions() == (
+        f"Base prompt.\n\n"
+        f"Project rules.\n\n"
+        f"Current date: {date.today().isoformat()}\n"
         f"Current working directory: {tmp_path}"
     )
 

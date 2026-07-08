@@ -22,7 +22,7 @@ from tile.types.stream_events import (
     ToolCallStartEvent,
 )
 from tile.types.tools import JsonObject
-from tile.prompt import PROMPT, build_system_prompt
+from tile.prompt import DEFAULT_INSTRUCTIONS, build_system_prompt
 from tile.tool_executor import ToolExecutor
 from tile.events import (
     AgentEndEvent,
@@ -58,20 +58,25 @@ async def run_agent(
     stream_fn: StreamFn,
     model: str,
     tool_executor: ToolExecutor,
-    system_prompt: str = PROMPT,
+    instructions: str = DEFAULT_INSTRUCTIONS,
+    auto_mode: bool = True,
     cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Run one stateless agent turn from supplied model-visible history."""
 
     run_history = list(history)
-    instructions = build_system_prompt(system_prompt, _resolve_cwd(cwd))
+    system_prompt = build_system_prompt(
+        instructions,
+        _resolve_cwd(cwd),
+        auto_mode=auto_mode,
+    )
 
     yield AgentStartEvent()
     async for event in _run_agent_loop(
         run_history=run_history,
         stream_fn=stream_fn,
         model=model,
-        instructions=instructions,
+        instructions=system_prompt,
         tool_executor=tool_executor,
     ):
         yield event
