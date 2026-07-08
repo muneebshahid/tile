@@ -16,6 +16,8 @@ class ToolDetails(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
+    type: str
+
 
 class ToolTextContent(BaseModel):
     """Text content returned by a tool."""

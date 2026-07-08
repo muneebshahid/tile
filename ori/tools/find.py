@@ -1,16 +1,23 @@
 """File path search tool scaffold for the default agent."""
 
 from pathlib import Path
+from typing import Literal
 
-from ori.tools.details import FindDetails, ToolOutputDetails
-from ori.types.tools import ToolDefinition, ToolResult
+from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
 from ori.tools.support.executables import execute, require_executable
 from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
     append_notice_block,
     truncate_head,
 )
-from ori.tool_truncation import Truncation
+from ori.tool_truncation import ToolOutputDetails, Truncation
+
+
+class FindDetails(ToolDetails):
+    """File path search metadata for UI and persistence."""
+
+    type: Literal["find"] = "find"
+    output: ToolOutputDetails
 
 
 async def fn(

@@ -10,8 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from ori.tools.details import EditDetails
-from ori.types.tools import ToolDefinition, ToolResult
+from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
 from ori.tools.support.paths import resolve_to_cwd
 
 UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202F\u205F\u3000]")
@@ -30,6 +29,13 @@ async def fn(path: str, edits: list[dict[str, str]], *, cwd: Path) -> ToolResult
     replacements = _parse_edits(edits)
     result = await _execute(resolved_path, replacements, path)
     return _build_result(result, path)
+
+
+class EditDetails(ToolDetails):
+    """File edit metadata for UI and persistence."""
+
+    type: Literal["edit"] = "edit"
+    diff: str
 
 
 class EditReplacement(BaseModel):

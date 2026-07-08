@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 import ori.tools.edit as edit
-from ori.tools.details import EditDetails
+from ori.tools.edit import EditDetails
 from ori.types.tools import ToolResult, ToolTextContent
 
 

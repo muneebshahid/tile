@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 import ori.tools.bash as bash
-from ori.tools.details import BashDetails
+from ori.tools.bash import BashDetails
 from ori.types.tools import ToolResult, ToolTextContent
 from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from ori.tools.support.truncation import OUTPUT_LINE_LIMIT

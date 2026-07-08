@@ -8,7 +8,7 @@ import pytest
 
 import ori.tools.read as read
 import ori.tools.support.truncation as truncation
-from ori.tools.details import ReadDetails
+from ori.tools.read import ReadDetails
 from ori.types.tools import ToolImageContent, ToolResult, ToolTextContent
 
 

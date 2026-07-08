@@ -5,22 +5,14 @@ from pathlib import Path
 from typing import cast
 
 from ori.types.tools import ToolDefinition, ToolFunction
-from ori.tools.bash import tool as bash_tool
-from ori.tools.details import (
-    BashDetails,
-    EditDetails,
-    FindDetails,
-    GrepDetails,
-    LsDetails,
-    ReadDetails,
-    ToolOutputDetails,
-)
-from ori.tools.edit import tool as edit_tool
-from ori.tools.find import tool as find_tool
-from ori.tools.grep import tool as grep_tool
-from ori.tools.ls import tool as ls_tool
+from ori.tool_truncation import ToolOutputDetails
+from ori.tools.bash import BashDetails, tool as bash_tool
+from ori.tools.edit import EditDetails, tool as edit_tool
+from ori.tools.find import FindDetails, tool as find_tool
+from ori.tools.grep import GrepDetails, tool as grep_tool
+from ori.tools.ls import LsDetails, tool as ls_tool
 from ori.tools.support.paths import normalize_cwd
-from ori.tools.read import tool as read_tool
+from ori.tools.read import ReadDetails, tool as read_tool
 from ori.tools.write import tool as write_tool
 
 __all__ = [

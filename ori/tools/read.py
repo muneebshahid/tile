@@ -6,11 +6,12 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from ori.tools.details import ReadDetails, ToolOutputDetails
 from ori.types.tools import (
     ImageMimeType,
     ToolDefinition,
+    ToolDetails,
     ToolImageContent,
     ToolResult,
 )
@@ -28,12 +29,19 @@ from ori.tools.support.truncation import (
     format_size,
     truncate_head,
 )
-from ori.tool_truncation import Truncation
+from ori.tool_truncation import ToolOutputDetails, Truncation
 
-UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202F\u205F\u3000]")
+UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202f\u205F\u3000]")
 NARROW_NO_BREAK_SPACE = "\u202f"
 IMAGE_TYPE_SNIFF_BYTES = 4100
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+
+
+class ReadDetails(ToolDetails):
+    """File read metadata for UI and persistence."""
+
+    type: Literal["read"] = "read"
+    output: ToolOutputDetails
 
 
 @dataclass(frozen=True)
