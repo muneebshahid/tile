@@ -19,7 +19,7 @@ from tile.types.stream_events import TextBlock, ToolCallBlock
 from tile.types.tools import ToolDefinition, ToolTextContent
 from tile.agent import run_agent
 from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
-from tile.prompt import PROMPT
+from tile.prompt import DEFAULT_INSTRUCTIONS
 from tile.tool_executor import ToolExecutor
 from tile.events import AgentEvent, MessageEndEvent, StreamFn, ToolExecutionEndEvent
 
@@ -168,7 +168,8 @@ class AgentRuntime:
         model: str,
         history_store: HistoryStore | None = None,
         tools: Sequence[ToolDefinition] = (),
-        system_prompt: str = PROMPT,
+        instructions: str = DEFAULT_INSTRUCTIONS,
+        auto_mode: bool = True,
         cwd: Path | str | None = None,
     ) -> None:
         """Create a runtime with shared agent dependencies."""
@@ -179,7 +180,8 @@ class AgentRuntime:
             history_store if history_store is not None else InMemoryHistoryStore()
         )
         self._tool_executor = ToolExecutor(tools)
-        self._system_prompt = system_prompt
+        self._instructions = instructions
+        self._auto_mode = auto_mode
         self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
         self._active_runs: set[Run] = set()
@@ -259,7 +261,8 @@ class AgentRuntime:
             stream_fn=self._stream_fn,
             model=self._model,
             tool_executor=self._tool_executor,
-            system_prompt=self._system_prompt,
+            instructions=self._instructions,
+            auto_mode=self._auto_mode,
             cwd=self._cwd,
         ):
             self._persist_stable_event(session_id, event)
