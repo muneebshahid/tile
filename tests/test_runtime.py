@@ -47,6 +47,7 @@ from tests.support.conversation_assertions import (
     expect_tool_result_turn,
     expect_user_message,
 )
+from tests.support.tool_definitions import city_tool
 
 
 def _collect_prompt_events(
@@ -130,16 +131,10 @@ def _sample_tools() -> list[ToolDefinition]:
 def _weather_tool(fn: ToolFunction) -> ToolDefinition:
     """Build the deterministic weather tool around one implementation."""
 
-    return ToolDefinition(
-        name="get_weather",
-        description="Return a deterministic weather report.",
-        input_schema={
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-            "additionalProperties": False,
-        },
-        fn=fn,
+    return city_tool(
+        "get_weather",
+        "Return a deterministic weather report.",
+        fn,
     )
 
 
@@ -159,16 +154,10 @@ async def _raise_weather_error(city: str) -> ToolResult:
 def _failing_tool() -> ToolDefinition:
     """Build a deterministic failing tool definition for runtime tests."""
 
-    return ToolDefinition(
-        name="fail_weather",
-        description="Raise a deterministic weather failure.",
-        input_schema={
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-            "additionalProperties": False,
-        },
-        fn=_raise_weather_error,
+    return city_tool(
+        "fail_weather",
+        "Raise a deterministic weather failure.",
+        _raise_weather_error,
     )
 
 

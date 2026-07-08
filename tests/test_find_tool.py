@@ -9,13 +9,14 @@ import ori.tools.support.executables as executables
 import ori.tools.find as find
 import ori.tools.support.truncation as truncation
 from ori.tools.find import FindDetails
-from ori.types.tools import ToolResult, ToolTextContent
+from ori.types.tools import ToolResult
 from tests.support.command_mocks import (
     captured_args,
     captured_cwd,
     executable_lookup,
     no_executable,
 )
+from tests.support.tool_results import tool_text
 
 
 def test_find_schema_requires_only_pattern() -> None:
@@ -71,7 +72,7 @@ async def test_fn_uses_default_file_search_flags(
     execution.return_value = "./ori/tools/find.py\n"
 
     tool_result = await find.fn(pattern="*.py", cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "ori/tools/find.py"
     assert tool_result.details is None
@@ -102,7 +103,7 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
 
     execution.return_value = "./ori/tools/find.py\n"
 
-    result = _text(await find.fn(pattern="*.py", path="src", cwd=tmp_path))
+    result = tool_text(await find.fn(pattern="*.py", path="src", cwd=tmp_path))
 
     assert result == "ori/tools/find.py"
     assert captured_args(execution)[-1] == "src"
@@ -118,7 +119,7 @@ async def test_fn_uses_full_path_for_path_patterns(
 
     execution.return_value = "./ori/tools/find.py\n"
 
-    result = _text(
+    result = tool_text(
         await find.fn(pattern="ori/**/*.py", path=".", limit=25, cwd=Path.cwd())
     )
 
@@ -146,7 +147,7 @@ async def test_fn_normalizes_root_relative_full_path_pattern(
 
     execution.return_value = "./ori/tools/find.py\n"
 
-    result = _text(
+    result = tool_text(
         await find.fn(pattern="/tools/*.py", path=".", limit=25, cwd=Path.cwd())
     )
 
@@ -163,7 +164,7 @@ async def test_fn_preserves_prefixed_full_path_pattern(
 
     execution.return_value = "./ori/tools/find.py\n"
 
-    result = _text(
+    result = tool_text(
         await find.fn(pattern="**/tools/*.py", path=".", limit=25, cwd=Path.cwd())
     )
 
@@ -178,7 +179,7 @@ async def test_fn_clamps_limit_to_one(execution: AsyncMock) -> None:
 
     execution.return_value = "./a.py\n./b.py\n"
 
-    result = _text(await find.fn(pattern="*.py", limit=0, cwd=Path.cwd()))
+    result = tool_text(await find.fn(pattern="*.py", limit=0, cwd=Path.cwd()))
 
     assert (
         result
@@ -197,7 +198,7 @@ async def test_fn_returns_no_matches_when_fd_output_is_empty(
     execution.return_value = ""
 
     tool_result = await find.fn(pattern="*.missing", cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "No files found matching pattern"
     assert tool_result.details is None
@@ -224,7 +225,7 @@ async def test_fn_normalizes_paths_and_reports_result_limit(
     )
 
     tool_result = await find.fn(pattern="*.py", limit=2, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == (
         "ori/tools/find.py\ntests/test_find_tool.py\n\n"
@@ -248,7 +249,7 @@ async def test_fn_reports_result_limit_when_result_boundary_is_first(
     execution.return_value = "./a.py\n./b.py\n"
 
     tool_result = await find.fn(pattern="*.py", limit=1, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == (
         "a.py\n\n[1 results limit reached. Use limit=2 for more, or refine pattern]"
@@ -268,7 +269,7 @@ async def test_fn_reports_byte_limit(execution: AsyncMock) -> None:
     execution.return_value = f"{stdout}\n"
 
     tool_result = await find.fn(pattern="*.py", limit=1000, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
     notice = "\n\n[50.0KB limit reached]"
     body = result.removesuffix(notice)
 
@@ -290,19 +291,10 @@ async def test_fn_reports_byte_limit_when_byte_boundary_is_first(
     stdout = "\n".join(f"./{index:03d}-{'x' * 196}.py" for index in range(300))
     execution.return_value = f"{stdout}\n"
 
-    result = _text(await find.fn(pattern="*.py", limit=260, cwd=Path.cwd()))
+    result = tool_text(await find.fn(pattern="*.py", limit=260, cwd=Path.cwd()))
 
     assert result.endswith("\n\n[50.0KB limit reached]")
     assert "results limit reached" not in result
-
-
-def _text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text
 
 
 def _find_details(result: ToolResult) -> FindDetails:

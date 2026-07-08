@@ -11,13 +11,14 @@ import ori.tools.support.executables as executables
 import ori.tools.grep as grep
 import ori.tools.support.truncation as truncation
 from ori.tools.grep import GrepDetails
-from ori.types.tools import ToolResult, ToolTextContent
+from ori.types.tools import ToolResult
 from tests.support.command_mocks import (
     captured_args,
     captured_cwd,
     executable_lookup,
     no_executable,
 )
+from tests.support.tool_results import tool_text
 
 
 def test_schema_requires_only_pattern() -> None:
@@ -124,7 +125,7 @@ async def test_fn_returns_results_when_command_is_available(
     execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
     tool_result = await grep.fn(pattern="needle", cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "example.txt:2: needle line"
     assert tool_result.details is None
@@ -144,7 +145,7 @@ async def test_fn_returns_multiple_result_lines(
         ]
     )
 
-    result = _text(await grep.fn(pattern="needle", cwd=Path.cwd()))
+    result = tool_text(await grep.fn(pattern="needle", cwd=Path.cwd()))
 
     assert result == "one.txt:1: needle one\ntwo.txt:2: needle two"
 
@@ -159,7 +160,7 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
 
     execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
-    result = _text(await grep.fn(pattern="needle", path="src", cwd=tmp_path))
+    result = tool_text(await grep.fn(pattern="needle", path="src", cwd=tmp_path))
 
     assert result == "example.txt:2: needle line"
     assert captured_args(execution)[-1] == "src"
@@ -180,7 +181,7 @@ async def test_fn_reports_match_limit_in_details(execution: AsyncMock) -> None:
 
     tool_result = await grep.fn(pattern="needle", limit=1, cwd=Path.cwd())
 
-    assert _text(tool_result).endswith(
+    assert tool_text(tool_result).endswith(
         "\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"
     )
     details = _grep_details(tool_result)
@@ -200,7 +201,7 @@ async def test_fn_reports_byte_truncation_in_details(execution: AsyncMock) -> No
 
     tool_result = await grep.fn(pattern="needle", limit=500, cwd=Path.cwd())
 
-    assert _text(tool_result).endswith("\n\n[50.0KB limit reached]")
+    assert tool_text(tool_result).endswith("\n\n[50.0KB limit reached]")
     details = _grep_details(tool_result)
     assert details.match_limit_reached is None
     assert details.lines_truncated is False
@@ -219,7 +220,7 @@ async def test_fn_reports_line_truncation_in_details(execution: AsyncMock) -> No
 
     tool_result = await grep.fn(pattern="needle", cwd=Path.cwd())
 
-    assert _text(tool_result).endswith(
+    assert tool_text(tool_result).endswith(
         "\n\n[Some lines truncated to 500 chars. Use read tool to see full lines]"
     )
     details = _grep_details(tool_result)
@@ -327,7 +328,7 @@ def test_build_result_returns_plain_text() -> None:
         limit=100,
     )
 
-    assert _text(result) == "\n".join(
+    assert tool_text(result) == "\n".join(
         [
             "example.txt-1- before",
             "example.txt:2: needle line",
@@ -349,7 +350,7 @@ def test_build_result_reports_truncation() -> None:
         limit=1,
     )
 
-    assert _text(result) == (
+    assert tool_text(result) == (
         "example.txt:1: first\n\n"
         "[1 matches limit reached. Use limit=2 for more, or refine pattern]"
     )
@@ -366,7 +367,7 @@ def test_build_result_reports_byte_limit() -> None:
         limit=500,
     )
     notice = "\n\n[50.0KB limit reached]"
-    text = _text(result)
+    text = tool_text(result)
     body = text.removesuffix(notice)
 
     assert text.endswith(notice)
@@ -381,7 +382,7 @@ def test_build_result_reports_line_limit() -> None:
         limit=100,
     )
 
-    assert _text(result) == (
+    assert tool_text(result) == (
         f"example.txt:1: {'x' * 500}... [truncated]\n\n"
         "[Some lines truncated to 500 chars. Use read tool to see full lines]"
     )
@@ -398,7 +399,7 @@ def test_build_result_combines_truncation_notices() -> None:
         limit=100,
     )
 
-    assert _text(result).endswith(
+    assert tool_text(result).endswith(
         "\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern. "
         "50.0KB limit reached. "
         "Some lines truncated to 500 chars. Use read tool to see full lines]"
@@ -423,15 +424,6 @@ def _event(
             },
         }
     )
-
-
-def _text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text
 
 
 def _grep_details(result: ToolResult) -> GrepDetails:

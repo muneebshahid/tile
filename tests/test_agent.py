@@ -53,7 +53,6 @@ from ori.tool_truncation import ToolOutputDetails
 from ori.types.tools import (
     ToolDefinition,
     ToolResult,
-    ToolTextContent,
 )
 from tests.support.agent_streams import (
     ProviderStreamMock,
@@ -71,6 +70,8 @@ from tests.support.conversation_assertions import (
     expect_user_message,
 )
 from tests.support.stream_assertions import expect_stream_event
+from tests.support.tool_definitions import city_tool
+from tests.support.tool_results import tool_text
 
 TEvent = TypeVar("TEvent", bound=AgentEvent)
 
@@ -123,33 +124,14 @@ def _expect_event_type(event: AgentEvent, event_type: type[TEvent]) -> TEvent:
     return event
 
 
-def _tool_text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text
-
-
 def _sample_tools() -> list[ToolDefinition]:
     """Build the deterministic tool registry used by agent tests."""
 
     return [
-        ToolDefinition(
-            name="get_weather",
-            description="Return a simple weather report for a city.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                    }
-                },
-                "required": ["city"],
-                "additionalProperties": False,
-            },
-            fn=_get_weather,
+        city_tool(
+            "get_weather",
+            "Return a simple weather report for a city.",
+            _get_weather,
         )
     ]
 
@@ -413,7 +395,7 @@ def test_agent_run_emits_tool_execution_outcome_for_tool_use_loop() -> None:
     tool_result_turn = tool_execution_outcome.tool_result_turn
     assert tool_result_turn.call_id == "call_123"
     assert tool_result_turn.tool_name == "get_weather"
-    assert _tool_text(tool_execution_outcome.result) == (
+    assert tool_text(tool_execution_outcome.result) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
     assert tool_result_turn.content == tool_execution_outcome.result.content
@@ -492,7 +474,7 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     )
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    assert _tool_text(tool_execution_end.outcome.result) == (
+    assert tool_text(tool_execution_end.outcome.result) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
     assert tool_execution_end.outcome.tool_result_turn.is_error is False
@@ -553,16 +535,10 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
 def test_agent_run_continues_after_tool_execution_error() -> None:
     """Return error tool results to the model and continue the run."""
 
-    failing_tool = ToolDefinition(
-        name="fail_weather",
-        description="Raise a deterministic weather failure.",
-        input_schema={
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"],
-            "additionalProperties": False,
-        },
-        fn=_raise_tool_error,
+    failing_tool = city_tool(
+        "fail_weather",
+        "Raise a deterministic weather failure.",
+        _raise_tool_error,
     )
     provider = ProviderStreamMock(
         [
@@ -590,7 +566,7 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
     assert tool_execution_end.outcome.tool_result_turn.is_error is True
-    assert _tool_text(tool_execution_end.outcome.result) == "boom"
+    assert tool_text(tool_execution_end.outcome.result) == "boom"
     assert tool_execution_end.outcome.tool_result_turn.tool_name == "fail_weather"
 
     follow_up_request_history = provider.history(1)

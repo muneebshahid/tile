@@ -20,7 +20,11 @@ from ori.tools.support.image_processing import (
     ProcessedImage,
     process_image,
 )
-from ori.tools.support.paths import resolve_to_cwd
+from ori.tools.support.paths import (
+    normalize_at_prefix,
+    normalize_unicode_spaces,
+    resolve_to_cwd,
+)
 from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT,
     OUTPUT_BYTE_LIMIT_LABEL,
@@ -31,7 +35,6 @@ from ori.tools.support.truncation import (
 )
 from ori.tool_truncation import ToolOutputDetails, Truncation
 
-UNICODE_SPACES = re.compile(r"[\u00A0\u2000-\u200A\u202f\u205F\u3000]")
 NARROW_NO_BREAK_SPACE = "\u202f"
 IMAGE_TYPE_SNIFF_BYTES = 4100
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -136,8 +139,8 @@ def _build_details(truncation: Truncation) -> ReadDetails | None:
 def _resolve_path(path: str, cwd: Path) -> Path:
     """Resolve a path with forgiving user-input path variants."""
 
-    normalized_path = _normalize_unicode_spaces(_normalize_at_prefix(path))
-    resolved = _resolve_to_cwd(normalized_path, cwd)
+    normalized_path = normalize_unicode_spaces(normalize_at_prefix(path))
+    resolved = resolve_to_cwd(normalized_path, cwd)
     return _existing_path_variant(resolved)
 
 
@@ -239,26 +242,6 @@ def _is_webp(content: bytes) -> bool:
     """Return whether bytes look like a WEBP image."""
 
     return len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
-
-
-def _normalize_at_prefix(path: str) -> str:
-    """Strip a leading at sign used when users paste referenced paths."""
-
-    if path.startswith("@"):
-        return path[1:]
-    return path
-
-
-def _normalize_unicode_spaces(path: str) -> str:
-    """Normalize uncommon Unicode spaces to ordinary spaces."""
-
-    return UNICODE_SPACES.sub(" ", path)
-
-
-def _resolve_to_cwd(path: str, cwd: Path) -> Path:
-    """Resolve relative paths against the current working directory."""
-
-    return resolve_to_cwd(path, cwd)
 
 
 def _existing_path_variant(path: Path) -> Path:

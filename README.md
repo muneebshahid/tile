@@ -14,7 +14,7 @@ A small Python-native runtime for tool-using agent sessions.
 - **Explicit Contracts**: Swap providers, tools, event handlers, and serializers without modifying core agent logic
 - **Minimal Core**: Only what you need—everything else is optional
 - **Async First**: Built on Python async/await for non-blocking I/O
-- **Type Safe**: Full Pydantic integration with mypy support
+- **Type Safe**: Full Pydantic integration with ty support
 - **Streaming Support**: Real-time structured runtime events
 - **Tool Execution**: Pluggable tool definitions and execution strategies
 - **Reasoning**: Extensible support for extended thinking workflows

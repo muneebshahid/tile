@@ -42,6 +42,7 @@ from tests.support.stream_assertions import (
     expect_stream_event as _expect_event_type,
     expect_text_block as _expect_text_block,
 )
+from tests.support.tool_definitions import city_tool
 
 
 def _collect_events(
@@ -66,21 +67,11 @@ def _collect_events(
 
 def _sample_tools() -> list[ToolDefinition]:
     return [
-        ToolDefinition(
-            name="get_weather",
-            description="Return a simple weather report for a city.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The city to look up.",
-                    }
-                },
-                "required": ["city"],
-                "additionalProperties": False,
-            },
-            fn=_sample_tool_fn,
+        city_tool(
+            "get_weather",
+            "Return a simple weather report for a city.",
+            _sample_tool_fn,
+            city_description="The city to look up.",
         )
     ]
 

@@ -12,7 +12,8 @@ from ori.types.stream_events import (
     TextBlock,
     ToolCallBlock,
 )
-from ori.types.tools import ToolDefinition, ToolImageContent, ToolResult
+from ori.types.tools import ToolImageContent, ToolResult
+from tests.support.tool_definitions import city_tool
 from openai.types.responses.response_input_param import ResponseInputParam
 
 
@@ -151,21 +152,11 @@ def test_serialize_history_items_replays_tool_result_images() -> None:
 
 def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
     tools = [
-        ToolDefinition(
-            name="get_weather",
-            description="Return the current weather for a city.",
-            input_schema={
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The city to look up.",
-                    }
-                },
-                "required": ["city"],
-                "additionalProperties": False,
-            },
-            fn=_sample_tool_fn,
+        city_tool(
+            "get_weather",
+            "Return the current weather for a city.",
+            _sample_tool_fn,
+            city_description="The city to look up.",
         )
     ]
 

@@ -8,7 +8,8 @@ import pytest
 import ori.tools.ls as ls
 import ori.tools.support.truncation as truncation
 from ori.tools.ls import LsDetails
-from ori.types.tools import ToolResult, ToolTextContent
+from ori.types.tools import ToolResult
+from tests.support.tool_results import tool_text
 
 
 def test_ls_schema_requires_no_arguments() -> None:
@@ -83,7 +84,7 @@ async def test_ls_returns_all_directory_entries(populated_directory: Path) -> No
     """Return every file and directory name when the result is under the limit."""
 
     tool_result = await ls.fn(path=str(populated_directory), limit=10, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result.splitlines() == ["README.md", "src/", "uv.lock"]
     assert tool_result.details is None
@@ -103,7 +104,7 @@ async def test_ls_resolves_relative_path_against_supplied_cwd(
     _create_file(project / "sample.txt")
     monkeypatch.chdir(other)
 
-    result = _text(await ls.fn(path=".", limit=10, cwd=project))
+    result = tool_text(await ls.fn(path=".", limit=10, cwd=project))
 
     assert result == "sample.txt"
 
@@ -115,7 +116,7 @@ async def test_ls_uses_cwd_when_path_is_omitted(tmp_path: Path) -> None:
     _create_file(tmp_path / "sample.txt")
 
     tool_result = await ls.fn(limit=10, cwd=tmp_path)
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "sample.txt"
     assert tool_result.details is None
@@ -128,7 +129,7 @@ async def test_ls_respects_limit_after_sorting_entries(
     """Return only the first sorted entries up to the requested limit."""
 
     tool_result = await ls.fn(path=str(unsorted_directory), limit=2, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result.splitlines() == [
         "a.txt",
@@ -149,7 +150,9 @@ async def test_ls_respects_limit_after_sorting_entries(
 async def test_ls_clamps_limit_to_one(unsorted_directory: Path) -> None:
     """Keep entry limits positive when callers pass a low limit."""
 
-    result = _text(await ls.fn(path=str(unsorted_directory), limit=0, cwd=Path.cwd()))
+    result = tool_text(
+        await ls.fn(path=str(unsorted_directory), limit=0, cwd=Path.cwd())
+    )
 
     assert result.splitlines() == [
         "a.txt",
@@ -165,7 +168,7 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
     path = long_directory(270)
 
     tool_result = await ls.fn(path=str(path), limit=500, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
     notice = "\n\n[50.0KB limit reached. Directory has 270 entries]"
     body = result.removesuffix(notice)
 
@@ -189,7 +192,7 @@ async def test_ls_reports_first_truncation_boundary(
 
     path = long_directory(300)
 
-    result = _text(await ls.fn(path=str(path), limit=260, cwd=Path.cwd()))
+    result = tool_text(await ls.fn(path=str(path), limit=260, cwd=Path.cwd()))
 
     assert result.endswith("\n\n[50.0KB limit reached. Directory has 300 entries]")
 
@@ -200,7 +203,7 @@ async def test_ls_appends_slash_to_directories(
 ) -> None:
     """Mark directory entries with a trailing slash and leave files unchanged."""
 
-    result = _text(
+    result = tool_text(
         await ls.fn(
             path=str(directory_with_child_directory),
             limit=10,
@@ -217,7 +220,7 @@ async def test_ls_includes_dotfiles_and_dot_directories(
 ) -> None:
     """Include hidden files and hidden directories in directory listings."""
 
-    result = _text(
+    result = tool_text(
         await ls.fn(path=str(hidden_entries_directory), limit=10, cwd=Path.cwd())
     )
 
@@ -230,7 +233,7 @@ async def test_ls_sorts_entries_case_insensitively(
 ) -> None:
     """Sort entries alphabetically without separating upper and lower case names."""
 
-    result = _text(
+    result = tool_text(
         await ls.fn(path=str(mixed_case_directory), limit=10, cwd=Path.cwd())
     )
 
@@ -242,7 +245,7 @@ async def test_ls_reports_empty_directory(tmp_path: Path) -> None:
     """Return an explicit marker for empty directories."""
 
     tool_result = await ls.fn(path=str(tmp_path), limit=10, cwd=Path.cwd())
-    result = _text(tool_result)
+    result = tool_text(tool_result)
 
     assert result == "(empty directory)"
     assert tool_result.details is None
@@ -284,15 +287,6 @@ def _create_long_file_names(path: Path, count: int) -> None:
 
     for index in range(count):
         _create_file(path / f"{index:03d}-{'x' * 196}.txt")
-
-
-def _text(result: ToolResult) -> str:
-    """Return the single text block from a tool result."""
-
-    assert len(result.content) == 1
-    content = result.content[0]
-    assert isinstance(content, ToolTextContent)
-    return content.text
 
 
 def _ls_details(result: ToolResult) -> LsDetails:

@@ -67,8 +67,7 @@ class ToolResult(BaseModel):
         return cls(content=[ToolTextContent(text=text), image], details=details)
 
 
-ToolFunctionResult: TypeAlias = ToolResult
-ToolFunction: TypeAlias = Callable[..., Awaitable[ToolFunctionResult]]
+ToolFunction: TypeAlias = Callable[..., Awaitable[ToolResult]]
 
 
 class ToolDefinition(BaseModel):
