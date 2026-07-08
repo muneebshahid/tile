@@ -5,11 +5,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import ori.tools.support.executables as executables
-import ori.tools.find as find
-import ori.tools.support.truncation as truncation
-from ori.tools.find import FindDetails
-from ori.types.tools import ToolResult
+import tile.tools.support.executables as executables
+import tile.tools.find as find
+import tile.tools.support.truncation as truncation
+from tile.tools.find import FindDetails
+from tile.types.tools import ToolResult
 from tests.support.command_mocks import (
     captured_args,
     captured_cwd,
@@ -69,12 +69,12 @@ async def test_fn_uses_default_file_search_flags(
 ) -> None:
     """Build default fd arguments and return formatted file path results."""
 
-    execution.return_value = "./ori/tools/find.py\n"
+    execution.return_value = "./tile/tools/find.py\n"
 
     tool_result = await find.fn(pattern="*.py", cwd=Path.cwd())
     result = tool_text(tool_result)
 
-    assert result == "ori/tools/find.py"
+    assert result == "tile/tools/find.py"
     assert tool_result.details is None
     execution.assert_awaited_once_with(
         "/usr/bin/fd",
@@ -101,11 +101,11 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
 ) -> None:
     """Resolve relative search roots against the supplied tool cwd."""
 
-    execution.return_value = "./ori/tools/find.py\n"
+    execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(await find.fn(pattern="*.py", path="src", cwd=tmp_path))
 
-    assert result == "ori/tools/find.py"
+    assert result == "tile/tools/find.py"
     assert captured_args(execution)[-1] == "src"
     assert captured_cwd(execution) == tmp_path
 
@@ -117,13 +117,13 @@ async def test_fn_uses_full_path_for_path_patterns(
 ) -> None:
     """Match path-shaped glob patterns against full candidate paths."""
 
-    execution.return_value = "./ori/tools/find.py\n"
+    execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(
-        await find.fn(pattern="ori/**/*.py", path=".", limit=25, cwd=Path.cwd())
+        await find.fn(pattern="tile/**/*.py", path=".", limit=25, cwd=Path.cwd())
     )
 
-    assert result == "ori/tools/find.py"
+    assert result == "tile/tools/find.py"
     assert captured_args(execution) == [
         "--glob",
         "--color=never",
@@ -133,7 +133,7 @@ async def test_fn_uses_full_path_for_path_patterns(
         "26",
         "--full-path",
         "--",
-        "**/ori/**/*.py",
+        "**/tile/**/*.py",
         ".",
     ]
 
@@ -145,13 +145,13 @@ async def test_fn_normalizes_root_relative_full_path_pattern(
 ) -> None:
     """Treat leading-slash glob patterns as search-root-relative paths."""
 
-    execution.return_value = "./ori/tools/find.py\n"
+    execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(
         await find.fn(pattern="/tools/*.py", path=".", limit=25, cwd=Path.cwd())
     )
 
-    assert result == "ori/tools/find.py"
+    assert result == "tile/tools/find.py"
     assert captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
 
 
@@ -162,13 +162,13 @@ async def test_fn_preserves_prefixed_full_path_pattern(
 ) -> None:
     """Do not double-prefix full-path glob patterns."""
 
-    execution.return_value = "./ori/tools/find.py\n"
+    execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(
         await find.fn(pattern="**/tools/*.py", path=".", limit=25, cwd=Path.cwd())
     )
 
-    assert result == "ori/tools/find.py"
+    assert result == "tile/tools/find.py"
     assert captured_args(execution)[-3:] == ["--", "**/tools/*.py", "."]
 
 
@@ -221,14 +221,14 @@ async def test_fn_normalizes_paths_and_reports_result_limit(
     """Normalize fd output paths and report when results reach the limit."""
 
     execution.return_value = (
-        ".\\ori\\tools\\find.py\n./tests/test_find_tool.py\n./extra.py\n"
+        ".\\tile\\tools\\find.py\n./tests/test_find_tool.py\n./extra.py\n"
     )
 
     tool_result = await find.fn(pattern="*.py", limit=2, cwd=Path.cwd())
     result = tool_text(tool_result)
 
     assert result == (
-        "ori/tools/find.py\ntests/test_find_tool.py\n\n"
+        "tile/tools/find.py\ntests/test_find_tool.py\n\n"
         "[2 results limit reached. Use limit=4 for more, or refine pattern]"
     )
     details = _find_details(tool_result)

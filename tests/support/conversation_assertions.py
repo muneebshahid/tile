@@ -1,6 +1,6 @@
 """Shared assertions for provider-neutral conversation history tests."""
 
-from ori.types.conversation import (
+from tile.types.conversation import (
     AssistantTurn,
     ConversationItem,
     ToolResultTurn,

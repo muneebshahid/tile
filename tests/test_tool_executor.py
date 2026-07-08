@@ -3,8 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from ori.tool_executor import ToolExecutor
-from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
+from tile.tool_executor import ToolExecutor
+from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
 from tests.support.tool_definitions import city_tool
 from tests.support.tool_results import tool_text
 

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-import ori.tools.edit as edit
-from ori.tools.edit import EditDetails
-from ori.types.tools import ToolResult
+import tile.tools.edit as edit
+from tile.tools.edit import EditDetails
+from tile.types.tools import ToolResult
 from tests.support.tool_results import tool_text
 
 

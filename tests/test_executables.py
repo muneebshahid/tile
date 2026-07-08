@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import ori.tools.support.executables as executables
+import tile.tools.support.executables as executables
 from tests.support.command_mocks import executable_lookup, no_executable
 
 

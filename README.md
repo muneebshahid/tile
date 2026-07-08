@@ -1,4 +1,4 @@
-# Ori
+# Tile
 
 > ⚠️ **Work in Progress** — This project is under active development and APIs may change.
 
@@ -6,7 +6,7 @@ A small Python-native runtime for tool-using agent sessions.
 
 ## Overview
 
-**Ori** is a headless agent session runtime for Python. Providers, tools, events, and serialization are explicit runtime contracts. Use it as an embedded library or as the core of a service without adopting a broad application framework.
+**Tile** is a headless agent session runtime for Python. Providers, tools, events, and serialization are explicit runtime contracts. Use it as an embedded library or as the core of a service without adopting a broad application framework.
 
 ## Features
 
@@ -22,7 +22,7 @@ A small Python-native runtime for tool-using agent sessions.
 ## Architecture
 
 ```
-ori/
+tile/
 ├── history/         # Session metadata and conversation history stores
 ├── providers/       # Provider integrations
 │   └── openai/      # OpenAI provider implementation
@@ -50,19 +50,19 @@ printf "Inspect the current repository" | uv run python -m examples.local_runner
 ## Public API
 
 Use the package facades for application code. Deep module paths are internal and
-may move as Ori grows.
+may move as Tile grows.
 
 ```python
-from ori import AgentRuntime, HistoryStore, InMemoryHistoryStore, Run
-from ori.events import AgentEvent, MessageEndEvent, StreamFn
-from ori.providers.openai import create_stream_api
-from ori.types import ToolDefinition, ToolResult
+from tile import AgentRuntime, HistoryStore, InMemoryHistoryStore, Run
+from tile.events import AgentEvent, MessageEndEvent, StreamFn
+from tile.providers.openai import create_stream_api
+from tile.types import ToolDefinition, ToolResult
 ```
 
-`ori` exposes the runtime, session, run-handle, history-store, and
-runtime-error contracts. `ori.events` exposes structured runtime events
-yielded by `Run.events()`. `ori.types` exposes provider-neutral conversation,
-stream, and tool contracts. `ori.providers.openai` exposes
+`tile` exposes the runtime, session, run-handle, history-store, and
+runtime-error contracts. `tile.events` exposes structured runtime events
+yielded by `Run.events()`. `tile.types` exposes provider-neutral conversation,
+stream, and tool contracts. `tile.providers.openai` exposes
 `create_stream_api`, which binds a caller-constructed `AsyncOpenAI` client and
 optional provider reasoning options to the runtime's stream-function contract:
 `create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.
@@ -80,10 +80,10 @@ status = await run.wait()  # "completed" | "failed" | "aborted"
 
 ## Security Posture
 
-Ori's built-in tools are deliberately unconfined. `bash` executes arbitrary
+Tile's built-in tools are deliberately unconfined. `bash` executes arbitrary
 shell commands with the permissions of the process running the agent, and the
 file tools accept absolute paths — the session working directory is a default,
-not a sandbox. Run Ori only where you would run the model's commands yourself,
+not a sandbox. Run Tile only where you would run the model's commands yourself,
 and use OS-level isolation such as a container or VM when you need a boundary.
 Resource exhaustion from trusted local input is out of scope for now. Tool
 authorization hooks arrive with the runtime hooks release.

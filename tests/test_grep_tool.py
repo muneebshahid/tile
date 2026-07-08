@@ -7,11 +7,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import ori.tools.support.executables as executables
-import ori.tools.grep as grep
-import ori.tools.support.truncation as truncation
-from ori.tools.grep import GrepDetails
-from ori.types.tools import ToolResult
+import tile.tools.support.executables as executables
+import tile.tools.grep as grep
+import tile.tools.support.truncation as truncation
+from tile.tools.grep import GrepDetails
+from tile.types.tools import ToolResult
 from tests.support.command_mocks import (
     captured_args,
     captured_cwd,

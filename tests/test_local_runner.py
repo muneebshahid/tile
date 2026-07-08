@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from ori import RunStatus
-from ori.events import StreamFn
-from ori.history import InMemoryHistoryStore
-from ori.types.conversation import ConversationItem
-from ori.types.tools import ToolTextContent
+from tile import RunStatus
+from tile.events import StreamFn
+from tile.history import InMemoryHistoryStore
+from tile.types.conversation import ConversationItem
+from tile.types.tools import ToolTextContent
 from examples import local_runner
 from examples.local_runner import run_cli, run_prompt
 from tests.support.agent_streams import (

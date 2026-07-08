@@ -2,7 +2,7 @@
 
 from typing import TypeVar
 
-from ori.types.stream_events import (
+from tile.types.stream_events import (
     AssistantBlock,
     ReasoningBlock,
     StreamEvent,

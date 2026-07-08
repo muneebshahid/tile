@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from ori.history import (
+from tile.history import (
     InMemoryHistoryStore,
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from ori.runtime import AgentRuntime, Run, SessionBusyError
-from ori.events import (
+from tile.runtime import AgentRuntime, Run, SessionBusyError
+from tile.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
@@ -22,12 +22,12 @@ from ori.events import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
 )
-from ori.types.conversation import UserMessage
-from ori.types.stream_events import (
+from tile.types.conversation import UserMessage
+from tile.types.stream_events import (
     ProviderStreamEvent,
     TextBlock,
 )
-from ori.types.tools import (
+from tile.types.tools import (
     ToolDefinition,
     ToolFunction,
     ToolResult,

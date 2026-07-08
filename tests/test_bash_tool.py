@@ -6,11 +6,11 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-import ori.tools.bash as bash
-from ori.tools.bash import BashDetails
-from ori.types.tools import ToolResult
-from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
-from ori.tools.support.truncation import OUTPUT_LINE_LIMIT
+import tile.tools.bash as bash
+from tile.tools.bash import BashDetails
+from tile.types.tools import ToolResult
+from tile.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
+from tile.tools.support.truncation import OUTPUT_LINE_LIMIT
 from tests.support.tool_results import tool_text
 
 

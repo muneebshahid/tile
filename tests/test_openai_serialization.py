@@ -1,18 +1,18 @@
 from pydantic import TypeAdapter
 
-from ori.providers.openai.serialization import (
+from tile.providers.openai.serialization import (
     serialize_history_items,
     serialize_response_input,
     serialize_tools,
 )
-from ori.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
-from ori.types.stream_events import (
+from tile.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
+from tile.types.stream_events import (
     ProviderMetadata,
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
 )
-from ori.types.tools import ToolImageContent, ToolResult
+from tile.types.tools import ToolImageContent, ToolResult
 from tests.support.tool_definitions import city_tool
 from openai.types.responses.response_input_param import ResponseInputParam
 

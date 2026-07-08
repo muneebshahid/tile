@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import pytest
 from openai.types.responses import ResponseStreamEvent
 
-from ori.providers.openai.normalized_events import NormalizedEvent, NormalizedEventType
-from ori.providers.openai.sdk_event_adapter import normalize_sdk_events
+from tile.providers.openai.normalized_events import NormalizedEvent, NormalizedEventType
+from tile.providers.openai.sdk_event_adapter import normalize_sdk_events
 from tests.support.openai_response_events import (
     content_part_added_event,
     function_tool_call_added_event,

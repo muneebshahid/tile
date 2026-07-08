@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import ori.tools.write as write
+import tile.tools.write as write
 from tests.support.tool_results import tool_text
 
 

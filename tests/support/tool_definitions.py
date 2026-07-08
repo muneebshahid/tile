@@ -1,6 +1,6 @@
 """Shared tool definition builders for tests."""
 
-from ori.types.tools import JsonObject, ToolDefinition, ToolFunction
+from tile.types.tools import JsonObject, ToolDefinition, ToolFunction
 
 
 def city_tool(

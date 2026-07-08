@@ -17,10 +17,10 @@ from typing import cast
 
 from openai import AsyncOpenAI
 
-from ori.providers.openai.provider import create_stream_api
-from ori.providers.openai.serialization import serialize_history_items
-from ori.types.conversation import UserMessage
-from ori.types.stream_events import (
+from tile.providers.openai.provider import create_stream_api
+from tile.providers.openai.serialization import serialize_history_items
+from tile.types.conversation import UserMessage
+from tile.types.stream_events import (
     ProviderStreamEvent,
     StreamDoneEvent,
     StreamStartEvent,
@@ -28,7 +28,7 @@ from ori.types.stream_events import (
     TextEndEvent,
     TextStartEvent,
 )
-from ori.types.tools import ToolDefinition, ToolResult
+from tile.types.tools import ToolDefinition, ToolResult
 from tests.support.openai_response_events import (
     FakeOpenAIClient,
     build_fake_openai_client,
