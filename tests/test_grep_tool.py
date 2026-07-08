@@ -10,7 +10,8 @@ import pytest
 import ori.tools.support.executables as executables
 import ori.tools.grep as grep
 import ori.tools.support.truncation as truncation
-from ori.types.tools import GrepDetails, ToolResult, ToolTextContent
+from ori.tools.grep import GrepDetails
+from ori.types.tools import ToolResult, ToolTextContent
 from tests.support.command_mocks import (
     captured_args,
     captured_cwd,

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from ori.tool_executor import ToolExecutor
-from ori.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from ori.types.tools import ToolDefinition, ToolDetails, ToolResult, ToolTextContent
 
 
 async def _get_weather(city: str) -> ToolResult:
@@ -119,6 +119,51 @@ async def test_tool_executor_normalizes_tool_exception() -> None:
     assert outcome.tool_result_turn.tool_name == "fail_weather"
     assert outcome.tool_result_turn.is_error is True
     assert _tool_text(outcome.result) == "boom"
+
+
+class _DatabaseDetails(ToolDetails):
+    """User-defined details for a custom database tool."""
+
+    type: str = "database"
+    rows_scanned: int
+
+
+async def _query_database() -> ToolResult:
+    """Return a result carrying user-defined details."""
+
+    return ToolResult.text("2 rows", details=_DatabaseDetails(rows_scanned=2))
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_preserves_user_defined_details() -> None:
+    """Carry and serialize user-defined tool details end to end."""
+
+    tool = ToolDefinition(
+        name="query_database",
+        description="Query a database.",
+        input_schema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+        fn=_query_database,
+    )
+    executor = ToolExecutor([tool])
+
+    outcome = await executor.execute(
+        call_id="call_db",
+        tool_name="query_database",
+        arguments={},
+    )
+
+    details = outcome.result.details
+    assert isinstance(details, _DatabaseDetails)
+    assert details.rows_scanned == 2
+    assert outcome.result.model_dump()["details"] == {
+        "type": "database",
+        "rows_scanned": 2,
+    }
 
 
 @pytest.mark.parametrize("name", ["", "   ", " read", "read ", "\tread\n"])

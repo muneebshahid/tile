@@ -7,7 +7,8 @@ import pytest
 
 import ori.tools.ls as ls
 import ori.tools.support.truncation as truncation
-from ori.types.tools import LsDetails, ToolResult, ToolTextContent
+from ori.tools.ls import LsDetails
+from ori.types.tools import ToolResult, ToolTextContent
 
 
 def test_ls_schema_requires_no_arguments() -> None:

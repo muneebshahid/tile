@@ -5,17 +5,25 @@ import os
 import signal
 import sys
 from pathlib import Path
+from typing import Literal
 
-from ori.types.tools import BashDetails, ToolDefinition, ToolOutputDetails, ToolResult
+from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
 from ori.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from ori.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
     format_size,
 )
-from ori.tool_truncation import Truncation
+from ori.tool_truncation import ToolOutputDetails, Truncation
 
 # Timeout applied when the model omits one, so hung commands cannot wedge a run.
 DEFAULT_TIMEOUT_SECONDS: float = 120
+
+
+class BashDetails(ToolDetails):
+    """Shell command metadata for UI and persistence."""
+
+    type: Literal["bash"] = "bash"
+    output: ToolOutputDetails
 
 
 async def fn(command: str, timeout: float | None = None, *, cwd: Path) -> ToolResult:

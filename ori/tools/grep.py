@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from ori.types.tools import GrepDetails, ToolDefinition, ToolOutputDetails, ToolResult
+from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
 from ori.tools.support.executables import execute, require_executable
 from ori.tools.support.truncation import (
     GREP_LINE_CHARACTER_LIMIT,
@@ -15,7 +15,16 @@ from ori.tools.support.truncation import (
     truncate_head,
     truncate_line,
 )
-from ori.tool_truncation import Truncation
+from ori.tool_truncation import ToolOutputDetails, Truncation
+
+
+class GrepDetails(ToolDetails):
+    """Search metadata for UI and persistence."""
+
+    type: Literal["grep"] = "grep"
+    output: ToolOutputDetails
+    match_limit_reached: int | None = None
+    lines_truncated: bool = False
 
 
 @dataclass(frozen=True)

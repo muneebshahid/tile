@@ -2,13 +2,9 @@
 
 import asyncio
 from pathlib import Path
+from typing import Literal
 
-from ori.types.tools import (
-    LsDetails,
-    ToolDefinition,
-    ToolOutputDetails,
-    ToolResult,
-)
+from ori.types.tools import ToolDefinition, ToolDetails, ToolResult
 
 from ori.tools.support.paths import resolve_to_cwd
 from ori.tools.support.truncation import (
@@ -16,7 +12,14 @@ from ori.tools.support.truncation import (
     append_notice_block,
     truncate_head,
 )
-from ori.tool_truncation import Truncation
+from ori.tool_truncation import ToolOutputDetails, Truncation
+
+
+class LsDetails(ToolDetails):
+    """Directory listing metadata for UI and persistence."""
+
+    type: Literal["ls"] = "ls"
+    output: ToolOutputDetails
 
 
 async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:

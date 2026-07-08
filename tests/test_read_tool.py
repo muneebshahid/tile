@@ -8,7 +8,8 @@ import pytest
 
 import ori.tools.read as read
 import ori.tools.support.truncation as truncation
-from ori.types.tools import ReadDetails, ToolImageContent, ToolResult, ToolTextContent
+from ori.tools.read import ReadDetails
+from ori.types.tools import ToolImageContent, ToolResult, ToolTextContent
 
 
 def test_read_schema_requires_only_path() -> None:

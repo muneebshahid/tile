@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 import ori.tools.edit as edit
-from ori.types.tools import EditDetails, ToolResult, ToolTextContent
+from ori.tools.edit import EditDetails
+from ori.types.tools import ToolResult, ToolTextContent
 
 
 def test_edit_schema_requires_path_and_edits() -> None:

@@ -8,7 +8,8 @@ import pytest
 import ori.tools.support.executables as executables
 import ori.tools.find as find
 import ori.tools.support.truncation as truncation
-from ori.types.tools import FindDetails, ToolResult, ToolTextContent
+from ori.tools.find import FindDetails
+from ori.types.tools import ToolResult, ToolTextContent
 from tests.support.command_mocks import (
     captured_args,
     captured_cwd,
