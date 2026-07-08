@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-import ori.tools.ls as ls
-import ori.tools.support.truncation as truncation
-from ori.tools.ls import LsDetails
-from ori.types.tools import ToolResult
+import tile.tools.ls as ls
+import tile.tools.support.truncation as truncation
+from tile.tools.ls import LsDetails
+from tile.types.tools import ToolResult
 from tests.support.tool_results import tool_text
 
 

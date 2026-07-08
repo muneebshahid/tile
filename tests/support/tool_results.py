@@ -1,6 +1,6 @@
 """Shared helpers for inspecting tool results in tests."""
 
-from ori.types.tools import ToolResult, ToolTextContent
+from tile.types.tools import ToolResult, ToolTextContent
 
 
 def tool_text(result: ToolResult) -> str:

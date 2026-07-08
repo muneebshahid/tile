@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 
-from ori import (
+from tile import (
     AgentRuntime,
     HistoryStore,
     InMemoryHistoryStore,
@@ -12,9 +12,9 @@ from ori import (
     SessionBusyError,
     SessionNotFoundError,
 )
-from ori.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
-from ori.providers.openai import create_stream_api
-from ori.types import (
+from tile.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
+from tile.providers.openai import create_stream_api
+from tile.types import (
     AsyncEventStream,
     ConversationItem,
     ProviderSource,

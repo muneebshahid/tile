@@ -10,7 +10,7 @@ accumulates assistant blocks, and emits provider stream events such as
 import asyncio
 from collections.abc import Sequence
 
-from ori.providers.openai.normalized_events import (
+from tile.providers.openai.normalized_events import (
     CompletedNormalizedEvent,
     CreatedNormalizedEvent,
     FailedNormalizedEvent,
@@ -28,9 +28,9 @@ from ori.providers.openai.normalized_events import (
     ToolCallArgumentsDoneNormalizedEvent,
     ToolCallDoneNormalizedEvent,
 )
-from ori.providers.openai.normalized_events import Phase
-from ori.providers.openai.stream_assembler import assemble_stream
-from ori.types.stream_events import (
+from tile.providers.openai.normalized_events import Phase
+from tile.providers.openai.stream_assembler import assemble_stream
+from tile.types.stream_events import (
     ProviderSource,
     ProviderStreamEvent,
     ReasoningDeltaEvent,
@@ -47,7 +47,7 @@ from ori.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from ori.types.tools import JsonObject
+from tile.types.tools import JsonObject
 from tests.support.async_streams import async_stream
 from tests.support.stream_assertions import (
     expect_metadata_string as _expect_metadata_string,

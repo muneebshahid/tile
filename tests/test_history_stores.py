@@ -8,8 +8,8 @@ from typing import cast
 
 import pytest
 
-from ori import AgentRuntime, Session
-from ori.history import (
+from tile import AgentRuntime, Session
+from tile.history import (
     HistoryStore,
     InMemoryHistoryStore,
     SQLiteHistoryStore,
@@ -17,20 +17,20 @@ from ori.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from ori.types.conversation import (
+from tile.types.conversation import (
     AssistantTurn,
     ConversationItem,
     ToolResultTurn,
     UserMessage,
 )
-from ori.types.stream_events import (
+from tile.types.stream_events import (
     ProviderMetadata,
     ProviderSource,
     ReasoningBlock,
     TextBlock,
     ToolCallBlock,
 )
-from ori.types.tools import ToolImageContent, ToolTextContent
+from tile.types.tools import ToolImageContent, ToolTextContent
 from tests.support.agent_streams import ProviderStreamMock, final_text_stream
 from tests.support.conversation_assertions import (
     expect_assistant_turn,
@@ -259,7 +259,7 @@ def test_history_store_rejects_duplicate_copy_target(
 def test_sqlite_history_store_survives_runtime_restart(tmp_path: Path) -> None:
     """Continue a runtime session from completed SQLite history after restart."""
 
-    database_path = tmp_path / "ori.db"
+    database_path = tmp_path / "tile.db"
     provider = ProviderStreamMock(
         [
             final_text_stream("resp_first", "first answer"),
@@ -297,13 +297,13 @@ def test_sqlite_history_store_survives_runtime_restart(tmp_path: Path) -> None:
 def test_sqlite_history_store_records_schema_version(tmp_path: Path) -> None:
     """Initialize new SQLite history databases with a schema version marker."""
 
-    database_path = tmp_path / "ori.db"
+    database_path = tmp_path / "tile.db"
     store = SQLiteHistoryStore(database_path)
     store.close()
 
     connection = sqlite3.connect(database_path)
     version = connection.execute(
-        "SELECT value FROM ori_meta WHERE key = 'schema_version'"
+        "SELECT value FROM tile_meta WHERE key = 'schema_version'"
     ).fetchone()
     connection.close()
 
@@ -335,10 +335,10 @@ def test_sqlite_history_store_rejects_unknown_schema_version(tmp_path: Path) -> 
     database_path = tmp_path / "future.db"
     connection = sqlite3.connect(database_path)
     connection.execute(
-        "CREATE TABLE ori_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        "CREATE TABLE tile_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
     )
     connection.execute(
-        "INSERT INTO ori_meta (key, value) VALUES ('schema_version', '999')"
+        "INSERT INTO tile_meta (key, value) VALUES ('schema_version', '999')"
     )
     connection.commit()
     connection.close()

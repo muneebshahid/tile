@@ -1,5 +1,5 @@
 [project]
-name = "ori-runtime"
+name = "tile-runtime"
 version = "0.1.0"
 description = "A small Python-native runtime for tool-using agent sessions."
 readme = "README.md"
@@ -31,5 +31,5 @@ requires = ["uv_build>=0.10,<0.11"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-module-name = "ori"
+module-name = "tile"
 module-root = ""

@@ -1,4 +1,4 @@
-"""Example local runner for one headless Ori prompt."""
+"""Example local runner for one headless Tile prompt."""
 
 import asyncio
 import sys
@@ -8,11 +8,11 @@ from typing import TextIO
 
 from openai import AsyncOpenAI
 
-from ori import AgentRuntime, HistoryStore, RunStatus
-from ori.events import AgentEvent, StreamFn
-from ori.providers.openai import create_stream_api
-from ori.tools import build_tools
-from ori.types import ToolDefinition
+from tile import AgentRuntime, HistoryStore, RunStatus
+from tile.events import AgentEvent, StreamFn
+from tile.providers.openai import create_stream_api
+from tile.tools import build_tools
+from tile.types import ToolDefinition
 from examples.settings import settings
 
 

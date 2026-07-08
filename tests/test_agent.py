@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar
 
-from ori.agent import run_agent
-from ori.tool_executor import ToolExecutor
-from ori.events import (
+from tile.agent import run_agent
+from tile.tool_executor import ToolExecutor
+from tile.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
@@ -28,12 +28,12 @@ from ori.events import (
     TurnEndEvent,
     TurnStartEvent,
 )
-from ori.types.conversation import (
+from tile.types.conversation import (
     ConversationItem,
     ToolResultTurn,
     UserMessage,
 )
-from ori.types.stream_events import (
+from tile.types.stream_events import (
     ReasoningBlock,
     ReasoningDeltaEvent,
     ReasoningEndEvent,
@@ -48,9 +48,9 @@ from ori.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from ori.tools.read import ReadDetails
-from ori.tool_truncation import ToolOutputDetails
-from ori.types.tools import (
+from tile.tools.read import ReadDetails
+from tile.tool_truncation import ToolOutputDetails
+from tile.types.tools import (
     ToolDefinition,
     ToolResult,
 )
@@ -262,13 +262,13 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
             empty_stream("resp_done"),
         ]
     )
-    history: list[ConversationItem] = [UserMessage(content="Hello, Ori")]
+    history: list[ConversationItem] = [UserMessage(content="Hello, Tile")]
 
     events = _collect_run_events(history, stream_fn=provider.fn)
 
     message_end = _expect_event_type(events[3], MessageEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
-    assert history == [UserMessage(content="Hello, Ori")]
+    assert history == [UserMessage(content="Hello, Tile")]
     assert message_end.assistant_turn.response_id == "resp_done"
 
 

@@ -5,10 +5,10 @@ from collections.abc import Sequence
 from typing import cast
 from unittest.mock import AsyncMock
 
-from ori.events import StreamFn
-from ori.types.contracts import AsyncEventStream
-from ori.types.conversation import ConversationItem
-from ori.types.stream_events import (
+from tile.events import StreamFn
+from tile.types.contracts import AsyncEventStream
+from tile.types.conversation import ConversationItem
+from tile.types.stream_events import (
     AssistantBlock,
     ProviderMetadata,
     ProviderSource,
@@ -20,7 +20,7 @@ from ori.types.stream_events import (
     TextBlock,
     ToolCallBlock,
 )
-from ori.types.tools import JsonObject, ToolDefinition
+from tile.types.tools import JsonObject, ToolDefinition
 from tests.support.async_streams import async_stream
 
 
