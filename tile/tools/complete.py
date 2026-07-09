@@ -21,7 +21,6 @@ def tool(result: type[BaseModel]) -> ToolDefinition:
     """Build a complete tool that validates results against one schema."""
 
     input_schema = strict_object_schema(result.model_json_schema())
-    _require_all_fields_required(input_schema)
 
     async def complete(**arguments: JsonValue) -> ToolResult:
         """Validate the run's final result against the required schema."""
@@ -62,34 +61,3 @@ def _close_objects(node: JsonValue) -> JsonValue:
     if isinstance(node, list):
         return [_close_objects(item) for item in node]
     return node
-
-
-def _require_all_fields_required(node: JsonValue, path: str = "") -> None:
-    """Reject schemas whose object nodes leave declared properties optional.
-
-    Provider strict modes demand that every property appears in ``required``.
-    Pydantic omits fields that carry defaults, so a result model with a
-    default would be rejected by the provider on every request. Optional
-    result fields must be expressed as nullable (`| None`) without a default.
-    """
-
-    if isinstance(node, list):
-        for index, item in enumerate(node):
-            _require_all_fields_required(item, f"{path}[{index}]")
-        return
-    if not isinstance(node, dict):
-        return
-    properties = node.get("properties")
-    if isinstance(properties, dict):
-        required = node.get("required")
-        declared = set(required) if isinstance(required, list) else set()
-        missing = sorted(set(properties) - declared)
-        if missing:
-            location = path or "the result schema"
-            raise ValueError(
-                f"Optional fields in {location}: {', '.join(missing)}. "
-                "Result models must not use field defaults; make optional "
-                "fields nullable (`| None`) instead."
-            )
-    for key, value in node.items():
-        _require_all_fields_required(value, f"{path}.{key}" if path else key)

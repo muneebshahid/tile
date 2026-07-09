@@ -160,7 +160,7 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
                     "required": ["city"],
                     "additionalProperties": False,
                 },
-                "strict": True,
+                "strict": False,
                 "defer_loading": False,
             }
         ],

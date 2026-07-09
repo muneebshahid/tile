@@ -176,7 +176,7 @@ def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
                 "required": ["city"],
                 "additionalProperties": False,
             },
-            "strict": True,
+            "strict": False,
             "defer_loading": False,
         }
     ]

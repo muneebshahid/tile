@@ -187,29 +187,27 @@ def test_strict_object_schema_closes_nested_objects() -> None:
     assert inner["additionalProperties"] is False
 
 
-def test_complete_tool_rejects_schemas_with_defaults() -> None:
-    """Reject result models whose fields fall out of the required list."""
+def test_complete_tool_applies_field_defaults() -> None:
+    """Fill omitted optional fields from the result model's defaults."""
 
     class ReportWithDefault(BaseModel):
         city: str
         note: str = "n/a"
 
-    with pytest.raises(ValueError, match="note"):
-        complete_tool(ReportWithDefault)
+    executor = ToolExecutor([complete_tool(ReportWithDefault), fail_tool])
 
+    outcome = asyncio.run(
+        executor.execute(
+            call_id="call_1",
+            tool_name="complete",
+            arguments={"city": "Munich"},
+        )
+    )
 
-def test_complete_tool_accepts_nullable_fields() -> None:
-    """Accept nullable fields as the strict-compatible optional pattern."""
-
-    class ReportWithNullable(BaseModel):
-        city: str
-        note: str | None
-
-    definition = complete_tool(ReportWithNullable)
-
-    required = definition.input_schema["required"]
-    assert isinstance(required, list)
-    assert set(required) == {"city", "note"}
+    assert not outcome.tool_result_turn.is_error
+    details = outcome.details
+    assert isinstance(details, CompleteDetails)
+    assert details.value == ReportWithDefault(city="Munich", note="n/a")
 
 
 def test_complete_tool_returns_validated_value_in_details() -> None:
