@@ -1,24 +1,27 @@
-"""Tests for the typed result contract and its run loop integration."""
+"""Tests for the output contract tools and their run loop enforcement."""
 
 import asyncio
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
 from pydantic import BaseModel
 
 from tile.agent import run_agent
+from tile.history import InMemoryHistoryStore
 from tile.result import (
     MAX_RESULT_FOLLOW_UPS,
     NO_RESULT_REASON,
+    RESULT_ALREADY_RECORDED,
     RESULT_CONTRACT,
     RESULT_FOLLOW_UP,
     Completed,
     Failed,
-    ResultRecorder,
 )
-from tile.history import InMemoryHistoryStore
 from tile.runtime import AgentRuntime
 from tile.tool_executor import ToolExecutor
+from tile.tools.complete import strict_object_schema, tool as complete_tool
+from tile.tools.fail import tool as fail_tool
 from tile.events import (
     AgentEndEvent,
     AgentEvent,
@@ -27,7 +30,7 @@ from tile.events import (
 )
 from tile.types.conversation import ToolResultTurn, UserMessage
 from tile.types.stream_events import TextBlock
-from tile.types.tools import ToolDefinition
+from tile.types.tools import ToolDefinition, ToolResult, ToolTextContent
 from tests.support.agent_streams import (
     ProviderStreamMock,
     error_stream,
@@ -37,13 +40,26 @@ from tests.support.agent_streams import (
     tool_call_block,
     tool_call_stream,
 )
+from tests.support.tool_definitions import city_tool
 
 
 class WeatherReport(BaseModel):
-    """Sample result schema used across result contract tests."""
+    """Sample result schema used across output contract tests."""
 
     city: str
     temp_c: float
+
+
+def _result_tools() -> list[ToolDefinition]:
+    """Build the result tool pair for the sample schema."""
+
+    return [complete_tool(WeatherReport), fail_tool]
+
+
+async def _weather(city: str) -> ToolResult:
+    """Fail loudly if a post-result tool call is ever executed."""
+
+    raise AssertionError(f"get_weather must not execute (city={city})")
 
 
 def _collect_run_events(
@@ -51,7 +67,7 @@ def _collect_run_events(
     *,
     stream_fn,
     cwd: Path,
-    result: type[BaseModel] | None = None,
+    enforce_output_contract: bool = False,
     tools: Sequence[ToolDefinition] = (),
 ) -> list[AgentEvent]:
     """Collect all events emitted by one stateless agent run."""
@@ -68,7 +84,7 @@ def _collect_run_events(
                 tool_executor=ToolExecutor(tools),
                 instructions="Base prompt.",
                 auto_mode=False,
-                result=result,
+                enforce_output_contract=enforce_output_contract,
                 cwd=cwd,
             )
         ]
@@ -99,11 +115,10 @@ def _complete_call_stream(
     )
 
 
-def test_recorder_complete_validates_and_records() -> None:
-    """Record a schema-conforming result from a complete tool call."""
+def test_complete_tool_validates_and_succeeds() -> None:
+    """Accept schema-conforming arguments on the complete tool."""
 
-    recorder = ResultRecorder(WeatherReport)
-    executor = ToolExecutor(recorder.tool_definitions())
+    executor = ToolExecutor(_result_tools())
 
     outcome = asyncio.run(
         executor.execute(
@@ -114,14 +129,12 @@ def test_recorder_complete_validates_and_records() -> None:
     )
 
     assert not outcome.tool_result_turn.is_error
-    assert recorder.value == WeatherReport(city="Munich", temp_c=21.0)
 
 
-def test_recorder_complete_rejects_invalid_arguments() -> None:
-    """Return a tool error and record nothing for invalid result arguments."""
+def test_complete_tool_rejects_invalid_arguments() -> None:
+    """Return a tool error for arguments that violate the result schema."""
 
-    recorder = ResultRecorder(WeatherReport)
-    executor = ToolExecutor(recorder.tool_definitions())
+    executor = ToolExecutor(_result_tools())
 
     outcome = asyncio.run(
         executor.execute(
@@ -132,56 +145,92 @@ def test_recorder_complete_rejects_invalid_arguments() -> None:
     )
 
     assert outcome.tool_result_turn.is_error
-    assert not recorder.has_outcome
 
 
-def test_recorder_rejects_second_result_call() -> None:
-    """Refuse to overwrite an already recorded result."""
+def test_fail_tool_requires_string_reason() -> None:
+    """Reject non-string reasons on the fail tool."""
 
-    recorder = ResultRecorder(WeatherReport)
-    executor = ToolExecutor(recorder.tool_definitions())
-
-    async def _run() -> tuple:
-        first = await executor.execute(
-            call_id="call_1",
-            tool_name="complete",
-            arguments={"city": "Munich", "temp_c": 21.0},
-        )
-        second = await executor.execute(
-            call_id="call_2",
-            tool_name="fail",
-            arguments={"reason": "Changed my mind."},
-        )
-        return first, second
-
-    first, second = asyncio.run(_run())
-
-    assert not first.tool_result_turn.is_error
-    assert second.tool_result_turn.is_error
-    assert recorder.value == WeatherReport(city="Munich", temp_c=21.0)
-    assert recorder.reason is None
-
-
-def test_recorder_fail_records_reason() -> None:
-    """Record the model's failure reason from a fail tool call."""
-
-    recorder = ResultRecorder(WeatherReport)
-    executor = ToolExecutor(recorder.tool_definitions())
+    executor = ToolExecutor(_result_tools())
 
     outcome = asyncio.run(
         executor.execute(
             call_id="call_1",
             tool_name="fail",
-            arguments={"reason": "No API key available."},
+            arguments={"reason": 5},
         )
     )
 
-    assert not outcome.tool_result_turn.is_error
-    assert recorder.reason == "No API key available."
+    assert outcome.tool_result_turn.is_error
+
+
+def test_strict_object_schema_closes_nested_objects() -> None:
+    """Add additionalProperties: false to every object schema node."""
+
+    class Inner(BaseModel):
+        name: str
+
+    class Outer(BaseModel):
+        inner: Inner
+        items: list[Inner]
+
+    schema = strict_object_schema(Outer.model_json_schema())
+
+    assert schema["additionalProperties"] is False
+    defs = schema["$defs"]
+    assert isinstance(defs, dict)
+    inner = defs["Inner"]
+    assert isinstance(inner, dict)
+    assert inner["additionalProperties"] is False
+
+
+def test_complete_tool_rejects_schemas_with_defaults() -> None:
+    """Reject result models whose fields fall out of the required list."""
+
+    class ReportWithDefault(BaseModel):
+        city: str
+        note: str = "n/a"
+
+    with pytest.raises(ValueError, match="note"):
+        complete_tool(ReportWithDefault)
+
+
+def test_complete_tool_accepts_nullable_fields() -> None:
+    """Accept nullable fields as the strict-compatible optional pattern."""
+
+    class ReportWithNullable(BaseModel):
+        city: str
+        note: str | None
+
+    definition = complete_tool(ReportWithNullable)
+
+    required = definition.input_schema["required"]
+    assert isinstance(required, list)
+    assert set(required) == {"city", "note"}
+
+
+def test_tool_executor_rejects_duplicate_names() -> None:
+    """Refuse to register two tools with the same name."""
+
+    with pytest.raises(ValueError, match="Duplicate tool name"):
+        ToolExecutor([fail_tool, fail_tool])
+
+
+def test_enforcement_requires_result_tools(tmp_path: Path) -> None:
+    """Reject contract enforcement when the result tools are missing."""
+
+    provider = ProviderStreamMock([])
+
+    with pytest.raises(ValueError, match="complete, fail"):
+        _collect_run_events(
+            [UserMessage(content="Weather?")],
+            stream_fn=provider.fn,
+            cwd=tmp_path,
+            enforce_output_contract=True,
+        )
 
 
 def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
-    """Exit the run without another provider call once complete records."""
+    """Exit the run without another provider call once complete succeeds."""
 
     provider = ProviderStreamMock(
         [
@@ -195,14 +244,16 @@ def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     assert provider.await_count == 1
     outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Completed)
-    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
-    assert outcome.output_text == ""
+    assert outcome == Completed(
+        value={"city": "Munich", "temp_c": 21.0},
+        output_text="",
+    )
 
 
 def test_agent_run_ends_on_fail(tmp_path: Path) -> None:
@@ -223,13 +274,13 @@ def test_agent_run_ends_on_fail(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     assert provider.await_count == 1
     outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Failed)
-    assert outcome.reason == "The city is ambiguous."
+    assert outcome == Failed(reason="The city is ambiguous.", output_text="")
 
 
 def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
@@ -248,7 +299,8 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     assert provider.await_count == 2
@@ -258,11 +310,11 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
     assert error_result.is_error
     outcome = _agent_end_event(events).outcome
     assert isinstance(outcome, Completed)
-    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+    assert outcome.value == {"city": "Munich", "temp_c": 21.0}
 
 
 def test_agent_nudges_text_only_turn_toward_result(tmp_path: Path) -> None:
-    """Append a follow-up reminder when a schema run ends in plain text."""
+    """Append a follow-up reminder when an enforced run ends in plain text."""
 
     provider = ProviderStreamMock(
         [
@@ -277,7 +329,8 @@ def test_agent_nudges_text_only_turn_toward_result(tmp_path: Path) -> None:
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     follow_ups = [e for e in events if isinstance(e, ResultFollowUpEvent)]
@@ -302,17 +355,19 @@ def test_agent_fails_after_follow_up_cap(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     assert provider.await_count == MAX_RESULT_FOLLOW_UPS + 1
     outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Failed)
-    assert outcome.reason == NO_RESULT_REASON
-    assert outcome.output_text == "Still thinking."
+    assert outcome == Failed(
+        reason=NO_RESULT_REASON,
+        output_text="Still thinking.",
+    )
 
 
-def test_agent_without_result_completes_with_text(tmp_path: Path) -> None:
+def test_agent_without_contract_completes_with_text(tmp_path: Path) -> None:
     """Wrap a plain text ending in a completed outcome with no value."""
 
     provider = ProviderStreamMock(
@@ -344,14 +399,15 @@ def test_agent_outcome_is_none_on_stream_error(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     assert _agent_end_event(events).outcome is None
 
 
-def test_agent_records_first_result_in_batched_turn(tmp_path: Path) -> None:
-    """Keep the first result and error later result calls in the same turn."""
+def test_agent_skips_tool_calls_after_result(tmp_path: Path) -> None:
+    """Answer post-result calls in the same turn with errors, unexecuted."""
 
     provider = ProviderStreamMock(
         [
@@ -368,8 +424,8 @@ def test_agent_records_first_result_in_batched_turn(tmp_path: Path) -> None:
                         ),
                         tool_call_block(
                             call_id="call_2",
-                            name="complete",
-                            arguments={"city": "Berlin", "temp_c": 18.0},
+                            name="get_weather",
+                            arguments={"city": "Berlin"},
                         ),
                     ],
                 ),
@@ -381,16 +437,19 @@ def test_agent_records_first_result_in_batched_turn(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=[*_result_tools(), city_tool("get_weather", "Get weather.", _weather)],
     )
 
     executions = [e for e in events if isinstance(e, ToolExecutionEndEvent)]
     assert len(executions) == 2
     assert not executions[0].outcome.tool_result_turn.is_error
-    assert executions[1].outcome.tool_result_turn.is_error
+    skipped = executions[1].outcome.tool_result_turn
+    assert skipped.is_error
+    assert skipped.content == [ToolTextContent(text=RESULT_ALREADY_RECORDED)]
     outcome = _agent_end_event(events).outcome
     assert isinstance(outcome, Completed)
-    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+    assert outcome.value == {"city": "Munich", "temp_c": 21.0}
 
 
 def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
@@ -420,7 +479,8 @@ def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        result=WeatherReport,
+        enforce_output_contract=True,
+        tools=_result_tools(),
     )
 
     outcome = _agent_end_event(events).outcome
@@ -428,32 +488,8 @@ def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
     assert outcome.output_text == "Recording the result."
 
 
-def test_agent_offers_result_tools_and_contract(tmp_path: Path) -> None:
-    """Expose the result tools and contract only when a schema is set."""
-
-    provider = ProviderStreamMock(
-        [
-            _complete_call_stream(
-                "resp_1", "call_1", {"city": "Munich", "temp_c": 21.0}
-            ),
-        ]
-    )
-
-    _collect_run_events(
-        [UserMessage(content="Weather?")],
-        stream_fn=provider.fn,
-        cwd=tmp_path,
-        result=WeatherReport,
-    )
-
-    tools = provider.tools(0)
-    assert tools is not None
-    assert [tool.name for tool in tools] == ["complete", "fail"]
-    assert RESULT_CONTRACT in provider.instructions()
-
-
-def test_session_prompt_returns_outcome_and_persists_follow_up() -> None:
-    """Thread the result contract through a session run end to end."""
+def test_runtime_composes_result_tools_and_contract() -> None:
+    """Register result tools and contract at runtime construction."""
 
     provider = ProviderStreamMock(
         [
@@ -469,16 +505,23 @@ def test_session_prompt_returns_outcome_and_persists_follow_up() -> None:
         model="gpt-5.4",
         history_store=store,
         auto_mode=False,
+        result=WeatherReport,
     )
 
     async def _run() -> None:
         session = runtime.session(session_id="result-session")
-        run = await session.prompt("Weather in Munich?", result=WeatherReport)
+        run = await session.prompt("Weather in Munich?")
         assert await run.wait() == "completed"
         outcome = run.outcome
         assert isinstance(outcome, Completed)
-        assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+        assert outcome.value == {"city": "Munich", "temp_c": 21.0}
         history = store.get_history("result-session")
         assert UserMessage(content=RESULT_FOLLOW_UP) in list(history)
 
     asyncio.run(_run())
+
+    tools = provider.tools(0)
+    assert tools is not None
+    assert {tool.name for tool in tools} == {"complete", "fail"}
+    instructions = provider.mock.await_args_list[0].kwargs["instructions"]
+    assert RESULT_CONTRACT in instructions

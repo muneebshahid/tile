@@ -7,7 +7,9 @@ from typing import cast
 from tile.types.tools import ToolDefinition, ToolFunction
 from tile.tool_truncation import ToolOutputDetails
 from tile.tools.bash import BashDetails, tool as bash_tool
+from tile.tools.complete import tool as complete_tool
 from tile.tools.edit import EditDetails, tool as edit_tool
+from tile.tools.fail import tool as fail_tool
 from tile.tools.find import FindDetails, tool as find_tool
 from tile.tools.grep import GrepDetails, tool as grep_tool
 from tile.tools.ls import LsDetails, tool as ls_tool
@@ -24,6 +26,8 @@ __all__ = [
     "ReadDetails",
     "ToolOutputDetails",
     "build_tools",
+    "complete_tool",
+    "fail_tool",
     "tools",
 ]
 

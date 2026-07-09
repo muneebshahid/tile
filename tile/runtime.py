@@ -22,8 +22,10 @@ from tile.types.tools import ToolDefinition, ToolTextContent
 from tile.agent import run_agent
 from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
-from tile.result import RunOutcome
+from tile.result import RESULT_CONTRACT, RunOutcome
 from tile.tool_executor import ToolExecutor
+from tile.tools.complete import tool as complete_tool
+from tile.tools.fail import tool as fail_tool
 from tile.events import (
     AgentEndEvent,
     AgentEvent,
@@ -193,10 +195,14 @@ class AgentRuntime:
         tools: Sequence[ToolDefinition] = (),
         instructions: str = DEFAULT_INSTRUCTIONS,
         auto_mode: bool = True,
+        result: type[BaseModel] | None = None,
         cwd: Path | str | None = None,
     ) -> None:
         """Create a runtime with shared agent dependencies."""
 
+        if result is not None:
+            tools = (*tools, complete_tool(result), fail_tool)
+            instructions = f"{instructions}\n\n{RESULT_CONTRACT}"
         self._stream_fn = stream_fn
         self._model = model
         self._history_store = (
@@ -205,6 +211,7 @@ class AgentRuntime:
         self._tool_executor = ToolExecutor(tools)
         self._instructions = instructions
         self._auto_mode = auto_mode
+        self._enforce_output_contract = result is not None
         self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
         self._active_runs: set[Run] = set()
@@ -258,13 +265,7 @@ class AgentRuntime:
         )
         return self._build_session(record)
 
-    def _submit_prompt(
-        self,
-        session_id: str,
-        content: str,
-        *,
-        result: type[BaseModel] | None = None,
-    ) -> Run:
+    def _submit_prompt(self, session_id: str, content: str) -> Run:
         """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
@@ -273,7 +274,7 @@ class AgentRuntime:
             run = Run(
                 run_id=str(uuid4()),
                 session_id=session_id,
-                events=self._run_events(session_id, result=result),
+                events=self._run_events(session_id),
                 on_done=self._release_run,
             )
         except BaseException:
@@ -282,12 +283,7 @@ class AgentRuntime:
         self._active_runs.add(run)
         return run
 
-    async def _run_events(
-        self,
-        session_id: str,
-        *,
-        result: type[BaseModel] | None = None,
-    ) -> AsyncIterator[AgentEvent]:
+    async def _run_events(self, session_id: str) -> AsyncIterator[AgentEvent]:
         """Yield agent events for one prompt run, persisting stable history."""
 
         async for event in run_agent(
@@ -297,7 +293,7 @@ class AgentRuntime:
             tool_executor=self._tool_executor,
             instructions=self._instructions,
             auto_mode=self._auto_mode,
-            result=result,
+            enforce_output_contract=self._enforce_output_contract,
             cwd=self._cwd,
         ):
             self._persist_stable_event(session_id, event)
@@ -389,15 +385,10 @@ class Session:
 
         return self._runtime.history_for(self.id)
 
-    async def prompt(
-        self,
-        content: str,
-        *,
-        result: type[BaseModel] | None = None,
-    ) -> Run:
+    async def prompt(self, content: str) -> Run:
         """Submit one prompt to this session and return its run handle."""
 
-        return self._runtime._submit_prompt(self.id, content, result=result)
+        return self._runtime._submit_prompt(self.id, content)
 
     def fork(
         self,
