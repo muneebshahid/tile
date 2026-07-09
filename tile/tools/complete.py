@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, SerializeAsAny
 
 from tile.result import COMPLETE_TOOL_NAME
-from tile.types.tools import JsonObject, ToolDefinition, ToolResult
+from tile.types.tools import JsonObject, ToolDefinition, ToolDetails, ToolResult
+
+
+class CompleteDetails(ToolDetails):
+    """Validated run result carried on a successful complete execution."""
+
+    type: Literal["complete"] = "complete"
+    value: SerializeAsAny[BaseModel]
 
 
 def tool(result: type[BaseModel]) -> ToolDefinition:
@@ -19,8 +26,11 @@ def tool(result: type[BaseModel]) -> ToolDefinition:
     async def complete(**arguments: JsonValue) -> ToolResult:
         """Validate the run's final result against the required schema."""
 
-        result.model_validate(arguments)
-        return ToolResult.text("Result recorded.")
+        value = result.model_validate(arguments)
+        return ToolResult.text(
+            "Result recorded.",
+            details=CompleteDetails(value=value),
+        )
 
     return ToolDefinition(
         name=COMPLETE_TOOL_NAME,

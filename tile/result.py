@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SerializeAsAny
 
 from tile.types.tools import JsonObject
 
@@ -41,12 +41,16 @@ RESULT_ALREADY_RECORDED = (
 class Completed(BaseModel):
     """Terminal outcome for a run that delivered its result.
 
-    ``value`` carries the schema-validated arguments of the winning
-    `complete` call, and None for runs without an output contract.
+    ``value`` carries the validated result instance of the winning
+    `complete` call, and None for runs without an output contract. An
+    outcome revalidated from serialized event data carries the plain
+    ``JsonObject`` form instead of the original model type.
     """
 
     type: Literal["completed"] = "completed"
-    value: JsonObject | None = None
+    value: JsonObject | SerializeAsAny[BaseModel] | None = Field(
+        default=None, union_mode="left_to_right"
+    )
     output_text: str = ""
 
 

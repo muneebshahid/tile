@@ -20,7 +20,11 @@ from tile.result import (
 )
 from tile.runtime import AgentRuntime
 from tile.tool_executor import ToolExecutor
-from tile.tools.complete import strict_object_schema, tool as complete_tool
+from tile.tools.complete import (
+    CompleteDetails,
+    strict_object_schema,
+    tool as complete_tool,
+)
 from tile.tools.fail import tool as fail_tool
 from tile.events import (
     AgentEndEvent,
@@ -208,6 +212,34 @@ def test_complete_tool_accepts_nullable_fields() -> None:
     assert set(required) == {"city", "note"}
 
 
+def test_complete_tool_returns_validated_value_in_details() -> None:
+    """Carry the validated result instance on the execution details."""
+
+    executor = ToolExecutor(_result_tools())
+
+    outcome = asyncio.run(
+        executor.execute(
+            call_id="call_1",
+            tool_name="complete",
+            arguments={"city": "Munich", "temp_c": "21.5"},
+        )
+    )
+
+    details = outcome.details
+    assert isinstance(details, CompleteDetails)
+    assert details.value == WeatherReport(city="Munich", temp_c=21.5)
+
+
+def test_completed_round_trips_value_as_plain_data() -> None:
+    """Deserialize a serialized outcome into plain data, losing nothing."""
+
+    outcome = Completed(value=WeatherReport(city="Munich", temp_c=21.0))
+
+    revalidated = Completed.model_validate_json(outcome.model_dump_json())
+
+    assert revalidated.value == {"city": "Munich", "temp_c": 21.0}
+
+
 def test_tool_executor_rejects_duplicate_names() -> None:
     """Refuse to register two tools with the same name."""
 
@@ -251,7 +283,7 @@ def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
     assert provider.await_count == 1
     outcome = _agent_end_event(events).outcome
     assert outcome == Completed(
-        value={"city": "Munich", "temp_c": 21.0},
+        value=WeatherReport(city="Munich", temp_c=21.0),
         output_text="",
     )
 
@@ -310,7 +342,7 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
     assert error_result.is_error
     outcome = _agent_end_event(events).outcome
     assert isinstance(outcome, Completed)
-    assert outcome.value == {"city": "Munich", "temp_c": 21.0}
+    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
 
 
 def test_agent_nudges_text_only_turn_toward_result(tmp_path: Path) -> None:
@@ -449,7 +481,7 @@ def test_agent_skips_tool_calls_after_result(tmp_path: Path) -> None:
     assert skipped.content == [ToolTextContent(text=RESULT_ALREADY_RECORDED)]
     outcome = _agent_end_event(events).outcome
     assert isinstance(outcome, Completed)
-    assert outcome.value == {"city": "Munich", "temp_c": 21.0}
+    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
 
 
 def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
@@ -513,7 +545,7 @@ def test_session_prompt_composes_result_tools_and_contract() -> None:
         assert await run.wait() == "completed"
         outcome = run.outcome
         assert isinstance(outcome, Completed)
-        assert outcome.value == {"city": "Munich", "temp_c": 21.0}
+        assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
         history = store.get_history("result-session")
         assert UserMessage(content=RESULT_FOLLOW_UP) in list(history)
 
@@ -548,7 +580,7 @@ def test_session_mixes_contract_and_plain_prompts() -> None:
         contract_run = await session.prompt("Weather in Munich?", result=WeatherReport)
         assert await contract_run.wait() == "completed"
         assert isinstance(contract_run.outcome, Completed)
-        assert contract_run.outcome.value == {"city": "Munich", "temp_c": 21.0}
+        assert contract_run.outcome.value == WeatherReport(city="Munich", temp_c=21.0)
 
         plain_run = await session.prompt("Which city did I ask about?")
         assert await plain_run.wait() == "completed"

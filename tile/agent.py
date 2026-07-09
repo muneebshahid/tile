@@ -36,6 +36,8 @@ from tile.types.stream_events import (
 from tile.types.tools import JsonObject, ToolResult
 from tile.prompt import DEFAULT_INSTRUCTIONS, build_system_prompt
 from tile.tool_executor import ToolExecutor
+from tile.tools.complete import CompleteDetails
+from tile.tools.fail import FailDetails
 from tile.events import (
     AgentEndEvent,
     AgentEvent,
@@ -308,10 +310,8 @@ async def _skip_tool(
 def _is_result_execution(outcome: ToolExecutionOutcome) -> bool:
     """Return whether an execution successfully recorded a run result."""
 
-    result_turn = outcome.tool_result_turn
-    return not result_turn.is_error and result_turn.tool_name in (
-        COMPLETE_TOOL_NAME,
-        FAIL_TOOL_NAME,
+    return not outcome.tool_result_turn.is_error and isinstance(
+        outcome.details, CompleteDetails | FailDetails
     )
 
 
@@ -336,23 +336,14 @@ def _build_outcome(
 def _terminal_result(turn_end: TurnEndEvent) -> RunOutcome | None:
     """Return the outcome recorded by a turn's first successful result call."""
 
-    arguments_by_call_id = {
-        block.call_id: block.arguments
-        for block in _collect_tool_calls(turn_end.assistant_turn.blocks)
-    }
     output_text = _turn_text(turn_end.assistant_turn)
     for execution in turn_end.tool_executions:
-        result_turn = execution.tool_result_turn
-        if result_turn.is_error:
+        if execution.tool_result_turn.is_error:
             continue
-        arguments = arguments_by_call_id.get(result_turn.call_id, {})
-        if result_turn.tool_name == COMPLETE_TOOL_NAME:
-            return Completed(value=arguments, output_text=output_text)
-        if result_turn.tool_name == FAIL_TOOL_NAME:
-            return Failed(
-                reason=str(arguments.get("reason", "")),
-                output_text=output_text,
-            )
+        if isinstance(execution.details, CompleteDetails):
+            return Completed(value=execution.details.value, output_text=output_text)
+        if isinstance(execution.details, FailDetails):
+            return Failed(reason=execution.details.reason, output_text=output_text)
     return None
 
 

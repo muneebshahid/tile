@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from tile.result import FAIL_TOOL_NAME
-from tile.types.tools import ToolDefinition, ToolResult
+from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+
+
+class FailDetails(ToolDetails):
+    """Declared failure reason carried on a successful fail execution."""
+
+    type: Literal["fail"] = "fail"
+    reason: str
 
 
 async def fail(reason: str) -> ToolResult:
@@ -11,7 +20,10 @@ async def fail(reason: str) -> ToolResult:
 
     if not isinstance(reason, str):
         raise ValueError("`reason` must be a string.")
-    return ToolResult.text("Failure recorded.")
+    return ToolResult.text(
+        "Failure recorded.",
+        details=FailDetails(reason=reason),
+    )
 
 
 tool = ToolDefinition(
