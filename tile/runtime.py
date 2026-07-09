@@ -22,7 +22,12 @@ from tile.types.tools import ToolDefinition, ToolTextContent
 from tile.agent import run_agent
 from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
-from tile.result import RESULT_CONTRACT, RunOutcome
+from tile.result import (
+    COMPLETE_TOOL_NAME,
+    FAIL_TOOL_NAME,
+    RESULT_CONTRACT,
+    RunOutcome,
+)
 from tile.tool_executor import ToolExecutor
 from tile.tools.complete import tool as complete_tool
 from tile.tools.fail import tool as fail_tool
@@ -195,14 +200,11 @@ class AgentRuntime:
         tools: Sequence[ToolDefinition] = (),
         instructions: str = DEFAULT_INSTRUCTIONS,
         auto_mode: bool = True,
-        result: type[BaseModel] | None = None,
         cwd: Path | str | None = None,
     ) -> None:
         """Create a runtime with shared agent dependencies."""
 
-        if result is not None:
-            tools = (*tools, complete_tool(result), fail_tool)
-            instructions = f"{instructions}\n\n{RESULT_CONTRACT}"
+        _reject_reserved_tool_names(tools)
         self._stream_fn = stream_fn
         self._model = model
         self._history_store = (
@@ -211,7 +213,6 @@ class AgentRuntime:
         self._tool_executor = ToolExecutor(tools)
         self._instructions = instructions
         self._auto_mode = auto_mode
-        self._enforce_output_contract = result is not None
         self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
         self._active_runs: set[Run] = set()
@@ -265,7 +266,13 @@ class AgentRuntime:
         )
         return self._build_session(record)
 
-    def _submit_prompt(self, session_id: str, content: str) -> Run:
+    def _submit_prompt(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        result: type[BaseModel] | None = None,
+    ) -> Run:
         """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
@@ -274,7 +281,7 @@ class AgentRuntime:
             run = Run(
                 run_id=str(uuid4()),
                 session_id=session_id,
-                events=self._run_events(session_id),
+                events=self._run_events(session_id, result=result),
                 on_done=self._release_run,
             )
         except BaseException:
@@ -283,17 +290,30 @@ class AgentRuntime:
         self._active_runs.add(run)
         return run
 
-    async def _run_events(self, session_id: str) -> AsyncIterator[AgentEvent]:
+    async def _run_events(
+        self,
+        session_id: str,
+        *,
+        result: type[BaseModel] | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Yield agent events for one prompt run, persisting stable history."""
+
+        tool_executor = self._tool_executor
+        instructions = self._instructions
+        if result is not None:
+            tool_executor = ToolExecutor(
+                (*tool_executor.tools, complete_tool(result), fail_tool)
+            )
+            instructions = f"{instructions}\n\n{RESULT_CONTRACT}"
 
         async for event in run_agent(
             self._history_store.get_history(session_id),
             stream_fn=self._stream_fn,
             model=self._model,
-            tool_executor=self._tool_executor,
-            instructions=self._instructions,
+            tool_executor=tool_executor,
+            instructions=instructions,
             auto_mode=self._auto_mode,
-            enforce_output_contract=self._enforce_output_contract,
+            enforce_output_contract=result is not None,
             cwd=self._cwd,
         ):
             self._persist_stable_event(session_id, event)
@@ -385,10 +405,20 @@ class Session:
 
         return self._runtime.history_for(self.id)
 
-    async def prompt(self, content: str) -> Run:
-        """Submit one prompt to this session and return its run handle."""
+    async def prompt(
+        self,
+        content: str,
+        *,
+        result: type[BaseModel] | None = None,
+    ) -> Run:
+        """Submit one prompt to this session and return its run handle.
 
-        return self._runtime._submit_prompt(self.id, content)
+        When ``result`` is set, the run must end through the output contract:
+        the runtime adds the `complete` and `fail` tools for this run and the
+        outcome carries the schema-validated result.
+        """
+
+        return self._runtime._submit_prompt(self.id, content, result=result)
 
     def fork(
         self,
@@ -403,6 +433,20 @@ class Session:
             target_session_id=session_id,
             name=name,
         )
+
+
+RESERVED_TOOL_NAMES = (COMPLETE_TOOL_NAME, FAIL_TOOL_NAME)
+
+
+def _reject_reserved_tool_names(tools: Sequence[ToolDefinition]) -> None:
+    """Reject caller tools whose names the output contract reserves."""
+
+    for tool in tools:
+        if tool.name.lower() in RESERVED_TOOL_NAMES:
+            raise ValueError(
+                f"Tool name '{tool.name}' is reserved by the runtime for "
+                "output contracts; rename the tool."
+            )
 
 
 def _unanswered_tool_calls(

@@ -488,8 +488,8 @@ def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
     assert outcome.output_text == "Recording the result."
 
 
-def test_runtime_composes_result_tools_and_contract() -> None:
-    """Register result tools and contract at runtime construction."""
+def test_session_prompt_composes_result_tools_and_contract() -> None:
+    """Add result tools and contract for one prompt when a schema is set."""
 
     provider = ProviderStreamMock(
         [
@@ -505,12 +505,11 @@ def test_runtime_composes_result_tools_and_contract() -> None:
         model="gpt-5.4",
         history_store=store,
         auto_mode=False,
-        result=WeatherReport,
     )
 
     async def _run() -> None:
         session = runtime.session(session_id="result-session")
-        run = await session.prompt("Weather in Munich?")
+        run = await session.prompt("Weather in Munich?", result=WeatherReport)
         assert await run.wait() == "completed"
         outcome = run.outcome
         assert isinstance(outcome, Completed)
@@ -525,3 +524,57 @@ def test_runtime_composes_result_tools_and_contract() -> None:
     assert {tool.name for tool in tools} == {"complete", "fail"}
     instructions = provider.mock.await_args_list[0].kwargs["instructions"]
     assert RESULT_CONTRACT in instructions
+
+
+def test_session_mixes_contract_and_plain_prompts() -> None:
+    """Run contract and plain prompts back to back on one session."""
+
+    provider = ProviderStreamMock(
+        [
+            _complete_call_stream(
+                "resp_1", "call_1", {"city": "Munich", "temp_c": 21.0}
+            ),
+            final_text_stream("resp_2", "You asked about Munich."),
+        ]
+    )
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        auto_mode=False,
+    )
+
+    async def _run() -> None:
+        session = runtime.session(session_id="mixed-session")
+        contract_run = await session.prompt("Weather in Munich?", result=WeatherReport)
+        assert await contract_run.wait() == "completed"
+        assert isinstance(contract_run.outcome, Completed)
+        assert contract_run.outcome.value == {"city": "Munich", "temp_c": 21.0}
+
+        plain_run = await session.prompt("Which city did I ask about?")
+        assert await plain_run.wait() == "completed"
+        assert plain_run.outcome == Completed(
+            value=None, output_text="You asked about Munich."
+        )
+
+    asyncio.run(_run())
+
+    contract_tools = provider.tools(0)
+    assert contract_tools is not None
+    assert {tool.name for tool in contract_tools} == {"complete", "fail"}
+    plain_tools = provider.tools(1)
+    assert plain_tools == ()
+    plain_instructions = provider.mock.await_args_list[1].kwargs["instructions"]
+    assert RESULT_CONTRACT not in plain_instructions
+
+
+def test_runtime_rejects_reserved_tool_names() -> None:
+    """Refuse caller tools named after the reserved result tools."""
+
+    provider = ProviderStreamMock([])
+
+    with pytest.raises(ValueError, match="reserved"):
+        AgentRuntime(
+            stream_fn=provider.fn,
+            model="gpt-5.4",
+            tools=[city_tool("complete", "Not the real complete.", _weather)],
+        )
