@@ -9,14 +9,18 @@ from tile.history import (
     SessionNotFoundError,
     SessionRecord,
 )
+from tile.result import Completed, Failed, RunOutcome
 from tile.runtime import AgentRuntime, Run, RunStatus, Session, SessionBusyError
 from tile.tool_executor import ToolExecutor
 
 __all__ = [
     "AgentRuntime",
+    "Completed",
+    "Failed",
     "HistoryStore",
     "InMemoryHistoryStore",
     "Run",
+    "RunOutcome",
     "RunStatus",
     "Session",
     "SessionAlreadyExistsError",

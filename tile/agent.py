@@ -3,7 +3,19 @@
 from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 
-from tile.types.conversation import AssistantTurn, ConversationItem
+from pydantic import BaseModel
+
+from tile.result import (
+    MAX_RESULT_FOLLOW_UPS,
+    NO_RESULT_REASON,
+    RESULT_CONTRACT,
+    RESULT_FOLLOW_UP,
+    Completed,
+    Failed,
+    ResultRecorder,
+    RunOutcome,
+)
+from tile.types.conversation import AssistantTurn, ConversationItem, UserMessage
 from tile.types.stream_events import (
     AssistantBlock,
     ReasoningDeltaEvent,
@@ -13,6 +25,7 @@ from tile.types.stream_events import (
     StreamDoneEvent,
     StreamErrorEvent,
     StreamStartEvent,
+    TextBlock,
     TextDeltaEvent,
     TextEndEvent,
     TextStartEvent,
@@ -31,6 +44,7 @@ from tile.events import (
     MessageEndEvent,
     MessageStartEvent,
     MessageUpdateEvent,
+    ResultFollowUpEvent,
     StreamFn,
     ToolExecutionEndEvent,
     ToolExecutionOutcome,
@@ -60,16 +74,26 @@ async def run_agent(
     tool_executor: ToolExecutor,
     instructions: str = DEFAULT_INSTRUCTIONS,
     auto_mode: bool = True,
+    result: type[BaseModel] | None = None,
     cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Run one stateless agent turn from supplied model-visible history."""
 
     run_history = list(history)
+    recorder: ResultRecorder | None = None
+    if result is not None:
+        recorder = ResultRecorder(result)
+        tool_executor = ToolExecutor(
+            (*tool_executor.tools, *recorder.tool_definitions())
+        )
+        instructions = f"{instructions}\n\n{RESULT_CONTRACT}"
     system_prompt = build_system_prompt(
         instructions,
         _resolve_cwd(cwd),
         auto_mode=auto_mode,
     )
+
+    last_turn: AssistantTurn | None = None
 
     yield AgentStartEvent()
     async for event in _run_agent_loop(
@@ -78,9 +102,12 @@ async def run_agent(
         model=model,
         instructions=system_prompt,
         tool_executor=tool_executor,
+        recorder=recorder,
     ):
+        if isinstance(event, MessageEndEvent):
+            last_turn = event.assistant_turn
         yield event
-    yield AgentEndEvent()
+    yield AgentEndEvent(outcome=_build_outcome(recorder, last_turn))
 
 
 async def _run_agent_loop(
@@ -90,11 +117,14 @@ async def _run_agent_loop(
     model: str,
     instructions: str,
     tool_executor: ToolExecutor,
+    recorder: ResultRecorder | None,
 ) -> AsyncIterator[AgentEvent]:
-    """Call the provider until the assistant stops requesting tools."""
+    """Call the provider until the run reaches a terminal turn or result."""
 
+    follow_ups = 0
     while True:
         has_tool_executions = False
+        turn_errored = False
         stream = await stream_fn(
             tuple(run_history),
             model,
@@ -108,15 +138,27 @@ async def _run_agent_loop(
                 run_history=run_history,
                 tool_executor=tool_executor,
             ):
-                if (
-                    isinstance(agent_event, TurnEndEvent)
-                    and agent_event.tool_executions
-                ):
-                    has_tool_executions = True
+                if isinstance(agent_event, TurnEndEvent):
+                    if agent_event.tool_executions:
+                        has_tool_executions = True
+                    if agent_event.assistant_turn.status != "completed":
+                        turn_errored = True
                 yield agent_event
 
-        if not has_tool_executions:
-            break
+        if recorder is not None and recorder.has_outcome:
+            return
+        if turn_errored:
+            return
+        if has_tool_executions:
+            continue
+        if recorder is None:
+            return
+        if follow_ups >= MAX_RESULT_FOLLOW_UPS:
+            return
+        follow_ups += 1
+        follow_up = UserMessage(content=RESULT_FOLLOW_UP)
+        run_history.append(follow_up)
+        yield ResultFollowUpEvent(message=follow_up)
 
 
 async def _handle_stream_event(
@@ -211,6 +253,31 @@ async def _execute_tool(
         arguments=arguments,
     )
     yield ToolExecutionEndEvent(outcome=outcome)
+
+
+def _build_outcome(
+    recorder: ResultRecorder | None,
+    last_turn: AssistantTurn | None,
+) -> RunOutcome | None:
+    """Derive the terminal run outcome from the recorder and the ending turn."""
+
+    if last_turn is None or last_turn.status != "completed":
+        return None
+    output_text = _turn_text(last_turn)
+    if recorder is None:
+        return Completed(output_text=output_text)
+    if recorder.value is not None:
+        return Completed(value=recorder.value, output_text=output_text)
+    reason = recorder.reason if recorder.reason is not None else NO_RESULT_REASON
+    return Failed(reason=reason, output_text=output_text)
+
+
+def _turn_text(turn: AssistantTurn) -> str:
+    """Join the text blocks of one assistant turn with blank lines."""
+
+    return "\n\n".join(
+        block.text for block in turn.blocks if isinstance(block, TextBlock)
+    )
 
 
 def _resolve_cwd(cwd: Path | str | None) -> Path:

@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Literal, TypeAlias
 from uuid import uuid4
 
+from pydantic import BaseModel
+
 from tile.types.conversation import (
     AssistantTurn,
     ConversationItem,
@@ -20,8 +22,16 @@ from tile.types.tools import ToolDefinition, ToolTextContent
 from tile.agent import run_agent
 from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
+from tile.result import RunOutcome
 from tile.tool_executor import ToolExecutor
-from tile.events import AgentEvent, MessageEndEvent, StreamFn, ToolExecutionEndEvent
+from tile.events import (
+    AgentEndEvent,
+    AgentEvent,
+    MessageEndEvent,
+    ResultFollowUpEvent,
+    StreamFn,
+    ToolExecutionEndEvent,
+)
 
 RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
 
@@ -92,6 +102,19 @@ class Run:
         for event in reversed(self._events):
             if isinstance(event, MessageEndEvent):
                 return _assistant_text(event.assistant_turn)
+        return None
+
+    @property
+    def outcome(self) -> RunOutcome | None:
+        """Return the terminal run outcome once the agent run has ended.
+
+        Returns None while the run is in flight and for runs that ended
+        without a terminal turn (stream error or abort).
+        """
+
+        for event in reversed(self._events):
+            if isinstance(event, AgentEndEvent):
+                return event.outcome
         return None
 
     @property
@@ -235,7 +258,13 @@ class AgentRuntime:
         )
         return self._build_session(record)
 
-    def _submit_prompt(self, session_id: str, content: str) -> Run:
+    def _submit_prompt(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        result: type[BaseModel] | None = None,
+    ) -> Run:
         """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
@@ -244,7 +273,7 @@ class AgentRuntime:
             run = Run(
                 run_id=str(uuid4()),
                 session_id=session_id,
-                events=self._run_events(session_id),
+                events=self._run_events(session_id, result=result),
                 on_done=self._release_run,
             )
         except BaseException:
@@ -253,7 +282,12 @@ class AgentRuntime:
         self._active_runs.add(run)
         return run
 
-    async def _run_events(self, session_id: str) -> AsyncIterator[AgentEvent]:
+    async def _run_events(
+        self,
+        session_id: str,
+        *,
+        result: type[BaseModel] | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Yield agent events for one prompt run, persisting stable history."""
 
         async for event in run_agent(
@@ -263,6 +297,7 @@ class AgentRuntime:
             tool_executor=self._tool_executor,
             instructions=self._instructions,
             auto_mode=self._auto_mode,
+            result=result,
             cwd=self._cwd,
         ):
             self._persist_stable_event(session_id, event)
@@ -354,10 +389,15 @@ class Session:
 
         return self._runtime.history_for(self.id)
 
-    async def prompt(self, content: str) -> Run:
+    async def prompt(
+        self,
+        content: str,
+        *,
+        result: type[BaseModel] | None = None,
+    ) -> Run:
         """Submit one prompt to this session and return its run handle."""
 
-        return self._runtime._submit_prompt(self.id, content)
+        return self._runtime._submit_prompt(self.id, content, result=result)
 
     def fork(
         self,
@@ -396,6 +436,8 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
         return (event.assistant_turn,)
     if isinstance(event, ToolExecutionEndEvent):
         return (event.outcome.tool_result_turn,)
+    if isinstance(event, ResultFollowUpEvent):
+        return (event.message,)
     return ()
 
 

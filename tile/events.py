@@ -5,8 +5,14 @@ from typing import Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, SerializeAsAny
 
+from tile.result import RunOutcome
 from tile.types.contracts import AsyncEventStream
-from tile.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
+from tile.types.conversation import (
+    AssistantTurn,
+    ConversationItem,
+    ToolResultTurn,
+    UserMessage,
+)
 from tile.types.stream_events import StreamUpdateEvent
 from tile.types.tools import (
     JsonObject,
@@ -42,9 +48,21 @@ class AgentStartEvent(AgentEvent):
 
 
 class AgentEndEvent(AgentEvent):
-    """Marks the end of an agent run."""
+    """Marks the end of an agent run.
+
+    ``outcome`` is None when the run ended without a terminal turn, such as
+    on a stream error or an abort; the run status carries that story.
+    """
 
     type: Literal["agent_end"] = "agent_end"
+    outcome: RunOutcome | None = None
+
+
+class ResultFollowUpEvent(AgentEvent):
+    """Marks an injected reminder that the run must end with a result call."""
+
+    type: Literal["result_follow_up"] = "result_follow_up"
+    message: UserMessage
 
 
 class TurnStartEvent(AgentEvent):
@@ -151,4 +169,5 @@ AgentRunEvent: TypeAlias = (
     | MessageEndEvent
     | ToolExecutionStartEvent
     | ToolExecutionEndEvent
+    | ResultFollowUpEvent
 )
