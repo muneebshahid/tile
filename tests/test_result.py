@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from tile.agent import run_agent
 from tile.history import InMemoryHistoryStore
@@ -20,11 +20,7 @@ from tile.result import (
 )
 from tile.runtime import AgentRuntime
 from tile.tool_executor import ToolExecutor
-from tile.tools.complete import (
-    CompleteDetails,
-    strict_object_schema,
-    tool as complete_tool,
-)
+from tile.tools.complete import CompleteDetails, tool as complete_tool
 from tile.tools.fail import tool as fail_tool
 from tile.events import (
     AgentEndEvent,
@@ -167,24 +163,21 @@ def test_fail_tool_requires_string_reason() -> None:
     assert outcome.tool_result_turn.is_error
 
 
-def test_strict_object_schema_closes_nested_objects() -> None:
-    """Add additionalProperties: false to every object schema node."""
+def test_complete_tool_schema_reflects_model_config() -> None:
+    """Emit closed schemas only when the result model forbids extras."""
 
-    class Inner(BaseModel):
-        name: str
+    class OpenReport(BaseModel):
+        city: str
 
-    class Outer(BaseModel):
-        inner: Inner
-        items: list[Inner]
+    class ClosedReport(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        city: str
 
-    schema = strict_object_schema(Outer.model_json_schema())
+    open_schema = complete_tool(OpenReport).input_schema
+    closed_schema = complete_tool(ClosedReport).input_schema
 
-    assert schema["additionalProperties"] is False
-    defs = schema["$defs"]
-    assert isinstance(defs, dict)
-    inner = defs["Inner"]
-    assert isinstance(inner, dict)
-    assert inner["additionalProperties"] is False
+    assert "additionalProperties" not in open_schema
+    assert closed_schema["additionalProperties"] is False
 
 
 def test_complete_tool_applies_field_defaults() -> None:

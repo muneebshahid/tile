@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Literal, cast
+from typing import Literal
 
 from pydantic import BaseModel, JsonValue, SerializeAsAny
 
 from tile.result import COMPLETE_TOOL_NAME
-from tile.types.tools import JsonObject, ToolDefinition, ToolDetails, ToolResult
+from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
 
 
 class CompleteDetails(ToolDetails):
@@ -19,8 +19,6 @@ class CompleteDetails(ToolDetails):
 
 def tool(result: type[BaseModel]) -> ToolDefinition:
     """Build a complete tool that validates results against one schema."""
-
-    input_schema = strict_object_schema(result.model_json_schema())
 
     async def complete(**arguments: JsonValue) -> ToolResult:
         """Validate the run's final result against the required schema."""
@@ -39,25 +37,6 @@ def tool(result: type[BaseModel]) -> ToolDefinition:
             "are returned for correction. Call this exactly once, when the "
             "task is done."
         ),
-        input_schema=input_schema,
+        input_schema=result.model_json_schema(),
         fn=complete,
     )
-
-
-def strict_object_schema(schema: JsonObject) -> JsonObject:
-    """Close every object node in a JSON schema to undeclared properties."""
-
-    return cast(JsonObject, _close_objects(schema))
-
-
-def _close_objects(node: JsonValue) -> JsonValue:
-    """Recursively add additionalProperties: false to object schema nodes."""
-
-    if isinstance(node, dict):
-        closed = {key: _close_objects(value) for key, value in node.items()}
-        if closed.get("type") == "object" and "additionalProperties" not in closed:
-            closed["additionalProperties"] = False
-        return closed
-    if isinstance(node, list):
-        return [_close_objects(item) for item in node]
-    return node

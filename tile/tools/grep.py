@@ -268,7 +268,6 @@ tool = ToolDefinition(
             },
         },
         "required": ["pattern"],
-        "additionalProperties": False,
     },
     fn=fn,
 )

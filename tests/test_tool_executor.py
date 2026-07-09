@@ -126,7 +126,6 @@ async def test_tool_executor_preserves_user_defined_details() -> None:
             "type": "object",
             "properties": {},
             "required": [],
-            "additionalProperties": False,
         },
         fn=_query_database,
     )
@@ -159,7 +158,6 @@ def test_tool_definition_rejects_empty_or_padded_names(name: str) -> None:
                 "type": "object",
                 "properties": {},
                 "required": [],
-                "additionalProperties": False,
             },
             fn=_noop,
         )
@@ -176,7 +174,6 @@ async def test_tool_executor_finds_tool_registered_with_uppercase_name() -> None
             "type": "object",
             "properties": {},
             "required": [],
-            "additionalProperties": False,
         },
         fn=_noop,
     )
@@ -203,7 +200,6 @@ async def test_tool_executor_finds_tool_registered_with_lowercase_name() -> None
             "type": "object",
             "properties": {},
             "required": [],
-            "additionalProperties": False,
         },
         fn=_noop,
     )

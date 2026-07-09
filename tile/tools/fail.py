@@ -41,7 +41,6 @@ tool = ToolDefinition(
             }
         },
         "required": ["reason"],
-        "additionalProperties": False,
     },
     fn=fail,
 )

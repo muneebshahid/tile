@@ -43,7 +43,6 @@ def test_edit_schema_describes_each_replacement() -> None:
 
     assert set(item_properties) == {"old_text", "new_text"}
     assert item_schema["required"] == ["old_text", "new_text"]
-    assert item_schema["additionalProperties"] is False
 
 
 @pytest.mark.parametrize(

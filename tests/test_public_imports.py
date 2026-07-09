@@ -116,7 +116,6 @@ def _fake_tool_definition() -> ToolDefinition:
         input_schema={
             "type": "object",
             "properties": {},
-            "additionalProperties": False,
         },
         fn=_fake_tool,
     )

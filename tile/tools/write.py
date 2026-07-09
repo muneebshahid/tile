@@ -62,7 +62,6 @@ tool = ToolDefinition(
             },
         },
         "required": ["path", "content"],
-        "additionalProperties": False,
     },
     fn=fn,
 )

@@ -106,7 +106,6 @@ tool = ToolDefinition(
             },
         },
         "required": [],
-        "additionalProperties": False,
     },
     fn=fn,
 )

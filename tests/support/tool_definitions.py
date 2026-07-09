@@ -30,5 +30,4 @@ def _city_input_schema(city_description: str | None) -> JsonObject:
         "type": "object",
         "properties": {"city": city_schema},
         "required": ["city"],
-        "additionalProperties": False,
     }
