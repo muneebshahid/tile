@@ -313,7 +313,6 @@ class AgentRuntime:
             tool_executor=tool_executor,
             instructions=instructions,
             auto_mode=self._auto_mode,
-            enforce_output_contract=result is not None,
             cwd=self._cwd,
         ):
             self._persist_stable_event(session_id, event)

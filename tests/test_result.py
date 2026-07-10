@@ -67,7 +67,6 @@ def _collect_run_events(
     *,
     stream_fn,
     cwd: Path,
-    enforce_output_contract: bool = False,
     tools: Sequence[ToolDefinition] = (),
 ) -> list[AgentEvent]:
     """Collect all events emitted by one stateless agent run."""
@@ -84,7 +83,6 @@ def _collect_run_events(
                 tool_executor=ToolExecutor(tools),
                 instructions="Base prompt.",
                 auto_mode=False,
-                enforce_output_contract=enforce_output_contract,
                 cwd=cwd,
             )
         ]
@@ -238,20 +236,6 @@ def test_tool_executor_rejects_duplicate_names() -> None:
         ToolExecutor([fail_tool, fail_tool])
 
 
-def test_enforcement_requires_result_tools(tmp_path: Path) -> None:
-    """Reject contract enforcement when the result tools are missing."""
-
-    provider = ProviderStreamMock([])
-
-    with pytest.raises(ValueError, match="complete, fail"):
-        _collect_run_events(
-            [UserMessage(content="Weather?")],
-            stream_fn=provider.fn,
-            cwd=tmp_path,
-            enforce_output_contract=True,
-        )
-
-
 def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
     """Exit the run without another provider call once complete succeeds."""
 
@@ -267,7 +251,6 @@ def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 
@@ -297,7 +280,6 @@ def test_agent_run_ends_on_fail(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 
@@ -322,7 +304,6 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 
@@ -352,7 +333,6 @@ def test_agent_nudges_text_only_turn_toward_result(tmp_path: Path) -> None:
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 
@@ -378,7 +358,6 @@ def test_agent_fails_after_follow_up_cap(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 
@@ -422,7 +401,6 @@ def test_agent_outcome_is_none_on_stream_error(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 
@@ -460,7 +438,6 @@ def test_agent_skips_tool_calls_after_result(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=[*_result_tools(), city_tool("get_weather", "Get weather.", _weather)],
     )
 
@@ -502,7 +479,6 @@ def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
         cwd=tmp_path,
-        enforce_output_contract=True,
         tools=_result_tools(),
     )
 

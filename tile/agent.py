@@ -33,7 +33,7 @@ from tile.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
-from tile.types.tools import JsonObject, ToolResult
+from tile.types.tools import JsonObject, ToolDetails, ToolResult
 from tile.prompt import DEFAULT_INSTRUCTIONS, build_system_prompt
 from tile.tool_executor import ToolExecutor
 from tile.tools.complete import CompleteDetails
@@ -75,14 +75,17 @@ async def run_agent(
     tool_executor: ToolExecutor,
     instructions: str = DEFAULT_INSTRUCTIONS,
     auto_mode: bool = True,
-    enforce_output_contract: bool = False,
     cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
-    """Run one stateless agent turn from supplied model-visible history."""
+    """Run one stateless agent turn from supplied model-visible history.
+
+    Registering the `complete` and `fail` result tools opts the run into
+    the output contract: the run ends on a successful result call, and
+    text-only endings are nudged toward one.
+    """
 
     run_history = list(history)
-    if enforce_output_contract:
-        _require_result_tools(tool_executor)
+    enforce_output_contract = _enforces_output_contract(tool_executor)
     system_prompt = build_system_prompt(
         instructions,
         _resolve_cwd(cwd),
@@ -90,7 +93,7 @@ async def run_agent(
     )
 
     last_turn: AssistantTurn | None = None
-    terminal_result: RunOutcome | None = None
+    terminal_details: ToolDetails | None = None
 
     yield AgentStartEvent()
     async for event in _run_agent_loop(
@@ -104,16 +107,16 @@ async def run_agent(
         if isinstance(event, MessageEndEvent):
             last_turn = event.assistant_turn
         if (
-            enforce_output_contract
-            and terminal_result is None
-            and isinstance(event, TurnEndEvent)
+            terminal_details is None
+            and isinstance(event, ToolExecutionEndEvent)
+            and _is_result_execution(event.outcome)
         ):
-            terminal_result = _terminal_result(event)
+            terminal_details = event.outcome.details
         yield event
     yield AgentEndEvent(
         outcome=_build_outcome(
             enforce_output_contract=enforce_output_contract,
-            terminal_result=terminal_result,
+            terminal_details=terminal_details,
             last_turn=last_turn,
         )
     )
@@ -147,18 +150,16 @@ async def _run_agent_loop(
                 event,
                 run_history=run_history,
                 tool_executor=tool_executor,
-                enforce_output_contract=enforce_output_contract,
             ):
+                if isinstance(
+                    agent_event, ToolExecutionEndEvent
+                ) and _is_result_execution(agent_event.outcome):
+                    has_result = True
                 if isinstance(agent_event, TurnEndEvent):
                     if agent_event.tool_executions:
                         has_tool_executions = True
                     if agent_event.assistant_turn.status != "completed":
                         turn_errored = True
-                    if (
-                        enforce_output_contract
-                        and _terminal_result(agent_event) is not None
-                    ):
-                        has_result = True
                 yield agent_event
 
         if has_result or turn_errored:
@@ -180,7 +181,6 @@ async def _handle_stream_event(
     *,
     run_history: list[ConversationItem],
     tool_executor: ToolExecutor,
-    enforce_output_contract: bool,
 ) -> AsyncIterator[AgentEvent]:
     """Route one provider stream event into agent-level events."""
 
@@ -193,7 +193,6 @@ async def _handle_stream_event(
                 event,
                 run_history=run_history,
                 tool_executor=tool_executor,
-                enforce_output_contract=enforce_output_contract,
             ):
                 yield agent_event
         case StreamErrorEvent():
@@ -211,7 +210,6 @@ async def _handle_stream_done_event(
     *,
     run_history: list[ConversationItem],
     tool_executor: ToolExecutor,
-    enforce_output_contract: bool,
 ) -> AsyncIterator[AgentEvent]:
     """Finalize an assistant message and execute requested tools."""
 
@@ -222,27 +220,20 @@ async def _handle_stream_done_event(
     result_recorded = False
 
     for tool_call in _collect_tool_calls(turn.blocks):
-        lifecycle = (
-            _skip_tool(
-                call_id=tool_call.call_id,
-                tool_name=tool_call.name,
-                arguments=tool_call.arguments,
-            )
-            if result_recorded
-            else _execute_tool(
-                call_id=tool_call.call_id,
-                tool_name=tool_call.name,
-                arguments=tool_call.arguments,
-                tool_executor=tool_executor,
-            )
-        )
-        async for agent_event in lifecycle:
+        async for agent_event in _tool_events(
+            result_recorded=result_recorded,
+            call_id=tool_call.call_id,
+            tool_name=tool_call.name,
+            arguments=tool_call.arguments,
+            tool_executor=tool_executor,
+        ):
             if isinstance(agent_event, ToolExecutionEndEvent):
                 outcome = agent_event.outcome
+                if _is_result_execution(outcome):
+                    result_recorded = True
                 run_history.append(outcome.tool_result_turn)
                 tool_executions.append(outcome)
-                if enforce_output_contract and _is_result_execution(outcome):
-                    result_recorded = True
+
             yield agent_event
 
     yield TurnEndEvent(assistant_turn=turn, tool_executions=tool_executions)
@@ -259,6 +250,30 @@ async def _handle_stream_error_event(
     run_history.append(turn)
     yield MessageEndEvent(assistant_turn=turn)
     yield TurnEndEvent(assistant_turn=turn, tool_executions=[])
+
+
+def _tool_events(
+    *,
+    result_recorded: bool,
+    call_id: str,
+    tool_name: str,
+    arguments: JsonObject,
+    tool_executor: ToolExecutor,
+) -> AsyncIterator[AgentEvent]:
+    """Return the lifecycle stream for a tool call based on result state."""
+
+    if result_recorded:
+        return _skip_tool(
+            call_id=call_id,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+    return _execute_tool(
+        call_id=call_id,
+        tool_name=tool_name,
+        arguments=arguments,
+        tool_executor=tool_executor,
+    )
 
 
 async def _execute_tool(
@@ -318,45 +333,28 @@ def _is_result_execution(outcome: ToolExecutionOutcome) -> bool:
 def _build_outcome(
     *,
     enforce_output_contract: bool,
-    terminal_result: RunOutcome | None,
+    terminal_details: ToolDetails | None,
     last_turn: AssistantTurn | None,
 ) -> RunOutcome | None:
     """Derive the terminal run outcome for the agent end event."""
 
     if last_turn is None or last_turn.status != "completed":
         return None
-    if terminal_result is not None:
-        return terminal_result
     output_text = _turn_text(last_turn)
+    if isinstance(terminal_details, CompleteDetails):
+        return Completed(value=terminal_details.value, output_text=output_text)
+    if isinstance(terminal_details, FailDetails):
+        return Failed(reason=terminal_details.reason, output_text=output_text)
     if not enforce_output_contract:
         return Completed(output_text=output_text)
     return Failed(reason=NO_RESULT_REASON, output_text=output_text)
 
 
-def _terminal_result(turn_end: TurnEndEvent) -> RunOutcome | None:
-    """Return the outcome recorded by a turn's first successful result call."""
-
-    output_text = _turn_text(turn_end.assistant_turn)
-    for execution in turn_end.tool_executions:
-        if execution.tool_result_turn.is_error:
-            continue
-        if isinstance(execution.details, CompleteDetails):
-            return Completed(value=execution.details.value, output_text=output_text)
-        if isinstance(execution.details, FailDetails):
-            return Failed(reason=execution.details.reason, output_text=output_text)
-    return None
-
-
-def _require_result_tools(tool_executor: ToolExecutor) -> None:
-    """Reject contract enforcement without both result tools registered."""
+def _enforces_output_contract(tool_executor: ToolExecutor) -> bool:
+    """Return whether the toolset opts the run into the output contract."""
 
     names = {tool.name.lower() for tool in tool_executor.tools}
-    missing = {COMPLETE_TOOL_NAME, FAIL_TOOL_NAME} - names
-    if missing:
-        raise ValueError(
-            "enforce_output_contract requires result tools named: "
-            + ", ".join(sorted(missing))
-        )
+    return {COMPLETE_TOOL_NAME, FAIL_TOOL_NAME} <= names
 
 
 def _turn_text(turn: AssistantTurn) -> str:
