@@ -23,6 +23,7 @@ async def fail(reason: str) -> ToolResult:
     return ToolResult.text(
         "Failure recorded.",
         details=FailDetails(reason=reason),
+        terminate=True,
     )
 
 

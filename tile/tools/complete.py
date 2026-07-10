@@ -27,6 +27,7 @@ def tool(result: type[BaseModel]) -> ToolDefinition:
         return ToolResult.text(
             "Result recorded.",
             details=CompleteDetails(value=value),
+            terminate=True,
         )
 
     return ToolDefinition(

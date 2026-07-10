@@ -33,10 +33,6 @@ NO_RESULT_REASON = (
     f"`{FAIL_TOOL_NAME}`."
 )
 
-RESULT_ALREADY_RECORDED = (
-    "The run already recorded a result; this call was not executed."
-)
-
 
 class Completed(BaseModel):
     """Terminal outcome for a run that delivered its result.

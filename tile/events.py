@@ -50,8 +50,8 @@ class AgentStartEvent(AgentEvent):
 class AgentEndEvent(AgentEvent):
     """Marks the end of an agent run.
 
-    ``outcome`` is None when the run ended without a terminal turn, such as
-    on a stream error or an abort; the run status carries that story.
+    The stateless agent leaves ``outcome`` unset. ``AgentRuntime`` attaches the
+    prompt outcome after applying its plain-text or result-contract policy.
     """
 
     type: Literal["agent_end"] = "agent_end"
@@ -76,6 +76,7 @@ class ToolExecutionOutcome(BaseModel):
 
     tool_result_turn: ToolResultTurn
     details: SerializeAsAny[ToolDetails] | None = None
+    terminate: bool = False
 
     @property
     def result(self) -> ToolResult:
@@ -84,6 +85,7 @@ class ToolExecutionOutcome(BaseModel):
         return ToolResult(
             content=self.tool_result_turn.content,
             details=self.details,
+            terminate=self.terminate,
         )
 
     @classmethod
@@ -105,6 +107,7 @@ class ToolExecutionOutcome(BaseModel):
                 is_error=is_error,
             ),
             details=result.details,
+            terminate=result.terminate and not is_error,
         )
 
 

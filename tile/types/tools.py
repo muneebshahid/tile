@@ -42,6 +42,7 @@ class ToolResult(BaseModel):
 
     content: list[ToolResultContent]
     details: SerializeAsAny[ToolDetails] | None = None
+    terminate: bool = False
 
     @classmethod
     def text(
@@ -49,10 +50,15 @@ class ToolResult(BaseModel):
         text: str,
         *,
         details: ToolDetails | None = None,
+        terminate: bool = False,
     ) -> ToolResult:
         """Create a text-only tool result."""
 
-        return cls(content=[ToolTextContent(text=text)], details=details)
+        return cls(
+            content=[ToolTextContent(text=text)],
+            details=details,
+            terminate=terminate,
+        )
 
     @classmethod
     def image(
@@ -61,10 +67,15 @@ class ToolResult(BaseModel):
         image: ToolImageContent,
         *,
         details: ToolDetails | None = None,
+        terminate: bool = False,
     ) -> ToolResult:
         """Create an image tool result with an explanatory text block."""
 
-        return cls(content=[ToolTextContent(text=text), image], details=details)
+        return cls(
+            content=[ToolTextContent(text=text), image],
+            details=details,
+            terminate=terminate,
+        )
 
 
 ToolFunction: TypeAlias = Callable[..., Awaitable[ToolResult]]
