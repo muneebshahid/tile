@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import cast
 from unittest.mock import AsyncMock
 
@@ -93,11 +94,13 @@ def _runtime_with_streams(
     streams: Sequence[Sequence[ProviderStreamEvent]],
     *,
     tools: Sequence[ToolDefinition] = (),
+    cwd: Path = Path("."),
 ) -> tuple[AgentRuntime, ProviderStreamMock]:
     """Build a runtime backed by queued fake provider streams."""
 
     provider = ProviderStreamMock(streams)
-    return AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", tools=tools), provider
+    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", tools=tools, cwd=cwd)
+    return runtime, provider
 
 
 def _runtime_with_gated_streams(
@@ -106,14 +109,14 @@ def _runtime_with_gated_streams(
     """Build a runtime whose provider streams wait for explicit release."""
 
     provider = GatedProviderStreamMock(releases)
-    return AgentRuntime(stream_fn=provider.fn, model="gpt-5.4"), provider
+    return AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", cwd=Path(".")), provider
 
 
 def _runtime_with_failing_provider(error: Exception) -> AgentRuntime:
     """Build a runtime whose provider call raises before streaming."""
 
     failing_stream_fn = cast("StreamFn", AsyncMock(side_effect=error))
-    return AgentRuntime(stream_fn=failing_stream_fn, model="gpt-5.4")
+    return AgentRuntime(stream_fn=failing_stream_fn, model="gpt-5.4", cwd=Path("."))
 
 
 def _runtime_with_interrupted_stream(
@@ -126,7 +129,7 @@ def _runtime_with_interrupted_stream(
         "StreamFn",
         AsyncMock(return_value=async_stream(events, error=error)),
     )
-    return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4")
+    return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4", cwd=Path("."))
 
 
 class FalsyHistoryStore(InMemoryHistoryStore):
@@ -212,6 +215,7 @@ def test_session_history_is_read_only_snapshot() -> None:
         stream_fn=ProviderStreamMock([]).fn,
         model="gpt-5.4",
         history_store=store,
+        cwd=Path("."),
     )
     session = runtime.session(session_id="snapshot")
     user_message = UserMessage(content="hello")
@@ -235,12 +239,105 @@ def test_runtime_preserves_falsy_injected_history_store() -> None:
         stream_fn=ProviderStreamMock([]).fn,
         model="gpt-5.4",
         history_store=store,
+        cwd=Path("."),
     )
 
     session = runtime.session(session_id="configured-store")
 
     assert session.id == "configured-store"
     assert store.get_session("configured-store").session_id == "configured-store"
+
+
+def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
+    """Inject the resolved runtime cwd into tools that declare it, only those."""
+
+    captured: dict[str, Path] = {}
+
+    async def where(cwd: Path) -> ToolResult:
+        """Capture the injected working directory."""
+
+        captured["where"] = cwd
+        return ToolResult.text(str(cwd))
+
+    async def plain() -> ToolResult:
+        """Run without any cwd involvement."""
+
+        return ToolResult.text("plain ran")
+
+    def _no_arg_tool(name: str, fn: ToolFunction) -> ToolDefinition:
+        """Build a no-argument tool definition for the binding test."""
+
+        return ToolDefinition(
+            name=name,
+            description=f"Exercise cwd binding via {name}.",
+            input_schema={"type": "object", "properties": {}, "required": []},
+            fn=fn,
+        )
+
+    runtime, _ = _runtime_with_streams(
+        [
+            tool_call_stream(
+                response_id="resp_where",
+                call_id="call_where",
+                tool_name="where",
+                arguments={},
+            ),
+            tool_call_stream(
+                response_id="resp_plain",
+                call_id="call_plain",
+                tool_name="plain",
+                arguments={},
+            ),
+            final_text_stream("resp_done", "Both tools ran."),
+        ],
+        tools=[_no_arg_tool("where", where), _no_arg_tool("plain", plain)],
+        cwd=tmp_path,
+    )
+    session = runtime.session(session_id="cwd-binding")
+
+    async def _run() -> None:
+        """Run one prompt that exercises both tools."""
+
+        run = await session.prompt("run both tools")
+        assert await run.wait() == "completed"
+        events = [event async for event in run.events()]
+        executions = [e for e in events if isinstance(e, ToolExecutionEndEvent)]
+        assert [e.outcome.tool_result_turn.is_error for e in executions] == [
+            False,
+            False,
+        ]
+
+    asyncio.run(_run())
+
+    assert captured["where"] == tmp_path.resolve()
+
+
+def test_runtime_rejects_cwd_schema_property_on_injected_tool() -> None:
+    """Reject tools that declare cwd for injection yet expose it to the model."""
+
+    async def clash(cwd: Path) -> ToolResult:
+        """Declare cwd while the schema also exposes it."""
+
+        return ToolResult.text(str(cwd))
+
+    bad_tool = ToolDefinition(
+        name="clash",
+        description="Conflicting cwd declaration.",
+        input_schema={
+            "type": "object",
+            "properties": {"cwd": {"type": "string"}},
+            "required": [],
+        },
+        fn=clash,
+    )
+
+    with pytest.raises(ValueError, match="cwd"):
+        AgentRuntime(
+            stream_fn=ProviderStreamMock([]).fn,
+            model="gpt-5.4",
+            tools=[bad_tool],
+            cwd=Path("."),
+        )
 
 
 def test_history_store_rejects_unknown_session_writes() -> None:

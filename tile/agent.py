@@ -58,20 +58,21 @@ async def run_agent(
     stream_fn: StreamFn,
     model: str,
     tool_executor: ToolExecutor,
+    cwd: Path,
     instructions: str = DEFAULT_INSTRUCTIONS,
     auto_mode: bool = True,
-    cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
     """Run one stateless agent turn from supplied model-visible history.
 
     A successful tool result with ``terminate=True`` ends the loop after the
-    current tool batch without another provider call.
+    current tool batch without another provider call. ``cwd`` is announced
+    in the system prompt verbatim; the caller owns its resolution.
     """
 
     run_history = list(history)
     system_prompt = build_system_prompt(
         instructions,
-        _resolve_cwd(cwd),
+        cwd,
         auto_mode=auto_mode,
     )
 
@@ -225,14 +226,6 @@ async def _execute_tool(
         arguments=arguments,
     )
     yield ToolExecutionEndEvent(outcome=outcome)
-
-
-def _resolve_cwd(cwd: Path | str | None) -> Path:
-    """Resolve the agent working directory."""
-
-    if cwd is None:
-        return Path.cwd().resolve()
-    return Path(cwd).expanduser().resolve()
 
 
 def _collect_tool_calls(blocks: Sequence[AssistantBlock]) -> list[ToolCallBlock]:

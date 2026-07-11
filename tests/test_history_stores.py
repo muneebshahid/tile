@@ -272,6 +272,7 @@ def test_sqlite_history_store_survives_runtime_restart(tmp_path: Path) -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=first_store,
+        cwd=Path("."),
     )
     first_session = first_runtime.session(session_id="restart")
     _collect_prompt_events(first_session, "first")
@@ -282,6 +283,7 @@ def test_sqlite_history_store_survives_runtime_restart(tmp_path: Path) -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=second_store,
+        cwd=Path("."),
     )
     restarted_session = second_runtime.get_session("restart")
     _collect_prompt_events(restarted_session, "second")
