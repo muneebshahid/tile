@@ -1,6 +1,7 @@
 """Tests for the documented public import surface."""
 
 import asyncio
+from pathlib import Path
 from collections.abc import AsyncIterator, Sequence
 
 from tile import (
@@ -36,6 +37,7 @@ def test_documented_public_imports_run_fake_prompt() -> None:
         model="gpt-5.4",
         history_store=store,
         tools=[_fake_tool_definition()],
+        cwd=Path("."),
     )
     session: Session = runtime.session(session_id="public-imports")
 

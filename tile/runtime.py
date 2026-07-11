@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -18,7 +20,13 @@ from tile.types.conversation import (
     UserMessage,
 )
 from tile.types.stream_events import TextBlock, ToolCallBlock
-from tile.types.tools import ToolDefinition, ToolDetails, ToolTextContent
+from tile.types.tools import (
+    ToolDefinition,
+    ToolDetails,
+    ToolFunction,
+    ToolTextContent,
+)
+from tile.tools.support.paths import normalize_cwd
 from tile.agent import run_agent
 from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
@@ -229,24 +237,29 @@ class AgentRuntime:
         *,
         stream_fn: StreamFn,
         model: str,
+        cwd: Path | str,
         history_store: HistoryStore | None = None,
         tools: Sequence[ToolDefinition] = (),
         instructions: str = DEFAULT_INSTRUCTIONS,
         auto_mode: bool = True,
-        cwd: Path | str | None = None,
     ) -> None:
-        """Create a runtime with shared agent dependencies."""
+        """Create a runtime with shared agent dependencies.
+
+        ``cwd`` is the runtime's single working directory: it is announced in
+        the system prompt and injected into every tool whose function declares
+        a ``cwd`` parameter. Pass tools unbound; the runtime binds them.
+        """
 
         _reject_reserved_tool_names(tools)
         self._stream_fn = stream_fn
         self._model = model
+        self._cwd = normalize_cwd(cwd)
         self._history_store = (
             history_store if history_store is not None else InMemoryHistoryStore()
         )
-        self._tool_executor = ToolExecutor(tools)
+        self._tool_executor = ToolExecutor(_bind_cwd_tools(tools, self._cwd))
         self._instructions = instructions
         self._auto_mode = auto_mode
-        self._cwd = cwd
         self._active_prompt_session_ids: set[str] = set()
         self._active_runs: set[Run] = set()
 
@@ -540,6 +553,47 @@ def _reject_reserved_tool_names(tools: Sequence[ToolDefinition]) -> None:
                 f"Tool name '{tool.name}' is reserved by the runtime for "
                 "output contracts; rename the tool."
             )
+
+
+def _bind_cwd_tools(
+    tools: Sequence[ToolDefinition],
+    cwd: Path,
+) -> tuple[ToolDefinition, ...]:
+    """Bind the runtime cwd into every tool that declares a cwd parameter."""
+
+    return tuple(
+        _bind_cwd(tool, cwd) if _expects_cwd(tool.fn) else tool for tool in tools
+    )
+
+
+def _bind_cwd(tool: ToolDefinition, cwd: Path) -> ToolDefinition:
+    """Return a copy of a tool whose function receives the runtime cwd."""
+
+    _reject_cwd_schema_property(tool)
+    fn = cast(ToolFunction, partial(tool.fn, cwd=cwd))
+    return tool.model_copy(update={"fn": fn})
+
+
+def _expects_cwd(fn: ToolFunction) -> bool:
+    """Return whether a tool function declares an explicit cwd parameter."""
+
+    parameter = inspect.signature(fn).parameters.get("cwd")
+    return parameter is not None and parameter.kind in (
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    )
+
+
+def _reject_cwd_schema_property(tool: ToolDefinition) -> None:
+    """Reject tools that expose the runtime-injected cwd to the model."""
+
+    properties = tool.input_schema.get("properties")
+    if isinstance(properties, dict) and "cwd" in properties:
+        raise ValueError(
+            f"Tool '{tool.name}' declares a `cwd` parameter for runtime "
+            "injection but also exposes 'cwd' in its input schema; remove "
+            "the schema property."
+        )
 
 
 def _unanswered_tool_calls(

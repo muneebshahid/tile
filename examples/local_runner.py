@@ -11,7 +11,7 @@ from openai import AsyncOpenAI
 from tile import AgentRuntime, HistoryStore, RunStatus
 from tile.events import AgentEvent, StreamFn
 from tile.providers.openai import create_stream_api
-from tile.tools import build_tools
+from tile.tools import BUILTIN_TOOLS
 from tile.types import ToolDefinition
 from examples.settings import settings
 
@@ -50,16 +50,13 @@ async def run_prompt(
 ) -> RunStatus:
     """Run one prompt through a runtime session and write JSON event lines."""
 
-    working_directory = _resolve_cwd(cwd)
-    active_tools = (
-        tuple(tools) if tools is not None else tuple(build_tools(working_directory))
-    )
+    active_tools = tuple(tools) if tools is not None else BUILTIN_TOOLS
     runtime = AgentRuntime(
         stream_fn=stream_fn,
         model=model or settings.openai_model,
         history_store=history_store,
         tools=active_tools,
-        cwd=working_directory,
+        cwd=cwd if cwd is not None else Path.cwd(),
     )
     session = runtime.session(name="local-runner")
     event_output = output or sys.stdout
@@ -77,14 +74,6 @@ def _read_prompt(argv: Sequence[str], stdin: TextIO) -> str:
     if argv:
         return " ".join(argv).strip()
     return stdin.read().strip()
-
-
-def _resolve_cwd(cwd: Path | str | None) -> Path:
-    """Resolve the local working directory for tools and instructions."""
-
-    if cwd is None:
-        return Path.cwd().resolve()
-    return Path(cwd).expanduser().resolve()
 
 
 def _serialize_event(event: AgentEvent) -> str:

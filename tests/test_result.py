@@ -297,7 +297,9 @@ def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
         ]
     )
 
-    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+    runtime = AgentRuntime(
+        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+    )
 
     async def _run() -> Failed | None:
         """Run one result prompt and return its outcome when failed."""
@@ -360,6 +362,7 @@ def test_runtime_nudges_text_only_agent_run_toward_result() -> None:
         model="gpt-5.4",
         history_store=store,
         auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> tuple[list[AgentEvent], Completed | None]:
@@ -395,7 +398,9 @@ def test_runtime_fails_after_follow_up_cap() -> None:
     ]
     provider = ProviderStreamMock(streams)
 
-    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+    runtime = AgentRuntime(
+        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+    )
 
     async def _run() -> Failed | None:
         """Run until the output-contract follow-up limit is exhausted."""
@@ -419,7 +424,9 @@ def test_runtime_without_contract_completes_with_text() -> None:
         ]
     )
 
-    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+    runtime = AgentRuntime(
+        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+    )
 
     async def _run() -> Completed | None:
         """Run one plain prompt and return its completed outcome."""
@@ -449,6 +456,7 @@ def test_runtime_fails_when_nudge_attempt_hits_stream_error() -> None:
         model="gpt-5.4",
         history_store=store,
         auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> None:
@@ -538,7 +546,9 @@ def test_runtime_keeps_terminal_text_separate_from_result_value() -> None:
         ]
     )
 
-    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+    runtime = AgentRuntime(
+        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+    )
 
     async def _run() -> tuple[Completed | None, str | None]:
         """Run one result prompt and return its outcome and assistant text."""
@@ -571,6 +581,7 @@ def test_session_prompt_composes_result_tools_and_contract() -> None:
         model="gpt-5.4",
         history_store=store,
         auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> None:
@@ -605,6 +616,7 @@ def test_session_mixes_contract_and_plain_prompts() -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> None:
@@ -639,4 +651,5 @@ def test_runtime_rejects_reserved_tool_names() -> None:
             stream_fn=provider.fn,
             model="gpt-5.4",
             tools=[city_tool("complete", "Not the real complete.", _weather)],
+            cwd=Path("."),
         )

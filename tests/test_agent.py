@@ -98,7 +98,7 @@ def _collect_run_events(
     tools: Sequence[ToolDefinition] = (),
     instructions: str = "Base prompt.",
     auto_mode: bool = False,
-    cwd: Path | str | None = None,
+    cwd: Path = Path("."),
 ) -> list[AgentEvent]:
     """Collect all events emitted by one stateless agent run."""
 

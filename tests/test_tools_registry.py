@@ -1,33 +1,14 @@
 """Tests for the built-in tool registry."""
 
-from pathlib import Path
+import inspect
 
-import pytest
-
-from tile.tools import build_tools
+from tile.tools import BUILTIN_TOOLS
 
 
-@pytest.mark.asyncio
-async def test_build_tools_binds_cwd_to_tool_functions(tmp_path: Path) -> None:
-    """Bind cwd into returned tool functions without exposing it in schemas."""
+def test_builtin_tools_preserves_default_tool_order() -> None:
+    """Expose the default tools unbound, in the documented order."""
 
-    tool_by_name = {tool.name: tool for tool in build_tools(tmp_path)}
-    write_tool = tool_by_name["write"]
-
-    await write_tool.fn(path="sample.txt", content="hello")
-
-    properties = write_tool.input_schema["properties"]
-    assert (tmp_path / "sample.txt").read_text(encoding="utf-8") == "hello"
-    assert isinstance(properties, dict)
-    assert "cwd" not in properties
-
-
-def test_build_tools_preserves_default_tool_order(tmp_path: Path) -> None:
-    """Return the same default tools as the registry list."""
-
-    tools = build_tools(tmp_path)
-
-    assert [tool.name for tool in tools] == [
+    assert [tool.name for tool in BUILTIN_TOOLS] == [
         "read",
         "bash",
         "edit",
@@ -36,3 +17,13 @@ def test_build_tools_preserves_default_tool_order(tmp_path: Path) -> None:
         "ls",
         "write",
     ]
+
+
+def test_builtin_tools_declare_cwd_without_exposing_it() -> None:
+    """Declare cwd for runtime injection on every builtin, never in schemas."""
+
+    for tool in BUILTIN_TOOLS:
+        assert "cwd" in inspect.signature(tool.fn).parameters
+        properties = tool.input_schema.get("properties")
+        assert isinstance(properties, dict)
+        assert "cwd" not in properties
