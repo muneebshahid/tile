@@ -309,7 +309,7 @@ def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
     outcome = asyncio.run(_run())
 
     assert provider.await_count == 1
-    assert outcome == Failed(reason="The city is ambiguous.", output_text="")
+    assert outcome == Failed(reason="The city is ambiguous.")
 
 
 def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
@@ -407,10 +407,7 @@ def test_runtime_fails_after_follow_up_cap() -> None:
     outcome = asyncio.run(_run())
 
     assert provider.await_count == MAX_RESULT_FOLLOW_UPS + 1
-    assert outcome == Failed(
-        reason=NO_RESULT_REASON,
-        output_text="Still thinking.",
-    )
+    assert outcome == Failed(reason=NO_RESULT_REASON)
 
 
 def test_runtime_without_contract_completes_with_text() -> None:
@@ -433,11 +430,11 @@ def test_runtime_without_contract_completes_with_text() -> None:
 
     outcome = asyncio.run(_run())
 
-    assert outcome == Completed(value=None, output_text="The temperature is 21C.")
+    assert outcome == Completed(value="The temperature is 21C.")
 
 
-def test_runtime_outcome_is_none_on_stream_error() -> None:
-    """Leave the runtime outcome unset when its agent run ends on a stream error."""
+def test_runtime_maps_stream_error_to_failed_outcome() -> None:
+    """Map an agent stream error into a terminal failed outcome."""
 
     provider = ProviderStreamMock(
         [
@@ -447,14 +444,16 @@ def test_runtime_outcome_is_none_on_stream_error() -> None:
 
     runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
 
-    async def _run() -> None:
-        """Run one errored result prompt and assert it has no typed outcome."""
+    async def _run() -> Failed | None:
+        """Run one errored result prompt and return its failed outcome."""
 
         run = await runtime.session().prompt("Weather?", result=WeatherReport)
         assert await run.wait() == "completed"
-        assert run.outcome is None
+        return run.outcome if isinstance(run.outcome, Failed) else None
 
-    asyncio.run(_run())
+    outcome = asyncio.run(_run())
+
+    assert outcome == Failed(reason="boom")
 
 
 def test_agent_finishes_tool_batch_after_terminating_result(tmp_path: Path) -> None:
@@ -499,8 +498,8 @@ def test_agent_finishes_tool_batch_after_terminating_result(tmp_path: Path) -> N
     assert provider.await_count == 1
 
 
-def test_runtime_output_text_captures_ending_turn_text() -> None:
-    """Capture text streamed alongside the runtime's terminal result call."""
+def test_runtime_keeps_terminal_text_separate_from_result_value() -> None:
+    """Expose terminal assistant text on the run without duplicating it in outcome."""
 
     provider = ProviderStreamMock(
         [
@@ -524,17 +523,19 @@ def test_runtime_output_text_captures_ending_turn_text() -> None:
 
     runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
 
-    async def _run() -> Completed | None:
-        """Run one result prompt and return its completed outcome."""
+    async def _run() -> tuple[Completed | None, str | None]:
+        """Run one result prompt and return its outcome and assistant text."""
 
         run = await runtime.session().prompt("Weather?", result=WeatherReport)
         assert await run.wait() == "completed"
-        return run.outcome if isinstance(run.outcome, Completed) else None
+        outcome = run.outcome if isinstance(run.outcome, Completed) else None
+        return outcome, run.output_text
 
-    outcome = asyncio.run(_run())
+    outcome, output_text = asyncio.run(_run())
 
     assert outcome is not None
-    assert outcome.output_text == "Recording the result."
+    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+    assert output_text == "Recording the result."
 
 
 def test_session_prompt_composes_result_tools_and_contract() -> None:
@@ -598,9 +599,7 @@ def test_session_mixes_contract_and_plain_prompts() -> None:
 
         plain_run = await session.prompt("Which city did I ask about?")
         assert await plain_run.wait() == "completed"
-        assert plain_run.outcome == Completed(
-            value=None, output_text="You asked about Munich."
-        )
+        assert plain_run.outcome == Completed(value="You asked about Munich.")
 
     asyncio.run(_run())
 

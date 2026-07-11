@@ -37,25 +37,22 @@ NO_RESULT_REASON = (
 class Completed(BaseModel):
     """Terminal outcome for a run that delivered its result.
 
-    ``value`` carries the validated result instance of the winning
-    `complete` call, and None for runs without an output contract. An
-    outcome revalidated from serialized event data carries the plain
-    ``JsonObject`` form instead of the original model type.
+    ``value`` carries assistant text for plain prompts and the validated result
+    instance for result prompts. A serialized result outcome revalidates into
+    its plain ``JsonObject`` form instead of the original model type.
     """
 
     type: Literal["completed"] = "completed"
-    value: JsonObject | SerializeAsAny[BaseModel] | None = Field(
-        default=None, union_mode="left_to_right"
+    value: str | JsonObject | SerializeAsAny[BaseModel] = Field(
+        union_mode="left_to_right"
     )
-    output_text: str = ""
 
 
 class Failed(BaseModel):
-    """Terminal outcome for a run that reported it cannot deliver."""
+    """Terminal outcome for a run that could not deliver its result."""
 
     type: Literal["failed"] = "failed"
     reason: str
-    output_text: str = ""
 
 
 RunOutcome: TypeAlias = Completed | Failed

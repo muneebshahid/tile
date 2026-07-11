@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -75,10 +75,10 @@ class _AgentRunObservation:
             self.terminal_details = event.outcome.details
 
     @property
-    def completed(self) -> bool:
-        """Return whether the agent run ended with a completed assistant turn."""
+    def final_turn(self) -> AssistantTurn:
+        """Return the final turn guaranteed by the agent event contract."""
 
-        return self.last_turn is not None and self.last_turn.status == "completed"
+        return cast(AssistantTurn, self.last_turn)
 
 
 class Run:
@@ -149,10 +149,13 @@ class Run:
     def outcome(self) -> RunOutcome | None:
         """Return the terminal run outcome once the agent run has ended.
 
-        Returns None while the run is in flight and for runs that ended
-        without a terminal turn (stream error or abort).
+        Returns None only while the run is still in flight.
         """
 
+        if self._status == "aborted":
+            return Failed(reason="Run aborted.")
+        if self._status == "failed":
+            return Failed(reason=self._error_message or "Run failed.")
         for event in reversed(self._events):
             if isinstance(event, AgentEndEvent):
                 return event.outcome
@@ -355,7 +358,7 @@ class AgentRuntime:
         ):
             observation.observe(event)
             if isinstance(event, AgentEndEvent):
-                yield AgentEndEvent(outcome=_plain_outcome(observation.last_turn))
+                yield AgentEndEvent(outcome=_plain_outcome(observation.final_turn))
             else:
                 yield event
 
@@ -381,15 +384,15 @@ class AgentRuntime:
                 if not isinstance(event, AgentEndEvent):
                     yield event
 
-            outcome = _result_outcome(observation)
+            outcome = _result_outcome(
+                observation.final_turn,
+                observation.terminal_details,
+            )
             if outcome is not None:
                 yield AgentEndEvent(outcome=outcome)
                 return
-            if not observation.completed:
-                yield AgentEndEvent()
-                return
             if follow_ups == MAX_RESULT_FOLLOW_UPS:
-                yield AgentEndEvent(outcome=_missing_result_outcome(observation))
+                yield AgentEndEvent(outcome=Failed(reason=NO_RESULT_REASON))
                 return
             yield AgentEndEvent()
             yield ResultFollowUpEvent(message=UserMessage(content=RESULT_FOLLOW_UP))
@@ -571,47 +574,42 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
     return ()
 
 
-def _plain_outcome(turn: AssistantTurn | None) -> RunOutcome | None:
+def _plain_outcome(turn: AssistantTurn) -> RunOutcome:
     """Build the outcome for a plain prompt's final assistant turn."""
 
-    if turn is None or turn.status != "completed":
-        return None
-    return Completed(output_text=_assistant_text(turn))
+    failure = _turn_failure(turn)
+    if failure is not None:
+        return failure
+    return Completed(value=_assistant_text(turn))
 
 
-def _result_outcome(observation: _AgentRunObservation) -> RunOutcome | None:
-    """Build an outcome when a result tool terminated the agent run."""
+def _result_outcome(
+    turn: AssistantTurn,
+    terminal_details: ToolDetails | None,
+) -> RunOutcome | None:
+    """Build a terminal outcome, or return None when a result remains missing."""
 
-    if not observation.completed:
-        return None
-    output_text = _assistant_text(observation.last_turn)
-    if isinstance(observation.terminal_details, CompleteDetails):
-        return Completed(
-            value=observation.terminal_details.value,
-            output_text=output_text,
-        )
-    if isinstance(observation.terminal_details, FailDetails):
-        return Failed(
-            reason=observation.terminal_details.reason,
-            output_text=output_text,
-        )
+    failure = _turn_failure(turn)
+    if failure is not None:
+        return failure
+    if isinstance(terminal_details, CompleteDetails):
+        return Completed(value=terminal_details.value)
+    if isinstance(terminal_details, FailDetails):
+        return Failed(reason=terminal_details.reason)
     return None
 
 
-def _missing_result_outcome(observation: _AgentRunObservation) -> Failed:
-    """Build the failure emitted after the runtime exhausts result follow-ups."""
+def _turn_failure(turn: AssistantTurn) -> Failed | None:
+    """Return the failure carried by a non-completed assistant turn."""
 
-    return Failed(
-        reason=NO_RESULT_REASON,
-        output_text=_assistant_text(observation.last_turn),
-    )
+    if turn.status == "completed":
+        return None
+    return Failed(reason=turn.error_message or "Run failed.")
 
 
-def _assistant_text(turn: AssistantTurn | None) -> str:
-    """Join one assistant turn's text blocks, or return empty text when absent."""
+def _assistant_text(turn: AssistantTurn) -> str:
+    """Join one assistant turn's text blocks."""
 
-    if turn is None:
-        return ""
     return "\n\n".join(
         block.text for block in turn.blocks if isinstance(block, TextBlock)
     )

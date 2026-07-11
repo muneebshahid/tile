@@ -12,6 +12,7 @@ from tile.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
+from tile.result import Failed
 from tile.runtime import AgentRuntime, Run, SessionBusyError
 from tile.events import (
     AgentEndEvent,
@@ -342,6 +343,7 @@ def test_run_abort_marks_run_aborted_and_frees_session() -> None:
 
         assert await run.wait() == "aborted"
         assert run.status == "aborted"
+        assert run.outcome == Failed(reason="Run aborted.")
 
         second = await session.prompt("second")
         releases[1].set()
@@ -412,6 +414,7 @@ def test_run_failure_captures_error_and_frees_session() -> None:
 
         assert await run.wait() == "failed"
         assert run.error_message == "connection refused"
+        assert run.outcome == Failed(reason="connection refused")
         events = await _collect_run_events(run)
         assert isinstance(events[0], AgentStartEvent)
 
