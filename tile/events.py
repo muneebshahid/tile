@@ -50,8 +50,8 @@ class AgentStartEvent(AgentEvent):
 class AgentEndEvent(AgentEvent):
     """Marks the end of an agent run.
 
-    The stateless agent leaves ``outcome`` unset. ``AgentRuntime`` attaches the
-    prompt outcome after applying its plain-text or result-contract policy.
+    The stateless agent leaves ``outcome`` unset. Layers that compose runs
+    into prompts attach the prompt-level outcome.
     """
 
     type: Literal["agent_end"] = "agent_end"

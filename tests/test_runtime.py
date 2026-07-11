@@ -1,7 +1,7 @@
 """Tests for runtime-owned sessions, task-owned runs, and in-memory history."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import cast
 from unittest.mock import AsyncMock
 
@@ -12,7 +12,6 @@ from tile.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from tile.result import Failed
 from tile.runtime import AgentRuntime, Run, SessionBusyError
 from tile.events import (
     AgentEndEvent,
@@ -34,15 +33,18 @@ from tile.types.tools import (
     ToolResult,
     ToolTextContent,
 )
+from tile.result import Completed
 from tests.support.agent_streams import (
     GatedProviderStreamMock,
     ProviderStreamMock,
     error_stream,
     final_text_stream,
     stream_done,
+    stream_error,
     stream_start,
     tool_call_stream,
 )
+from tests.support.async_streams import async_stream
 from tests.support.conversation_assertions import (
     expect_assistant_turn,
     expect_tool_result_turn,
@@ -112,6 +114,19 @@ def _runtime_with_failing_provider(error: Exception) -> AgentRuntime:
 
     failing_stream_fn = cast("StreamFn", AsyncMock(side_effect=error))
     return AgentRuntime(stream_fn=failing_stream_fn, model="gpt-5.4")
+
+
+def _runtime_with_interrupted_stream(
+    events: Sequence[ProviderStreamEvent],
+    error: Exception,
+) -> AgentRuntime:
+    """Build a runtime whose provider stream raises after partial events."""
+
+    stream_fn = cast(
+        "StreamFn",
+        AsyncMock(return_value=async_stream(events, error=error)),
+    )
+    return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4")
 
 
 class FalsyHistoryStore(InMemoryHistoryStore):
@@ -343,7 +358,7 @@ def test_run_abort_marks_run_aborted_and_frees_session() -> None:
 
         assert await run.wait() == "aborted"
         assert run.status == "aborted"
-        assert run.outcome == Failed(reason="Run aborted.")
+        assert run.outcome is None
 
         second = await session.prompt("second")
         releases[1].set()
@@ -397,32 +412,6 @@ def test_run_abort_heals_unanswered_tool_calls() -> None:
 
         second = await session.prompt("try again")
         assert await second.wait() == "completed"
-
-    asyncio.run(_run())
-
-
-def test_run_failure_captures_error_and_frees_session() -> None:
-    """Record provider call failures as run data instead of raising."""
-
-    async def _run() -> None:
-        """Submit a prompt whose provider call raises immediately."""
-
-        runtime = _runtime_with_failing_provider(ConnectionError("connection refused"))
-        session = runtime.session(session_id="provider-failure")
-
-        run = await session.prompt("hello")
-
-        assert await run.wait() == "failed"
-        assert run.error_message == "connection refused"
-        assert run.outcome == Failed(reason="connection refused")
-        events = await _collect_run_events(run)
-        assert isinstance(events[0], AgentStartEvent)
-
-        session_history = session.history
-        assert expect_user_message(session_history[0]).content == "hello"
-
-        second = await session.prompt("again")
-        assert await second.wait() == "failed"
 
     asyncio.run(_run())
 
@@ -687,25 +676,130 @@ def test_session_prompt_rejects_overlapping_same_session_prompts() -> None:
     asyncio.run(_run())
 
 
-def test_session_prompt_persists_stream_error_history() -> None:
-    """Persist provider stream failures as assistant error turns."""
+def _in_band_error_runtime() -> AgentRuntime:
+    """Build a runtime whose provider stream ends with an in-band error event."""
 
     runtime, _ = _runtime_with_streams(
-        [error_stream("resp_error", "Socket closed")],
+        [
+            [
+                stream_start("resp_error"),
+                stream_error(
+                    "resp_error",
+                    "Socket closed",
+                    blocks=[TextBlock(text="Munich is")],
+                ),
+            ]
+        ],
     )
-    session = runtime.session(session_id="stream-error")
+    return runtime
 
-    events = _collect_prompt_events(runtime, session.id, "hello")
 
-    assert isinstance(events[-1], AgentEndEvent)
+def _raise_before_stream_runtime() -> AgentRuntime:
+    """Build a runtime whose provider call raises before streaming."""
+
+    return _runtime_with_failing_provider(ConnectionError("connection refused"))
+
+
+def _raise_mid_stream_runtime() -> AgentRuntime:
+    """Build a runtime whose provider stream raises after starting."""
+
+    return _runtime_with_interrupted_stream(
+        [stream_start("resp_error")],
+        ConnectionError("connection reset"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("make_runtime", "expected_error", "errored_turn_streamed"),
+    [
+        pytest.param(
+            _in_band_error_runtime,
+            "Socket closed",
+            True,
+            id="in_band_stream_error",
+        ),
+        pytest.param(
+            _raise_before_stream_runtime,
+            "connection refused",
+            False,
+            id="raise_before_stream",
+        ),
+        pytest.param(
+            _raise_mid_stream_runtime,
+            "connection reset",
+            False,
+            id="raise_mid_stream",
+        ),
+    ],
+)
+def test_provider_death_fails_run_without_outcome_or_history(
+    make_runtime: Callable[[], AgentRuntime],
+    expected_error: str,
+    errored_turn_streamed: bool,
+) -> None:
+    """Converge every provider death channel on the same failed-run state.
+
+    The run fails with the provider's message and no outcome, anything
+    streamed before the death stays visible on the run's event log, and
+    session history keeps only the last stable state.
+    """
+
+    runtime = make_runtime()
+    session = runtime.session(session_id="provider-death")
+
+    async def _run() -> list[AgentEvent]:
+        """Submit one prompt and collect its events after the run fails."""
+
+        run = await session.prompt("hello")
+        assert await run.wait() == "failed"
+        assert run.error_message == expected_error
+        assert run.outcome is None
+        return [event async for event in run.events()]
+
+    events = asyncio.run(_run())
+
+    assert isinstance(events[0], AgentStartEvent)
+    streamed_turns = [
+        event.assistant_turn for event in events if isinstance(event, MessageEndEvent)
+    ]
+    if errored_turn_streamed:
+        assert [turn.status for turn in streamed_turns] == ["error"]
+        assert streamed_turns[0].blocks == [TextBlock(text="Munich is")]
+    else:
+        assert streamed_turns == []
 
     session_history = session.history
+    assert len(session_history) == 1
     assert expect_user_message(session_history[0]).content == "hello"
-    assistant_turn = expect_assistant_turn(session_history[1])
-    assert assistant_turn.response_id == "resp_error"
-    assert assistant_turn.status == "error"
-    assert assistant_turn.stop_reason == "error"
-    assert assistant_turn.error_message == "Socket closed"
+
+
+def test_session_prompt_recovers_after_stream_error() -> None:
+    """Replay clean history on the prompt after an in-band stream failure."""
+
+    runtime, provider = _runtime_with_streams(
+        [
+            error_stream("resp_error", "Socket closed"),
+            final_text_stream("resp_retry", "Recovered."),
+        ]
+    )
+    session = runtime.session(session_id="stream-error-recovery")
+
+    async def _run() -> None:
+        """Fail one prompt, then complete the next on the same session."""
+
+        failed = await session.prompt("hello")
+        assert await failed.wait() == "failed"
+
+        second = await session.prompt("try again")
+        assert await second.wait() == "completed"
+        assert second.outcome == Completed(value="Recovered.")
+
+    asyncio.run(_run())
+
+    assert provider.history(1) == (
+        UserMessage(content="hello"),
+        UserMessage(content="try again"),
+    )
 
 
 def test_session_prompt_persists_tool_exception_history() -> None:

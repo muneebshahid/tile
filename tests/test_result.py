@@ -28,7 +28,7 @@ from tile.events import (
     ResultFollowUpEvent,
     ToolExecutionEndEvent,
 )
-from tile.types.conversation import ToolResultTurn, UserMessage
+from tile.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
 from tile.types.stream_events import TextBlock
 from tile.types.tools import ToolDefinition, ToolResult
 from tests.support.agent_streams import (
@@ -433,27 +433,44 @@ def test_runtime_without_contract_completes_with_text() -> None:
     assert outcome == Completed(value="The temperature is 21C.")
 
 
-def test_runtime_maps_stream_error_to_failed_outcome() -> None:
-    """Map an agent stream error into a terminal failed outcome."""
+def test_runtime_fails_when_nudge_attempt_hits_stream_error() -> None:
+    """Propagate a follow-up attempt's stream error, keeping stable history."""
 
     provider = ProviderStreamMock(
         [
-            error_stream("resp_1", "boom"),
+            final_text_stream("resp_1", "Still thinking."),
+            error_stream("resp_2", "boom"),
         ]
     )
 
-    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+    store = InMemoryHistoryStore()
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=store,
+        auto_mode=False,
+    )
 
-    async def _run() -> Failed | None:
-        """Run one errored result prompt and return its failed outcome."""
+    async def _run() -> None:
+        """Fail the result prompt on its nudged second attempt."""
 
-        run = await runtime.session().prompt("Weather?", result=WeatherReport)
-        assert await run.wait() == "completed"
-        return run.outcome if isinstance(run.outcome, Failed) else None
+        run = await runtime.session(session_id="nudged-error").prompt(
+            "Weather?", result=WeatherReport
+        )
+        assert await run.wait() == "failed"
+        assert run.error_message == "boom"
+        assert run.outcome is None
 
-    outcome = asyncio.run(_run())
+    asyncio.run(_run())
 
-    assert outcome == Failed(reason="boom")
+    assert provider.await_count == 2
+    history = list(store.get_history("nudged-error"))
+    assert len(history) == 3
+    assert history[0] == UserMessage(content="Weather?")
+    first_attempt = history[1]
+    assert isinstance(first_attempt, AssistantTurn)
+    assert first_attempt.status == "completed"
+    assert history[2] == UserMessage(content=RESULT_FOLLOW_UP)
 
 
 def test_agent_finishes_tool_batch_after_terminating_result(tmp_path: Path) -> None:
