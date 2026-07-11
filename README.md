@@ -3,76 +3,72 @@
 [![CI](https://github.com/muneebshahid/tile/actions/workflows/ci.yml/badge.svg)](https://github.com/muneebshahid/tile/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-> ⚠️ **Work in Progress** — This project is under active development and APIs may change.
+A compact, Python-native runtime for headless, tool-using agent sessions.
 
-A small Python-native runtime for tool-using agent sessions.
+Tile is a **runtime, not a framework**. You construct the pieces — a provider
+client, a tool list, a working directory, optionally a history store — and hand
+them to `AgentRuntime`. It runs prompt-driven agent sessions on top of them:
+provider streaming, a tool-execution loop, typed run outcomes, and persistent
+conversation history. There are no plugins, no global configuration, and no
+hidden defaults; every dependency is caller-constructed and visible at the
+construction site. Embed it in an application, or build a service on top.
 
-## Overview
+**Status: 0.x.** APIs change without deprecation cycles. OpenAI (Responses API)
+is the only provider today; more are planned. Requires Python 3.13+.
 
-**Tile** is a headless agent session runtime for Python. Providers, tools, events, and serialization are explicit runtime contracts. Use it as an embedded library or as the core of a service without adopting a broad application framework.
-
-## Features
-
-- **Headless Runtime**: Run agents from Python code or a small local command without a UI dependency
-- **Explicit Contracts**: Swap providers, tools, event handlers, and serializers without modifying core agent logic
-- **Minimal Core**: Only what you need—everything else is optional
-- **Async First**: Built on Python async/await for non-blocking I/O
-- **Type Safe**: Full Pydantic integration with ty support
-- **Streaming Support**: Real-time structured runtime events
-- **Tool Execution**: Pluggable tool definitions and execution strategies
-- **Reasoning**: Extensible support for extended thinking workflows
-
-## Architecture
-
-```
-tile/
-├── history/         # Session metadata and conversation history stores
-├── providers/       # Provider integrations
-│   └── openai/      # OpenAI provider implementation
-├── tools/           # Built-in local tool implementations
-├── types/           # Provider-neutral contracts for conversations and tools
-├── events.py        # Runtime event contracts
-└── runtime.py       # Session runtime facade
-tests/               # Test suite
-```
-
-## Quick Start
-
-Run a local prompt:
+## Install
 
 ```bash
-uv run python -m examples.local_runner "Inspect the current repository"
+pip install tile-runtime
 ```
 
-Or pipe a prompt through stdin:
+The distribution is `tile-runtime`; the import name is `tile`.
 
-```bash
-printf "Inspect the current repository" | uv run python -m examples.local_runner
-```
+## Quickstart
 
-## Public API
-
-Use the package facades for application code. Deep module paths are internal and
-may move as Tile grows.
+With `OPENAI_API_KEY` set:
 
 ```python
-from tile import AgentRuntime, HistoryStore, InMemoryHistoryStore, Run
-from tile.events import AgentEvent, MessageEndEvent, StreamFn
+import asyncio
+from pathlib import Path
+
+from openai import AsyncOpenAI
+
+from tile import AgentRuntime
 from tile.providers.openai import create_stream_api
-from tile.types import ToolDefinition, ToolResult
+from tile.tools import BUILTIN_TOOLS
+
+
+async def main() -> None:
+    runtime = AgentRuntime(
+        stream_fn=create_stream_api(AsyncOpenAI()),
+        model="gpt-5.4",
+        tools=BUILTIN_TOOLS,
+        cwd=Path.cwd(),
+    )
+    session = runtime.session(name="quickstart")
+    run = await session.prompt("List the files in the current directory.")
+    print(await run.wait())  # "completed"
+    print(run.output_text)
+
+
+asyncio.run(main())
 ```
 
-`tile` exposes the runtime, session, run-handle, history-store, and
-runtime-error contracts. `tile.events` exposes structured runtime events
-yielded by `Run.events()`. `tile.types` exposes provider-neutral conversation,
-stream, and tool contracts. `tile.providers.openai` exposes
-`create_stream_api`, which binds a caller-constructed `AsyncOpenAI` client and
-optional provider reasoning options to the runtime's stream-function contract:
-`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.
+`cwd` is required and is the runtime's single working directory: it is
+announced to the model in the system prompt and injected into every tool whose
+function declares a `cwd` parameter. `BUILTIN_TOOLS` (`read`, `bash`, `edit`,
+`grep`, `find`, `ls`, `write`) are plain, unbound definitions — the runtime
+binds them. A custom tool opts into the working directory the same way:
 
-Prompt execution is task-owned: `Session.prompt(...)` submits a run and
-returns immediately, the runtime drives it to completion, and any number of
-subscribers can observe it.
+```python
+async def my_tool(query: str, cwd: Path) -> ToolResult: ...   # receives cwd
+async def my_api_tool(query: str) -> ToolResult: ...          # left alone
+```
+
+Prompt execution is task-owned: `session.prompt(...)` submits a run and returns
+a handle immediately, the runtime drives it to completion, and any number of
+subscribers can observe the event stream.
 
 ```python
 run = await session.prompt("Inspect the current repository")
@@ -81,7 +77,108 @@ async for event in run.events():
 status = await run.wait()  # "completed" | "failed" | "aborted"
 ```
 
-## Security Posture
+## Typed results
+
+Pass a pydantic model to get a validated result object back instead of prose to
+parse:
+
+```python
+from pydantic import BaseModel
+
+from tile import Completed, Failed
+
+
+class WeatherReport(BaseModel):
+    city: str
+    temp_c: float
+    summary: str
+
+
+run = await session.prompt("What's the weather in Munich?", result=WeatherReport)
+await run.wait()
+match run.outcome:
+    case Completed(value=report):
+        print(report.city, report.temp_c)   # a WeatherReport instance
+    case Failed(reason=reason):
+        print("model declared failure:", reason)
+```
+
+For that prompt only, the runtime registers a `complete` tool (whose schema is
+your model) and a `fail(reason)` tool, and instructs the model to end the run
+through one of them. Validation errors route back to the model as ordinary tool
+errors for correction; a run that ends in plain text is reminded to deliver,
+a bounded number of times. The names `complete` and `fail` are reserved —
+caller tools may not use them.
+
+**Designing result schemas:** demand judgment, not transcripts. The result
+should be the model's *verdict* — small, typed fields it decides — not a
+container for data your tools already produced (bulk data belongs on
+`ToolResult.details`). Add a `summary: str` field when you want guaranteed
+prose alongside the structure.
+
+**Prompt caching:** reuse one `result=` schema per session. The result tools
+and contract text sit at the front of every provider request, so alternating
+typed and plain prompts — or switching schemas — within a session re-reads the
+whole session history at full price on each flip.
+
+## Status and outcome
+
+`run.status` says whether the run *executed*; `run.outcome` says what the task
+*concluded*. `outcome` is non-`None` exactly when `status == "completed"`.
+
+| Run ending | `status` | `outcome` |
+|---|---|---|
+| Plain prompt, text answer | `completed` | `Completed(value=text)` |
+| `complete` validates | `completed` | `Completed(value=model instance)` |
+| `fail(reason)` | `completed` | `Failed(reason)` |
+| Reminder cap exhausted | `completed` | `Failed(reason=...)` |
+| Provider dies (stream error or raise) | `failed` | `None` — see `run.error_message` |
+| Aborted | `aborted` | `None` |
+
+A provider death never corrupts the session: partial turns are dropped, history
+ends at the last stable item, unanswered tool calls are healed, and the session
+accepts the next prompt immediately. Tile does not retry; request-level retries
+belong to the `AsyncOpenAI` client you construct (`max_retries`), and the
+recovery unit above that is re-prompting the session.
+
+## Public API
+
+Use the package facades for application code. Deep module paths are internal
+and may move as Tile grows.
+
+```python
+from tile import AgentRuntime, Completed, Failed, InMemoryHistoryStore, Run
+from tile.events import AgentEvent, MessageEndEvent, StreamFn
+from tile.providers.openai import create_stream_api
+from tile.tools import BUILTIN_TOOLS
+from tile.types import ToolDefinition, ToolResult
+```
+
+`tile` exposes the runtime, session, run-handle, outcome, history-store, and
+runtime-error contracts. `tile.events` exposes the structured events yielded by
+`Run.events()`. `tile.types` exposes provider-neutral conversation, stream, and
+tool contracts. `tile.providers.openai` exposes `create_stream_api`, which
+binds a caller-constructed `AsyncOpenAI` client and optional provider reasoning
+options to the runtime's stream-function contract:
+`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.
+
+## Architecture
+
+```
+tile/
+├── history/         # Session metadata and conversation history stores
+├── providers/       # Provider integrations (OpenAI today)
+├── tools/           # Built-in local tool implementations
+├── types/           # Provider-neutral contracts for conversations and tools
+├── agent.py         # Stateless agent loop: provider turns and tool batches
+├── events.py        # Runtime event contracts
+├── prompt.py        # System prompt composition
+├── result.py        # Typed run outcomes and the output-contract protocol
+└── runtime.py       # Session runtime facade: policy, persistence, runs
+tests/               # Test suite
+```
+
+## Security posture
 
 Tile's built-in tools are deliberately unconfined. `bash` executes arbitrary
 shell commands with the permissions of the process running the agent, and the
@@ -93,18 +190,15 @@ authorization hooks arrive with the runtime hooks release.
 
 ## Development
 
-Install dependencies:
 ```bash
-uv sync
+uv sync         # install dependencies
+make test       # pytest
+make format     # ruff
+make type_check # ty
 ```
 
-Run tests:
-```bash
-make test
-```
+Run the example CLI against the current directory:
 
-Format and type-check:
 ```bash
-make format
-make type_check
+uv run python -m examples.local_runner "Inspect the current repository"
 ```
