@@ -13,6 +13,12 @@ class ToolExecutor:
         """Create an executor with model-callable tool definitions."""
 
         self._tools = tuple(tools)
+        seen: set[str] = set()
+        for tool in self._tools:
+            name = tool.name.lower()
+            if name in seen:
+                raise ValueError(f"Duplicate tool name: {tool.name}")
+            seen.add(name)
 
     @property
     def tools(self) -> tuple[ToolDefinition, ...]:

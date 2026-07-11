@@ -615,12 +615,10 @@ tool = ToolDefinition(
                         },
                     },
                     "required": ["old_text", "new_text"],
-                    "additionalProperties": False,
                 },
             },
         },
         "required": ["path", "edits"],
-        "additionalProperties": False,
     },
     fn=fn,
 )

@@ -494,7 +494,6 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
             input_schema={
                 "type": "object",
                 "properties": {},
-                "additionalProperties": False,
             },
             fn=_read_file,
         )

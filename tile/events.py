@@ -5,8 +5,14 @@ from typing import Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, SerializeAsAny
 
+from tile.result import RunOutcome
 from tile.types.contracts import AsyncEventStream
-from tile.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
+from tile.types.conversation import (
+    AssistantTurn,
+    ConversationItem,
+    ToolResultTurn,
+    UserMessage,
+)
 from tile.types.stream_events import StreamUpdateEvent
 from tile.types.tools import (
     JsonObject,
@@ -42,9 +48,21 @@ class AgentStartEvent(AgentEvent):
 
 
 class AgentEndEvent(AgentEvent):
-    """Marks the end of an agent run."""
+    """Marks the end of an agent run.
+
+    The stateless agent leaves ``outcome`` unset. Layers that compose runs
+    into prompts attach the prompt-level outcome.
+    """
 
     type: Literal["agent_end"] = "agent_end"
+    outcome: RunOutcome | None = None
+
+
+class ResultFollowUpEvent(AgentEvent):
+    """Marks an injected reminder that the run must end with a result call."""
+
+    type: Literal["result_follow_up"] = "result_follow_up"
+    message: UserMessage
 
 
 class TurnStartEvent(AgentEvent):
@@ -58,6 +76,7 @@ class ToolExecutionOutcome(BaseModel):
 
     tool_result_turn: ToolResultTurn
     details: SerializeAsAny[ToolDetails] | None = None
+    terminate: bool = False
 
     @property
     def result(self) -> ToolResult:
@@ -66,6 +85,7 @@ class ToolExecutionOutcome(BaseModel):
         return ToolResult(
             content=self.tool_result_turn.content,
             details=self.details,
+            terminate=self.terminate,
         )
 
     @classmethod
@@ -87,6 +107,7 @@ class ToolExecutionOutcome(BaseModel):
                 is_error=is_error,
             ),
             details=result.details,
+            terminate=result.terminate and not is_error,
         )
 
 
@@ -151,4 +172,5 @@ AgentRunEvent: TypeAlias = (
     | MessageEndEvent
     | ToolExecutionStartEvent
     | ToolExecutionEndEvent
+    | ResultFollowUpEvent
 )

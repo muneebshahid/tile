@@ -153,7 +153,7 @@ def _serialize_tool_definition(
             "name": tool.name,
             "description": tool.description,
             "parameters": tool.input_schema,
-            "strict": True,
+            "strict": False,
             "defer_loading": tool.defer_loading,
         },
     )

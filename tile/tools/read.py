@@ -369,7 +369,6 @@ tool = ToolDefinition(
             },
         },
         "required": ["path"],
-        "additionalProperties": False,
     },
     fn=fn,
 )

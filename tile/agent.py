@@ -62,7 +62,11 @@ async def run_agent(
     auto_mode: bool = True,
     cwd: Path | str | None = None,
 ) -> AsyncIterator[AgentEvent]:
-    """Run one stateless agent turn from supplied model-visible history."""
+    """Run one stateless agent turn from supplied model-visible history.
+
+    A successful tool result with ``terminate=True`` ends the loop after the
+    current tool batch without another provider call.
+    """
 
     run_history = list(history)
     system_prompt = build_system_prompt(
@@ -91,10 +95,12 @@ async def _run_agent_loop(
     instructions: str,
     tool_executor: ToolExecutor,
 ) -> AsyncIterator[AgentEvent]:
-    """Call the provider until the assistant stops requesting tools."""
+    """Call the provider until a turn errors, terminates, or stops using tools."""
 
     while True:
         has_tool_executions = False
+        should_terminate = False
+        turn_errored = False
         stream = await stream_fn(
             tuple(run_history),
             model,
@@ -109,14 +115,21 @@ async def _run_agent_loop(
                 tool_executor=tool_executor,
             ):
                 if (
-                    isinstance(agent_event, TurnEndEvent)
-                    and agent_event.tool_executions
+                    isinstance(agent_event, ToolExecutionEndEvent)
+                    and agent_event.outcome.terminate
                 ):
-                    has_tool_executions = True
+                    should_terminate = True
+                if isinstance(agent_event, TurnEndEvent):
+                    if agent_event.tool_executions:
+                        has_tool_executions = True
+                    if agent_event.assistant_turn.status != "completed":
+                        turn_errored = True
                 yield agent_event
 
+        if should_terminate or turn_errored:
+            return
         if not has_tool_executions:
-            break
+            return
 
 
 async def _handle_stream_event(
@@ -172,6 +185,7 @@ async def _handle_stream_done_event(
                 outcome = agent_event.outcome
                 run_history.append(outcome.tool_result_turn)
                 tool_executions.append(outcome)
+
             yield agent_event
 
     yield TurnEndEvent(assistant_turn=turn, tool_executions=tool_executions)
