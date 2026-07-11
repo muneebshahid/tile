@@ -18,19 +18,26 @@ from tile.types.conversation import (
     UserMessage,
 )
 from tile.types.stream_events import TextBlock, ToolCallBlock
-from tile.types.tools import ToolDefinition, ToolTextContent
+from tile.types.tools import ToolDefinition, ToolDetails, ToolTextContent
 from tile.agent import run_agent
 from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
 from tile.result import (
     COMPLETE_TOOL_NAME,
     FAIL_TOOL_NAME,
+    MAX_RESULT_FOLLOW_UPS,
+    NO_RESULT_REASON,
     RESULT_CONTRACT,
+    RESULT_FOLLOW_UP,
+    Completed,
+    Failed,
     RunOutcome,
 )
 from tile.tool_executor import ToolExecutor
 from tile.tools.complete import tool as complete_tool
+from tile.tools.complete import CompleteDetails
 from tile.tools.fail import tool as fail_tool
+from tile.tools.fail import FailDetails
 from tile.events import (
     AgentEndEvent,
     AgentEvent,
@@ -45,6 +52,31 @@ RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
 
 class SessionBusyError(RuntimeError):
     """Raised when a prompt is submitted while the same session is already active."""
+
+
+class TurnFailedError(RuntimeError):
+    """Raised when an agent run ends without a completed assistant turn."""
+
+
+@dataclass
+class _AgentRunObservation:
+    """Result-relevant facts observed during one stateless agent run."""
+
+    last_turn: AssistantTurn | None = None
+    terminal_details: ToolDetails | None = None
+
+    def observe(self, event: AgentEvent) -> None:
+        """Record the latest assistant turn and first terminating tool details."""
+
+        if isinstance(event, MessageEndEvent):
+            self.last_turn = event.assistant_turn
+        if (
+            self.terminal_details is None
+            and isinstance(event, ToolExecutionEndEvent)
+            and event.outcome.terminate
+            and isinstance(event.outcome.details, CompleteDetails | FailDetails)
+        ):
+            self.terminal_details = event.outcome.details
 
 
 class Run:
@@ -116,7 +148,8 @@ class Run:
         """Return the terminal run outcome once the agent run has ended.
 
         Returns None while the run is in flight and for runs that ended
-        without a terminal turn (stream error or abort).
+        without a verdict (execution failure or abort); the run status and
+        error message carry that story.
         """
 
         for event in reversed(self._events):
@@ -298,13 +331,75 @@ class AgentRuntime:
     ) -> AsyncIterator[AgentEvent]:
         """Yield agent events for one prompt run, persisting stable history."""
 
-        tool_executor = self._tool_executor
-        instructions = self._instructions
-        if result is not None:
-            tool_executor = ToolExecutor(
-                (*tool_executor.tools, complete_tool(result), fail_tool)
-            )
-            instructions = f"{instructions}\n\n{RESULT_CONTRACT}"
+        events = (
+            self._plain_prompt_events(session_id)
+            if result is None
+            else self._result_prompt_events(session_id, result)
+        )
+        async for event in events:
+            self._persist_stable_event(session_id, event)
+            yield event
+
+    async def _plain_prompt_events(
+        self,
+        session_id: str,
+    ) -> AsyncIterator[AgentEvent]:
+        """Run one plain agent invocation and attach its text outcome."""
+
+        observation = _AgentRunObservation()
+        async for event in self._agent_events(
+            session_id,
+            tool_executor=self._tool_executor,
+            instructions=self._instructions,
+        ):
+            observation.observe(event)
+            if isinstance(event, AgentEndEvent):
+                turn = _require_completed_turn(observation.last_turn)
+                yield AgentEndEvent(outcome=Completed(value=_assistant_text(turn)))
+            else:
+                yield event
+
+    async def _result_prompt_events(
+        self,
+        session_id: str,
+        result: type[BaseModel],
+    ) -> AsyncIterator[AgentEvent]:
+        """Run agent invocations until the required result is produced or exhausted."""
+
+        tool_executor = ToolExecutor(
+            (*self._tool_executor.tools, complete_tool(result), fail_tool)
+        )
+        instructions = f"{self._instructions}\n\n{RESULT_CONTRACT}"
+        for follow_ups in range(MAX_RESULT_FOLLOW_UPS + 1):
+            observation = _AgentRunObservation()
+            async for event in self._agent_events(
+                session_id,
+                tool_executor=tool_executor,
+                instructions=instructions,
+            ):
+                observation.observe(event)
+                if not isinstance(event, AgentEndEvent):
+                    yield event
+
+            _require_completed_turn(observation.last_turn)
+            outcome = _result_outcome(observation.terminal_details)
+            if outcome is not None:
+                yield AgentEndEvent(outcome=outcome)
+                return
+            if follow_ups == MAX_RESULT_FOLLOW_UPS:
+                yield AgentEndEvent(outcome=Failed(reason=NO_RESULT_REASON))
+                return
+            yield AgentEndEvent()
+            yield ResultFollowUpEvent(message=UserMessage(content=RESULT_FOLLOW_UP))
+
+    async def _agent_events(
+        self,
+        session_id: str,
+        *,
+        tool_executor: ToolExecutor,
+        instructions: str,
+    ) -> AsyncIterator[AgentEvent]:
+        """Yield one stateless agent run over the session's current history."""
 
         async for event in run_agent(
             self._history_store.get_history(session_id),
@@ -315,7 +410,6 @@ class AgentRuntime:
             auto_mode=self._auto_mode,
             cwd=self._cwd,
         ):
-            self._persist_stable_event(session_id, event)
             yield event
 
     def _release_run(self, run: Run) -> None:
@@ -464,9 +558,15 @@ def _unanswered_tool_calls(
 
 
 def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
-    """Return the replayable conversation items carried by one agent event."""
+    """Return the replayable conversation items carried by one agent event.
+
+    Only completed assistant turns are replayable: errored and aborted turns
+    are dropped so later prompts and retries see clean history.
+    """
 
     if isinstance(event, MessageEndEvent):
+        if event.assistant_turn.status != "completed":
+            return ()
         return (event.assistant_turn,)
     if isinstance(event, ToolExecutionEndEvent):
         return (event.outcome.tool_result_turn,)
@@ -475,8 +575,28 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
     return ()
 
 
+def _require_completed_turn(turn: AssistantTurn | None) -> AssistantTurn:
+    """Return the run's final assistant turn, raising when it did not complete."""
+
+    if turn is None:
+        raise TurnFailedError("The agent run ended without an assistant turn.")
+    if turn.status != "completed":
+        raise TurnFailedError(turn.error_message or "The assistant turn failed.")
+    return turn
+
+
+def _result_outcome(terminal_details: ToolDetails | None) -> RunOutcome | None:
+    """Build a terminal outcome, or return None when a result remains missing."""
+
+    if isinstance(terminal_details, CompleteDetails):
+        return Completed(value=terminal_details.value)
+    if isinstance(terminal_details, FailDetails):
+        return Failed(reason=terminal_details.reason)
+    return None
+
+
 def _assistant_text(turn: AssistantTurn) -> str:
-    """Join the text blocks of one assistant turn with blank lines."""
+    """Join one assistant turn's text blocks."""
 
     return "\n\n".join(
         block.text for block in turn.blocks if isinstance(block, TextBlock)

@@ -1,4 +1,4 @@
-"""Tests for the output contract tools and their run loop enforcement."""
+"""Tests for output-contract tools and runtime-owned result enforcement."""
 
 import asyncio
 from collections.abc import Sequence
@@ -12,7 +12,6 @@ from tile.history import InMemoryHistoryStore
 from tile.result import (
     MAX_RESULT_FOLLOW_UPS,
     NO_RESULT_REASON,
-    RESULT_ALREADY_RECORDED,
     RESULT_CONTRACT,
     RESULT_FOLLOW_UP,
     Completed,
@@ -25,12 +24,13 @@ from tile.tools.fail import tool as fail_tool
 from tile.events import (
     AgentEndEvent,
     AgentEvent,
+    AgentStartEvent,
     ResultFollowUpEvent,
     ToolExecutionEndEvent,
 )
-from tile.types.conversation import ToolResultTurn, UserMessage
+from tile.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
 from tile.types.stream_events import TextBlock
-from tile.types.tools import ToolDefinition, ToolResult, ToolTextContent
+from tile.types.tools import ToolDefinition, ToolResult
 from tests.support.agent_streams import (
     ProviderStreamMock,
     error_stream,
@@ -57,9 +57,9 @@ def _result_tools() -> list[ToolDefinition]:
 
 
 async def _weather(city: str) -> ToolResult:
-    """Fail loudly if a post-result tool call is ever executed."""
+    """Return a visible result for same-batch execution assertions."""
 
-    raise AssertionError(f"get_weather must not execute (city={city})")
+    return ToolResult.text(f"Weather retrieved for {city}.")
 
 
 def _collect_run_events(
@@ -127,6 +127,7 @@ def test_complete_tool_validates_and_succeeds() -> None:
     )
 
     assert not outcome.tool_result_turn.is_error
+    assert outcome.terminate
 
 
 def test_complete_tool_rejects_invalid_arguments() -> None:
@@ -143,6 +144,7 @@ def test_complete_tool_rejects_invalid_arguments() -> None:
     )
 
     assert outcome.tool_result_turn.is_error
+    assert not outcome.terminate
 
 
 def test_fail_tool_requires_string_reason() -> None:
@@ -159,6 +161,7 @@ def test_fail_tool_requires_string_reason() -> None:
     )
 
     assert outcome.tool_result_turn.is_error
+    assert not outcome.terminate
 
 
 def test_complete_tool_schema_reflects_model_config() -> None:
@@ -236,8 +239,8 @@ def test_tool_executor_rejects_duplicate_names() -> None:
         ToolExecutor([fail_tool, fail_tool])
 
 
-def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
-    """Exit the run without another provider call once complete succeeds."""
+def test_agent_stops_after_terminating_tool_batch(tmp_path: Path) -> None:
+    """Exit the generic agent loop without another provider call after termination."""
 
     provider = ProviderStreamMock(
         [
@@ -255,15 +258,33 @@ def test_agent_run_ends_immediately_on_complete(tmp_path: Path) -> None:
     )
 
     assert provider.await_count == 1
-    outcome = _agent_end_event(events).outcome
-    assert outcome == Completed(
-        value=WeatherReport(city="Munich", temp_c=21.0),
-        output_text="",
+    executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
+    assert len(executions) == 1
+    assert executions[0].outcome.terminate
+    assert _agent_end_event(events).outcome is None
+
+
+def test_agent_does_not_enforce_result_tool_usage(tmp_path: Path) -> None:
+    """End a text-only agent run without inferring policy from result tool names."""
+
+    provider = ProviderStreamMock(
+        [final_text_stream("resp_1", "The temperature is 21C.")]
     )
 
+    events = _collect_run_events(
+        [UserMessage(content="Weather in Munich?")],
+        stream_fn=provider.fn,
+        cwd=tmp_path,
+        tools=_result_tools(),
+    )
 
-def test_agent_run_ends_on_fail(tmp_path: Path) -> None:
-    """Report a model-declared failure as the terminal outcome."""
+    assert provider.await_count == 1
+    assert not any(isinstance(event, ResultFollowUpEvent) for event in events)
+    assert _agent_end_event(events).outcome is None
+
+
+def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
+    """Map a terminating fail tool result into the runtime's failed outcome."""
 
     provider = ProviderStreamMock(
         [
@@ -276,16 +297,19 @@ def test_agent_run_ends_on_fail(tmp_path: Path) -> None:
         ]
     )
 
-    events = _collect_run_events(
-        [UserMessage(content="Weather?")],
-        stream_fn=provider.fn,
-        cwd=tmp_path,
-        tools=_result_tools(),
-    )
+    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+
+    async def _run() -> Failed | None:
+        """Run one result prompt and return its outcome when failed."""
+
+        run = await runtime.session().prompt("Weather?", result=WeatherReport)
+        assert await run.wait() == "completed"
+        return run.outcome if isinstance(run.outcome, Failed) else None
+
+    outcome = asyncio.run(_run())
 
     assert provider.await_count == 1
-    outcome = _agent_end_event(events).outcome
-    assert outcome == Failed(reason="The city is ambiguous.", output_text="")
+    assert outcome == Failed(reason="The city is ambiguous.")
 
 
 def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
@@ -312,13 +336,14 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
     error_result = retry_history[-1]
     assert isinstance(error_result, ToolResultTurn)
     assert error_result.is_error
-    outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Completed)
-    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+    executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
+    assert not executions[0].outcome.terminate
+    assert executions[1].outcome.terminate
+    assert _agent_end_event(events).outcome is None
 
 
-def test_agent_nudges_text_only_turn_toward_result(tmp_path: Path) -> None:
-    """Append a follow-up reminder when an enforced run ends in plain text."""
+def test_runtime_nudges_text_only_agent_run_toward_result() -> None:
+    """Start another agent run with a persisted nudge after a text-only ending."""
 
     provider = ProviderStreamMock(
         [
@@ -329,24 +354,40 @@ def test_agent_nudges_text_only_turn_toward_result(tmp_path: Path) -> None:
         ]
     )
 
-    events = _collect_run_events(
-        [UserMessage(content="Weather in Munich?")],
+    store = InMemoryHistoryStore()
+    runtime = AgentRuntime(
         stream_fn=provider.fn,
-        cwd=tmp_path,
-        tools=_result_tools(),
+        model="gpt-5.4",
+        history_store=store,
+        auto_mode=False,
     )
 
+    async def _run() -> tuple[list[AgentEvent], Completed | None]:
+        """Collect the complete runtime event stream and typed outcome."""
+
+        run = await runtime.session(session_id="nudged").prompt(
+            "Weather in Munich?", result=WeatherReport
+        )
+        assert await run.wait() == "completed"
+        events = [event async for event in run.events()]
+        return events, run.outcome if isinstance(run.outcome, Completed) else None
+
+    events, outcome = asyncio.run(_run())
+
     follow_ups = [e for e in events if isinstance(e, ResultFollowUpEvent)]
+    assert sum(isinstance(event, AgentStartEvent) for event in events) == 2
+    assert sum(isinstance(event, AgentEndEvent) for event in events) == 2
     assert len(follow_ups) == 1
     assert follow_ups[0].message.content == RESULT_FOLLOW_UP
     nudged_history = provider.history(1)
     assert nudged_history[-1] == UserMessage(content=RESULT_FOLLOW_UP)
-    outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Completed)
+    assert UserMessage(content=RESULT_FOLLOW_UP) in store.get_history("nudged")
+    assert outcome is not None
+    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
 
 
-def test_agent_fails_after_follow_up_cap(tmp_path: Path) -> None:
-    """Give up with a failure outcome when nudges never produce a result."""
+def test_runtime_fails_after_follow_up_cap() -> None:
+    """Give up with a failure outcome when runtime nudges never produce a result."""
 
     streams = [
         final_text_stream(f"resp_{index}", "Still thinking.")
@@ -354,23 +395,23 @@ def test_agent_fails_after_follow_up_cap(tmp_path: Path) -> None:
     ]
     provider = ProviderStreamMock(streams)
 
-    events = _collect_run_events(
-        [UserMessage(content="Weather?")],
-        stream_fn=provider.fn,
-        cwd=tmp_path,
-        tools=_result_tools(),
-    )
+    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
+
+    async def _run() -> Failed | None:
+        """Run until the output-contract follow-up limit is exhausted."""
+
+        run = await runtime.session().prompt("Weather?", result=WeatherReport)
+        assert await run.wait() == "completed"
+        return run.outcome if isinstance(run.outcome, Failed) else None
+
+    outcome = asyncio.run(_run())
 
     assert provider.await_count == MAX_RESULT_FOLLOW_UPS + 1
-    outcome = _agent_end_event(events).outcome
-    assert outcome == Failed(
-        reason=NO_RESULT_REASON,
-        output_text="Still thinking.",
-    )
+    assert outcome == Failed(reason=NO_RESULT_REASON)
 
 
-def test_agent_without_contract_completes_with_text(tmp_path: Path) -> None:
-    """Wrap a plain text ending in a completed outcome with no value."""
+def test_runtime_without_contract_completes_with_text() -> None:
+    """Wrap a plain runtime prompt's text ending in a completed outcome."""
 
     provider = ProviderStreamMock(
         [
@@ -378,37 +419,62 @@ def test_agent_without_contract_completes_with_text(tmp_path: Path) -> None:
         ]
     )
 
-    events = _collect_run_events(
-        [UserMessage(content="Weather in Munich?")],
-        stream_fn=provider.fn,
-        cwd=tmp_path,
-    )
+    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
 
-    outcome = _agent_end_event(events).outcome
-    assert outcome == Completed(value=None, output_text="The temperature is 21C.")
+    async def _run() -> Completed | None:
+        """Run one plain prompt and return its completed outcome."""
+
+        run = await runtime.session().prompt("Weather in Munich?")
+        assert await run.wait() == "completed"
+        return run.outcome if isinstance(run.outcome, Completed) else None
+
+    outcome = asyncio.run(_run())
+
+    assert outcome == Completed(value="The temperature is 21C.")
 
 
-def test_agent_outcome_is_none_on_stream_error(tmp_path: Path) -> None:
-    """Leave the outcome unset when the run ends on a stream error."""
+def test_runtime_fails_when_nudge_attempt_hits_stream_error() -> None:
+    """Propagate a follow-up attempt's stream error, keeping stable history."""
 
     provider = ProviderStreamMock(
         [
-            error_stream("resp_1", "boom"),
+            final_text_stream("resp_1", "Still thinking."),
+            error_stream("resp_2", "boom"),
         ]
     )
 
-    events = _collect_run_events(
-        [UserMessage(content="Weather?")],
+    store = InMemoryHistoryStore()
+    runtime = AgentRuntime(
         stream_fn=provider.fn,
-        cwd=tmp_path,
-        tools=_result_tools(),
+        model="gpt-5.4",
+        history_store=store,
+        auto_mode=False,
     )
 
-    assert _agent_end_event(events).outcome is None
+    async def _run() -> None:
+        """Fail the result prompt on its nudged second attempt."""
+
+        run = await runtime.session(session_id="nudged-error").prompt(
+            "Weather?", result=WeatherReport
+        )
+        assert await run.wait() == "failed"
+        assert run.error_message == "boom"
+        assert run.outcome is None
+
+    asyncio.run(_run())
+
+    assert provider.await_count == 2
+    history = list(store.get_history("nudged-error"))
+    assert len(history) == 3
+    assert history[0] == UserMessage(content="Weather?")
+    first_attempt = history[1]
+    assert isinstance(first_attempt, AssistantTurn)
+    assert first_attempt.status == "completed"
+    assert history[2] == UserMessage(content=RESULT_FOLLOW_UP)
 
 
-def test_agent_skips_tool_calls_after_result(tmp_path: Path) -> None:
-    """Answer post-result calls in the same turn with errors, unexecuted."""
+def test_agent_finishes_tool_batch_after_terminating_result(tmp_path: Path) -> None:
+    """Execute sibling tools before a terminating result ends the agent loop."""
 
     provider = ProviderStreamMock(
         [
@@ -443,17 +509,14 @@ def test_agent_skips_tool_calls_after_result(tmp_path: Path) -> None:
 
     executions = [e for e in events if isinstance(e, ToolExecutionEndEvent)]
     assert len(executions) == 2
-    assert not executions[0].outcome.tool_result_turn.is_error
-    skipped = executions[1].outcome.tool_result_turn
-    assert skipped.is_error
-    assert skipped.content == [ToolTextContent(text=RESULT_ALREADY_RECORDED)]
-    outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Completed)
-    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+    assert executions[0].outcome.terminate
+    assert not executions[1].outcome.tool_result_turn.is_error
+    assert not executions[1].outcome.terminate
+    assert provider.await_count == 1
 
 
-def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
-    """Capture text streamed alongside the terminal result call."""
+def test_runtime_keeps_terminal_text_separate_from_result_value() -> None:
+    """Expose terminal assistant text on the run without duplicating it in outcome."""
 
     provider = ProviderStreamMock(
         [
@@ -475,16 +538,21 @@ def test_agent_output_text_captures_ending_turn_text(tmp_path: Path) -> None:
         ]
     )
 
-    events = _collect_run_events(
-        [UserMessage(content="Weather?")],
-        stream_fn=provider.fn,
-        cwd=tmp_path,
-        tools=_result_tools(),
-    )
+    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", auto_mode=False)
 
-    outcome = _agent_end_event(events).outcome
-    assert isinstance(outcome, Completed)
-    assert outcome.output_text == "Recording the result."
+    async def _run() -> tuple[Completed | None, str | None]:
+        """Run one result prompt and return its outcome and assistant text."""
+
+        run = await runtime.session().prompt("Weather?", result=WeatherReport)
+        assert await run.wait() == "completed"
+        outcome = run.outcome if isinstance(run.outcome, Completed) else None
+        return outcome, run.output_text
+
+    outcome, output_text = asyncio.run(_run())
+
+    assert outcome is not None
+    assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
+    assert output_text == "Recording the result."
 
 
 def test_session_prompt_composes_result_tools_and_contract() -> None:
@@ -492,9 +560,8 @@ def test_session_prompt_composes_result_tools_and_contract() -> None:
 
     provider = ProviderStreamMock(
         [
-            final_text_stream("resp_1", "Let me summarize instead."),
             _complete_call_stream(
-                "resp_2", "call_1", {"city": "Munich", "temp_c": 21.0}
+                "resp_1", "call_1", {"city": "Munich", "temp_c": 21.0}
             ),
         ]
     )
@@ -513,8 +580,6 @@ def test_session_prompt_composes_result_tools_and_contract() -> None:
         outcome = run.outcome
         assert isinstance(outcome, Completed)
         assert outcome.value == WeatherReport(city="Munich", temp_c=21.0)
-        history = store.get_history("result-session")
-        assert UserMessage(content=RESULT_FOLLOW_UP) in list(history)
 
     asyncio.run(_run())
 
@@ -551,9 +616,7 @@ def test_session_mixes_contract_and_plain_prompts() -> None:
 
         plain_run = await session.prompt("Which city did I ask about?")
         assert await plain_run.wait() == "completed"
-        assert plain_run.outcome == Completed(
-            value=None, output_text="You asked about Munich."
-        )
+        assert plain_run.outcome == Completed(value="You asked about Munich.")
 
     asyncio.run(_run())
 

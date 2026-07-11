@@ -187,13 +187,19 @@ def stream_done(
     )
 
 
-def stream_error(response_id: str, error_message: str) -> StreamErrorEvent:
+def stream_error(
+    response_id: str,
+    error_message: str,
+    *,
+    blocks: Sequence[AssistantBlock] = (),
+) -> StreamErrorEvent:
     """Build a deterministic provider stream error event."""
 
     return StreamErrorEvent(
         source=provider_source(),
         response_id=response_id,
         error_message=error_message,
+        blocks=list(blocks),
     )
 
 
