@@ -8,8 +8,8 @@ A compact, Python-native runtime for headless, tool-using agent sessions.
 Tile is a **runtime, not a framework**. You construct the pieces — a provider
 client, a tool list, a working directory, optionally a history store — and hand
 them to `AgentRuntime`. It runs prompt-driven agent sessions on top of them:
-provider streaming, a tool-execution loop, typed run outcomes, and persistent
-conversation history. There are no plugins or global configuration. The
+provider streaming, a tool-execution loop, typed run outcomes, and session
+history. There are no plugins or global configuration. The
 provider stream, model, tools, and working directory are explicit runtime
 inputs; conversation history defaults to an in-memory store, and applications
 can supply a `HistoryStore` when persistence is required. Embed it in an
