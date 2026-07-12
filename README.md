@@ -26,7 +26,7 @@ Tile owns the lifecycle around an agent loop:
 - execution continues independently of event subscribers;
 - a `Session` owns model-visible conversation history;
 - providers normalize into one event and history contract;
-- prompts may require explicit typed success or failure outcomes.
+- prompts may require explicit, typed success or failure outcomes.
 
 Tile does not provide graphs, teams, workflows, memory/RAG, a UI, or a
 deployment platform. Applications compose those concerns around the runtime.
