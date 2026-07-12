@@ -9,12 +9,27 @@ Tile is a **runtime, not a framework**. You construct the pieces — a provider
 client, a tool list, a working directory, optionally a history store — and hand
 them to `AgentRuntime`. It runs prompt-driven agent sessions on top of them:
 provider streaming, a tool-execution loop, typed run outcomes, and persistent
-conversation history. There are no plugins, no global configuration, and no
-hidden defaults; every dependency is caller-constructed and visible at the
-construction site. Embed it in an application, or build a service on top.
+conversation history. There are no plugins or global configuration. The
+provider stream, model, tools, and working directory are explicit runtime
+inputs; conversation history defaults to an in-memory store, and applications
+can supply a `HistoryStore` when persistence is required. Embed it in an
+application, or build a service on top.
 
 **Status: 0.x.** APIs change without deprecation cycles. OpenAI (Responses API)
 is the only provider today; more are planned. Requires Python 3.13+.
+
+## Why a runtime?
+
+Tile owns the lifecycle around an agent loop:
+
+- a prompt becomes a task-owned `Run`;
+- execution continues independently of event subscribers;
+- a `Session` owns model-visible conversation history;
+- providers normalize into one event and history contract;
+- prompts may require explicit typed success or failure outcomes.
+
+Tile does not provide graphs, teams, workflows, memory/RAG, a UI, or a
+deployment platform. Applications compose those concerns around the runtime.
 
 ## Install
 
@@ -76,6 +91,11 @@ async for event in run.events():
     ...
 status = await run.wait()  # "completed" | "failed" | "aborted"
 ```
+
+Run events are currently replayable in process while the `Run` handle exists.
+Conversation history can be persisted with SQLite. Durable run records,
+cross-process event replay, approval resumption, and service mode are planned,
+not current capabilities.
 
 ## Typed results
 
@@ -186,7 +206,7 @@ file tools accept absolute paths — the session working directory is a default,
 not a sandbox. Run Tile only where you would run the model's commands yourself,
 and use OS-level isolation such as a container or VM when you need a boundary.
 Resource exhaustion from trusted local input is out of scope for now. Tool
-authorization hooks arrive with the runtime hooks release.
+authorization and first-class approval are planned, not current capabilities.
 
 ## Development
 
