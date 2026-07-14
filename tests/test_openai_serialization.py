@@ -156,7 +156,6 @@ def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
             "get_weather",
             "Return the current weather for a city.",
             _sample_tool_fn,
-            city_description="The city to look up.",
         )
     ]
 

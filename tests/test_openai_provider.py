@@ -71,7 +71,6 @@ def _sample_tools() -> list[ToolDefinition]:
             "get_weather",
             "Return a simple weather report for a city.",
             _sample_tool_fn,
-            city_description="The city to look up.",
         )
     ]
 
