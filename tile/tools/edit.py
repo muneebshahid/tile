@@ -50,27 +50,26 @@ class EditInput(ToolInput):
 
     path: str = Field(description="Path to the file to edit (relative or absolute).")
     edits: list[EditReplacement] = Field(
+        min_length=1,
         description=(
             "One or more targeted replacements. Each edit is matched against the "
             "original file, not incrementally. Do not include overlapping or nested "
             "edits. If two changes touch the same block or nearby lines, merge them "
             "into one edit instead."
-        )
+        ),
     )
 
 
 async def fn(
-    path: str,
-    edits: list[dict[str, str]],
+    params: EditInput,
     *,
     cwd: Path,
 ) -> ToolResult:
     """Edit a file with one or more targeted text replacements."""
 
-    resolved_path = _resolve_path(path, cwd)
-    replacements = _parse_edits(edits)
-    result = await _execute(resolved_path, replacements, path)
-    return _build_result(result, path)
+    resolved_path = _resolve_path(params.path, cwd)
+    result = await _execute(resolved_path, params.edits, params.path)
+    return _build_result(result, params.path)
 
 
 @dataclass(frozen=True)
@@ -121,15 +120,6 @@ async def _execute(
     """Apply validated replacements to a file asynchronously."""
 
     return await asyncio.to_thread(_edit_file, path, replacements, display_path)
-
-
-def _parse_edits(edits: list[dict[str, str]]) -> list[EditReplacement]:
-    """Parse raw edit dictionaries into replacement models."""
-
-    replacements = [EditReplacement.model_validate(edit) for edit in edits]
-    if not replacements:
-        raise RuntimeError("edits must contain at least one replacement")
-    return replacements
 
 
 def _build_result(result: EditExecutionResult, path: str) -> ToolResult:

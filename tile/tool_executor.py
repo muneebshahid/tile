@@ -17,6 +17,9 @@ from tile.types.tools import JsonObject, ToolDefinition, ToolResult
 
 logger = logging.getLogger(__name__)
 
+# Placeholder used only to validate function signatures without constructing input.
+_SIGNATURE_ARGUMENT = object()
+
 
 @dataclass(frozen=True)
 class _ValidatedArguments:
@@ -35,7 +38,7 @@ class ToolExecutor:
         seen: set[str] = set()
         for tool in self._tools:
             _require_unique_name(tool, seen)
-            _require_compatible_signature(tool)
+            _require_invocable_signature(tool)
 
     @property
     def tools(self) -> tuple[ToolDefinition, ...]:
@@ -115,7 +118,7 @@ class ToolExecutor:
         """Invoke validated tool code and normalize escaped exceptions."""
 
         try:
-            return await tool.fn(**arguments.model_dump(exclude_computed_fields=True))
+            return await tool.fn(arguments)
         except Exception as error:
             logger.debug("Tool '%s' invocation failed", tool.name, exc_info=True)
             return ToolResult.error(
@@ -175,53 +178,13 @@ def _require_unique_name(tool: ToolDefinition, seen: set[str]) -> None:
     seen.add(name)
 
 
-def _require_compatible_signature(tool: ToolDefinition) -> None:
-    """Reject input models that cannot be passed into the tool function."""
+def _require_invocable_signature(tool: ToolDefinition) -> None:
+    """Reject functions that cannot receive one validated input model."""
 
-    parameters = inspect.signature(tool.fn).parameters
-    input_fields = set(tool.input_model.model_fields)
-    accepts_kwargs = any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in parameters.values()
-    )
-    accepted_fields = {
-        name
-        for name, parameter in parameters.items()
-        if parameter.kind
-        in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        )
-    }
-    rejected_fields = set() if accepts_kwargs else input_fields - accepted_fields
-    missing_fields = {
-        name
-        for name, parameter in parameters.items()
-        if parameter.default is inspect.Parameter.empty
-        and parameter.kind
-        in (
-            inspect.Parameter.POSITIONAL_ONLY,
-            inspect.Parameter.POSITIONAL_OR_KEYWORD,
-            inspect.Parameter.KEYWORD_ONLY,
-        )
-        and name not in input_fields
-    }
-    if rejected_fields or missing_fields:
-        raise ValueError(_signature_error(tool.name, rejected_fields, missing_fields))
-
-
-def _signature_error(
-    tool_name: str,
-    rejected_fields: set[str],
-    missing_fields: set[str],
-) -> str:
-    """Describe a mismatch between one input model and tool function."""
-
-    problems: list[str] = []
-    if rejected_fields:
-        problems.append(f"function does not accept {sorted(rejected_fields)}")
-    if missing_fields:
-        problems.append(f"input model does not provide {sorted(missing_fields)}")
-    return (
-        f"Tool '{tool_name}' input model and function disagree: {'; '.join(problems)}"
-    )
+    try:
+        inspect.signature(tool.fn).bind(_SIGNATURE_ARGUMENT)
+    except TypeError as error:
+        raise ValueError(
+            f"Tool '{tool.name}' function must accept one validated input model "
+            f"as a positional argument: {error}"
+        ) from error

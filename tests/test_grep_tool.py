@@ -124,7 +124,7 @@ async def test_fn_returns_results_when_command_is_available(
 
     execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
-    tool_result = await grep.fn(pattern="needle", cwd=Path.cwd())
+    tool_result = await grep.fn(grep.GrepInput(pattern="needle"), cwd=Path.cwd())
     result = tool_text(tool_result)
 
     assert result == "example.txt:2: needle line"
@@ -145,7 +145,7 @@ async def test_fn_returns_multiple_result_lines(
         ]
     )
 
-    result = tool_text(await grep.fn(pattern="needle", cwd=Path.cwd()))
+    result = tool_text(await grep.fn(grep.GrepInput(pattern="needle"), cwd=Path.cwd()))
 
     assert result == "one.txt:1: needle one\ntwo.txt:2: needle two"
 
@@ -160,7 +160,9 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
 
     execution.return_value = _event("match", "example.txt", 2, "needle line\n")
 
-    result = tool_text(await grep.fn(pattern="needle", path="src", cwd=tmp_path))
+    result = tool_text(
+        await grep.fn(grep.GrepInput(pattern="needle", path="src"), cwd=tmp_path)
+    )
 
     assert result == "example.txt:2: needle line"
     assert captured_args(execution)[-1] == "src"
@@ -179,7 +181,10 @@ async def test_fn_reports_match_limit_in_details(execution: AsyncMock) -> None:
         ]
     )
 
-    tool_result = await grep.fn(pattern="needle", limit=1, cwd=Path.cwd())
+    tool_result = await grep.fn(
+        grep.GrepInput(pattern="needle", limit=1),
+        cwd=Path.cwd(),
+    )
 
     assert tool_text(tool_result).endswith(
         "\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]"
@@ -199,7 +204,10 @@ async def test_fn_reports_byte_truncation_in_details(execution: AsyncMock) -> No
         _event("match", f"{index:03d}.txt", 1, "x" * 196) for index in range(300)
     )
 
-    tool_result = await grep.fn(pattern="needle", limit=500, cwd=Path.cwd())
+    tool_result = await grep.fn(
+        grep.GrepInput(pattern="needle", limit=500),
+        cwd=Path.cwd(),
+    )
 
     assert tool_text(tool_result).endswith("\n\n[50.0KB limit reached]")
     details = _grep_details(tool_result)
@@ -218,7 +226,7 @@ async def test_fn_reports_line_truncation_in_details(execution: AsyncMock) -> No
 
     execution.return_value = _event("match", "example.txt", 1, "x" * 501)
 
-    tool_result = await grep.fn(pattern="needle", cwd=Path.cwd())
+    tool_result = await grep.fn(grep.GrepInput(pattern="needle"), cwd=Path.cwd())
 
     assert tool_text(tool_result).endswith(
         "\n\n[Some lines truncated to 500 chars. Use read tool to see full lines]"
@@ -236,7 +244,7 @@ async def test_fn_raises_when_command_is_missing() -> None:
     """Raise a clear exception when rg is unavailable."""
 
     with pytest.raises(RuntimeError, match="ripgrep"):
-        await grep.fn(pattern="needle", cwd=Path.cwd())
+        await grep.fn(grep.GrepInput(pattern="needle"), cwd=Path.cwd())
 
 
 def test_parse_output_returns_internal_results() -> None:

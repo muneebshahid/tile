@@ -90,8 +90,8 @@ class SearchInput(ToolInput):
     query: str = Field(description="Text to search for.")
 
 
-async def search(query: str, cwd: Path) -> ToolResult:
-    ...  # cwd is injected by the runtime, not exposed to the model
+async def search(params: SearchInput, *, cwd: Path) -> ToolResult:
+    ...  # use params.query; cwd is injected and never exposed to the model
 
 
 search_tool = ToolDefinition(
@@ -102,10 +102,11 @@ search_tool = ToolDefinition(
 )
 ```
 
-`ToolInput` rejects wrong types and extra fields. Validation errors are returned
-to the model for correction. A tool may return `ToolResult.error(...)` for an
-expected failure; an exception that escapes the tool is normalized by the
-runtime as an invocation failure.
+`ToolInput` rejects wrong types and extra fields. Tile passes the validated model
+instance directly to the tool, preserving nested models, aliases, and defaults.
+Validation errors are returned to the model for correction. A tool may return
+`ToolResult.error(...)` for an expected failure; an exception that escapes the
+tool is normalized by the runtime as an invocation failure.
 
 Prompt execution is task-owned: `session.prompt(...)` submits a run and returns
 a handle immediately, the runtime drives it to completion, and any number of

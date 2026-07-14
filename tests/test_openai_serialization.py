@@ -13,14 +13,14 @@ from tile.types.stream_events import (
     ToolCallBlock,
 )
 from tile.types.tools import ToolImageContent, ToolResult
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
 from openai.types.responses.response_input_param import ResponseInputParam
 
 
-async def _sample_tool_fn(city: str) -> ToolResult:
+async def _sample_tool_fn(params: CityInput) -> ToolResult:
     """Return a deterministic payload for serialization-only tool definitions."""
 
-    return ToolResult.text(f"city={city}")
+    return ToolResult.text(f"city={params.city}")
 
 
 def test_serialize_response_input_flattens_sample_thread() -> None:

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from tile.agent import run_agent
 from tile.history import InMemoryHistoryStore
@@ -40,7 +40,7 @@ from tests.support.agent_streams import (
     tool_call_block,
     tool_call_stream,
 )
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
 
 
 class WeatherReport(BaseModel):
@@ -56,10 +56,10 @@ def _result_tools() -> list[ToolDefinition]:
     return [complete_tool(WeatherReport), fail_tool]
 
 
-async def _weather(city: str) -> ToolResult:
+async def _weather(params: CityInput) -> ToolResult:
     """Return a visible result for same-batch execution assertions."""
 
-    return ToolResult.text(f"Weather retrieved for {city}.")
+    return ToolResult.text(f"Weather retrieved for {params.city}.")
 
 
 def _collect_run_events(
@@ -202,6 +202,31 @@ def test_complete_tool_applies_field_defaults() -> None:
     details = outcome.details
     assert isinstance(details, CompleteDetails)
     assert details.value == ReportWithDefault(city="Munich", note="n/a")
+
+
+def test_complete_tool_preserves_aliased_result_fields() -> None:
+    """Complete typed runs with provider-visible Pydantic aliases."""
+
+    class AliasedReport(BaseModel):
+        """Result contract whose provider field differs from its Python name."""
+
+        city_name: str = Field(alias="city")
+
+    executor = ToolExecutor([complete_tool(AliasedReport), fail_tool])
+
+    outcome = asyncio.run(
+        executor.execute(
+            call_id="call_1",
+            tool_name="complete",
+            arguments={"city": "Munich"},
+        )
+    )
+
+    assert not outcome.tool_result_turn.is_error
+    assert outcome.terminate
+    details = outcome.details
+    assert isinstance(details, CompleteDetails)
+    assert details.value == AliasedReport(city="Munich")
 
 
 def test_complete_tool_returns_validated_value_in_details() -> None:

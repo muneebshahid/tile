@@ -9,6 +9,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     JsonValue,
+    PrivateAttr,
     SerializeAsAny,
     field_validator,
     model_validator,
@@ -126,12 +127,13 @@ class ToolDefinition(BaseModel):
     input_model: type[BaseModel]
     defer_loading: bool = False
     fn: ToolFunction
+    _input_schema: JsonObject = PrivateAttr()
 
     @property
     def input_schema(self) -> JsonObject:
-        """Return the provider schema generated from the input model."""
+        """Return the cached provider schema generated from the input model."""
 
-        return cast(JsonObject, self.input_model.model_json_schema())
+        return self._input_schema
 
     @field_validator("name")
     @classmethod
@@ -144,12 +146,12 @@ class ToolDefinition(BaseModel):
             )
         return name
 
-    @field_validator("input_model")
-    @classmethod
-    def _require_json_schema(cls, input_model: type[BaseModel]) -> type[BaseModel]:
-        """Fail tool construction when its input model cannot emit a schema."""
+    @model_validator(mode="after")
+    def _cache_json_schema(self) -> Self:
+        """Generate and cache the provider schema during tool construction."""
 
-        schema = input_model.model_json_schema()
+        schema = cast(JsonObject, self.input_model.model_json_schema())
         if schema.get("type") != "object":
             raise ValueError("Tool input models must generate an object schema.")
-        return input_model
+        self._input_schema = schema
+        return self

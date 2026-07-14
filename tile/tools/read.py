@@ -74,22 +74,20 @@ class ReadSelection:
 
 
 async def fn(
-    path: str,
-    offset: int | None = None,
-    limit: int = OUTPUT_LINE_LIMIT,
+    params: ReadInput,
     *,
     cwd: Path,
 ) -> ToolResult:
     """Read a UTF-8 text file or supported image file."""
 
-    resolved_path = _resolve_path(path, cwd)
+    resolved_path = _resolve_path(params.path, cwd)
     image_mime_type = _detect_supported_image_mime_type(resolved_path)
     if image_mime_type is not None:
         return _read_image(resolved_path, image_mime_type)
 
     content = await _execute(resolved_path)
-    limit = max(1, limit)
-    return _build_result(content, offset, path, limit)
+    limit = max(1, params.limit)
+    return _build_result(content, params.offset, params.path, limit)
 
 
 async def _execute(path: Path) -> str:

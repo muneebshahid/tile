@@ -71,7 +71,7 @@ async def test_fn_uses_default_file_search_flags(
 
     execution.return_value = "./tile/tools/find.py\n"
 
-    tool_result = await find.fn(pattern="*.py", cwd=Path.cwd())
+    tool_result = await find.fn(find.FindInput(pattern="*.py"), cwd=Path.cwd())
     result = tool_text(tool_result)
 
     assert result == "tile/tools/find.py"
@@ -103,7 +103,9 @@ async def test_fn_resolves_search_path_against_supplied_cwd(
 
     execution.return_value = "./tile/tools/find.py\n"
 
-    result = tool_text(await find.fn(pattern="*.py", path="src", cwd=tmp_path))
+    result = tool_text(
+        await find.fn(find.FindInput(pattern="*.py", path="src"), cwd=tmp_path)
+    )
 
     assert result == "tile/tools/find.py"
     assert captured_args(execution)[-1] == "src"
@@ -120,7 +122,10 @@ async def test_fn_uses_full_path_for_path_patterns(
     execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(
-        await find.fn(pattern="tile/**/*.py", path=".", limit=25, cwd=Path.cwd())
+        await find.fn(
+            find.FindInput(pattern="tile/**/*.py", path=".", limit=25),
+            cwd=Path.cwd(),
+        )
     )
 
     assert result == "tile/tools/find.py"
@@ -148,7 +153,10 @@ async def test_fn_normalizes_root_relative_full_path_pattern(
     execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(
-        await find.fn(pattern="/tools/*.py", path=".", limit=25, cwd=Path.cwd())
+        await find.fn(
+            find.FindInput(pattern="/tools/*.py", path=".", limit=25),
+            cwd=Path.cwd(),
+        )
     )
 
     assert result == "tile/tools/find.py"
@@ -165,7 +173,10 @@ async def test_fn_preserves_prefixed_full_path_pattern(
     execution.return_value = "./tile/tools/find.py\n"
 
     result = tool_text(
-        await find.fn(pattern="**/tools/*.py", path=".", limit=25, cwd=Path.cwd())
+        await find.fn(
+            find.FindInput(pattern="**/tools/*.py", path=".", limit=25),
+            cwd=Path.cwd(),
+        )
     )
 
     assert result == "tile/tools/find.py"
@@ -179,7 +190,9 @@ async def test_fn_clamps_limit_to_one(execution: AsyncMock) -> None:
 
     execution.return_value = "./a.py\n./b.py\n"
 
-    result = tool_text(await find.fn(pattern="*.py", limit=0, cwd=Path.cwd()))
+    result = tool_text(
+        await find.fn(find.FindInput(pattern="*.py", limit=0), cwd=Path.cwd())
+    )
 
     assert (
         result
@@ -197,7 +210,10 @@ async def test_fn_returns_no_matches_when_fd_output_is_empty(
 
     execution.return_value = ""
 
-    tool_result = await find.fn(pattern="*.missing", cwd=Path.cwd())
+    tool_result = await find.fn(
+        find.FindInput(pattern="*.missing"),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
 
     assert result == "No files found matching pattern"
@@ -210,7 +226,7 @@ async def test_fn_raises_when_fd_is_missing() -> None:
     """Raise a clear exception when fd is unavailable."""
 
     with pytest.raises(RuntimeError, match="fd"):
-        await find.fn(pattern="*.py", cwd=Path.cwd())
+        await find.fn(find.FindInput(pattern="*.py"), cwd=Path.cwd())
 
 
 @pytest.mark.asyncio
@@ -224,7 +240,10 @@ async def test_fn_normalizes_paths_and_reports_result_limit(
         ".\\tile\\tools\\find.py\n./tests/test_find_tool.py\n./extra.py\n"
     )
 
-    tool_result = await find.fn(pattern="*.py", limit=2, cwd=Path.cwd())
+    tool_result = await find.fn(
+        find.FindInput(pattern="*.py", limit=2),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
 
     assert result == (
@@ -248,7 +267,10 @@ async def test_fn_reports_result_limit_when_result_boundary_is_first(
 
     execution.return_value = "./a.py\n./b.py\n"
 
-    tool_result = await find.fn(pattern="*.py", limit=1, cwd=Path.cwd())
+    tool_result = await find.fn(
+        find.FindInput(pattern="*.py", limit=1),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
 
     assert result == (
@@ -268,7 +290,10 @@ async def test_fn_reports_byte_limit(execution: AsyncMock) -> None:
     stdout = "\n".join(f"./{index:03d}-{'x' * 196}.py" for index in range(300))
     execution.return_value = f"{stdout}\n"
 
-    tool_result = await find.fn(pattern="*.py", limit=1000, cwd=Path.cwd())
+    tool_result = await find.fn(
+        find.FindInput(pattern="*.py", limit=1000),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
     notice = "\n\n[50.0KB limit reached]"
     body = result.removesuffix(notice)
@@ -291,7 +316,9 @@ async def test_fn_reports_byte_limit_when_byte_boundary_is_first(
     stdout = "\n".join(f"./{index:03d}-{'x' * 196}.py" for index in range(300))
     execution.return_value = f"{stdout}\n"
 
-    result = tool_text(await find.fn(pattern="*.py", limit=260, cwd=Path.cwd()))
+    result = tool_text(
+        await find.fn(find.FindInput(pattern="*.py", limit=260), cwd=Path.cwd())
+    )
 
     assert result.endswith("\n\n[50.0KB limit reached]")
     assert "results limit reached" not in result

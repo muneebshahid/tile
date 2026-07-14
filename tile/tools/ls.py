@@ -39,11 +39,11 @@ class LsInput(ToolInput):
     )
 
 
-async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
+async def fn(params: LsInput, *, cwd: Path) -> ToolResult:
     """List the contents of a directory."""
 
-    limit = max(1, limit)
-    resolved_path = _resolve_path(path, cwd)
+    limit = max(1, params.limit)
+    resolved_path = _resolve_path(params.path, cwd)
     entries = await _execute(resolved_path)
     return _build_result(entries, limit)
 

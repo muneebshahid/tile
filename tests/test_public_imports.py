@@ -108,14 +108,15 @@ async def _collect_prompt_events(session: Session) -> list[AgentEvent]:
     return [event async for event in run.events()]
 
 
-async def _fake_tool() -> ToolResult:
-    """Return a deterministic tool result for import smoke coverage."""
-
-    return ToolResult.text("ok")
-
-
 class _FakeToolInput(ToolInput):
     """Strict empty public input contract for the fake tool."""
+
+
+async def _fake_tool(params: _FakeToolInput) -> ToolResult:
+    """Return a deterministic tool result for import smoke coverage."""
+
+    _ = params
+    return ToolResult.text("ok")
 
 
 def _fake_tool_definition() -> ToolDefinition:

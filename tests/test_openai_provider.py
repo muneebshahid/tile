@@ -42,7 +42,7 @@ from tests.support.stream_assertions import (
     expect_stream_event as _expect_event_type,
     expect_text_block as _expect_text_block,
 )
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
 
 
 def _collect_events(
@@ -76,10 +76,10 @@ def _sample_tools() -> list[ToolDefinition]:
     ]
 
 
-async def _sample_tool_fn(city: str) -> ToolResult:
+async def _sample_tool_fn(params: CityInput) -> ToolResult:
     """Return a deterministic payload for provider-only tool definitions."""
 
-    return ToolResult.text(f"city={city}")
+    return ToolResult.text(f"city={params.city}")
 
 
 def test_stream_maps_raw_events_into_text_stream() -> None:

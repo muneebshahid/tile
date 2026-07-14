@@ -112,21 +112,22 @@ class GrepInput(ToolInput):
 
 
 async def fn(
-    pattern: str,
-    path: str = ".",
-    glob: str | None = None,
-    ignore_case: bool = False,
-    literal: bool = False,
-    context: int = 0,
-    limit: int = 100,
+    params: GrepInput,
     *,
     cwd: Path,
 ) -> ToolResult:
     """Search file contents for a pattern."""
 
-    limit = max(1, limit)
+    limit = max(1, params.limit)
     executable = require_executable("rg", "ripgrep (rg)")
-    args = _build_args(pattern, path, glob, ignore_case, literal, context)
+    args = _build_args(
+        params.pattern,
+        params.path,
+        params.glob,
+        params.ignore_case,
+        params.literal,
+        params.context,
+    )
     output = await execute(executable, args, allowed_exit_codes=(0, 1), cwd=cwd)
     return _build_result(output, limit)
 

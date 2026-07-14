@@ -41,17 +41,15 @@ class FindInput(ToolInput):
 
 
 async def fn(
-    pattern: str,
-    path: str = ".",
-    limit: int = 1000,
+    params: FindInput,
     *,
     cwd: Path,
 ) -> ToolResult:
     """Find file paths matching a glob pattern."""
 
-    limit = max(1, limit)
+    limit = max(1, params.limit)
     executable = require_executable("fd", "fd")
-    args = _build_args(pattern, path, limit)
+    args = _build_args(params.pattern, params.path, limit)
     output = await execute(executable, args, cwd=cwd)
     return _build_result(output, limit)
 

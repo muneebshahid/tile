@@ -38,11 +38,15 @@ class BashInput(ToolInput):
     )
 
 
-async def fn(command: str, timeout: float | None = None, *, cwd: Path) -> ToolResult:
+async def fn(params: BashInput, *, cwd: Path) -> ToolResult:
     """Execute a shell command from the agent working directory."""
 
     resolved_cwd = _resolve_cwd(cwd)
-    result = await _execute(command, _effective_timeout(timeout), resolved_cwd)
+    result = await _execute(
+        params.command,
+        _effective_timeout(params.timeout),
+        resolved_cwd,
+    )
     return _build_result(result)
 
 

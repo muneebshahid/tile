@@ -18,11 +18,11 @@ class WriteInput(ToolInput):
     content: str = Field(description="Content to write to the file.")
 
 
-async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:
+async def fn(params: WriteInput, *, cwd: Path) -> ToolResult:
     """Write content to a file."""
 
-    resolved_path = _resolve_path(path, cwd)
-    bytes_written = await _execute(resolved_path, content)
+    resolved_path = _resolve_path(params.path, cwd)
+    bytes_written = await _execute(resolved_path, params.content)
     return _build_result(bytes_written, resolved_path)
 
 

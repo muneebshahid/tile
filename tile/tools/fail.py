@@ -23,14 +23,12 @@ class FailInput(ToolInput):
     reason: str = Field(description="Why the task cannot be completed.")
 
 
-async def fail(reason: str) -> ToolResult:
+async def fn(params: FailInput) -> ToolResult:
     """Record the model's reason for not delivering a result."""
 
-    if not isinstance(reason, str):
-        raise ValueError("`reason` must be a string.")
     return ToolResult.text(
         "Failure recorded.",
-        details=FailDetails(reason=reason),
+        details=FailDetails(reason=params.reason),
         terminate=True,
     )
 
@@ -42,5 +40,5 @@ tool = ToolDefinition(
         "Provide a clear reason naming what is missing or impossible."
     ),
     input_model=FailInput,
-    fn=fail,
+    fn=fn,
 )

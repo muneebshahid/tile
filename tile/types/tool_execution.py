@@ -40,17 +40,6 @@ class ToolExecutionOutcome(BaseModel):
     details: SerializeAsAny[ToolDetails] | None = None
     terminate: bool = False
 
-    @property
-    def result(self) -> ToolResult:
-        """Return the full tool result including non-replay metadata."""
-
-        return ToolResult(
-            content=self.tool_result_turn.content,
-            details=self.details,
-            is_error=self.tool_result_turn.is_error,
-            terminate=self.terminate,
-        )
-
     @classmethod
     def from_result(
         cls,

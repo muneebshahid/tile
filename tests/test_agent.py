@@ -74,7 +74,7 @@ from tests.support.conversation_assertions import (
     expect_user_message,
 )
 from tests.support.stream_assertions import expect_stream_event
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
 from tests.support.tool_results import tool_text
 
 TEvent = TypeVar("TEvent", bound=AgentEvent)
@@ -142,24 +142,31 @@ def _sample_tools() -> list[ToolDefinition]:
     ]
 
 
-async def _get_weather(city: str) -> ToolResult:
+async def _get_weather(params: CityInput) -> ToolResult:
     """Return a deterministic weather payload for tests."""
 
     return ToolResult.text(
-        json.dumps({"temperature_c": 18, "condition": "sunny", "city": city})
+        json.dumps(
+            {
+                "temperature_c": 18,
+                "condition": "sunny",
+                "city": params.city,
+            }
+        )
     )
 
 
-async def _raise_tool_error(city: str) -> ToolResult:
+async def _raise_tool_error(params: CityInput) -> ToolResult:
     """Raise a deterministic tool error for tests."""
 
-    _ = city
+    _ = params
     raise RuntimeError("boom")
 
 
-async def _read_file() -> ToolResult:
+async def _read_file(params: ToolInput) -> ToolResult:
     """Return a deterministic file read result with runtime metadata."""
 
+    _ = params
     return ToolResult.text(
         "file contents",
         details=ReadDetails(output=_tool_output_details()),
@@ -401,10 +408,9 @@ def test_agent_run_emits_tool_execution_outcome_for_tool_use_loop() -> None:
     tool_result_turn = tool_execution_outcome.tool_result_turn
     assert tool_result_turn.call_id == "call_123"
     assert tool_result_turn.tool_name == "get_weather"
-    assert tool_text(tool_execution_outcome.result) == (
+    assert tool_text(tool_result_turn) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
-    assert tool_result_turn.content == tool_execution_outcome.result.content
     assert tool_result_turn.is_error is False
     assert first_turn_end.assistant_turn.response_id == "resp_tool_call"
     assert first_turn_end.assistant_turn.stop_reason == "tool_use"
@@ -413,7 +419,7 @@ def test_agent_run_emits_tool_execution_outcome_for_tool_use_loop() -> None:
     first_turn_outcome = first_turn_end.tool_executions[0]
     assert first_turn_outcome.tool_result_turn.call_id == "call_123"
     assert first_turn_outcome.tool_result_turn.tool_name == "get_weather"
-    assert first_turn_outcome.result.content == tool_execution_outcome.result.content
+    assert first_turn_outcome.tool_result_turn.content == tool_result_turn.content
     assert first_turn_outcome.tool_result_turn.is_error is False
 
 
@@ -480,7 +486,7 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     )
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    assert tool_text(tool_execution_end.outcome.result) == (
+    assert tool_text(tool_execution_end.outcome.tool_result_turn) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
     assert tool_execution_end.outcome.tool_result_turn.is_error is False
@@ -528,7 +534,6 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
     outcome = tool_execution_end.outcome
     turn_outcome = turn_end.tool_executions[0]
     assert outcome.details == ReadDetails(output=_tool_output_details())
-    assert outcome.result.details == outcome.details
     assert turn_outcome.details == outcome.details
 
     follow_up_request_history = provider.history(1)
@@ -571,7 +576,7 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
     assert tool_execution_end.outcome.tool_result_turn.is_error is True
-    assert tool_text(tool_execution_end.outcome.result) == "boom"
+    assert tool_text(tool_execution_end.outcome.tool_result_turn) == "boom"
     assert tool_execution_end.outcome.tool_result_turn.tool_name == "fail_weather"
     assert isinstance(tool_execution_end.outcome.details, ToolInvocationFailure)
 
@@ -586,11 +591,11 @@ def test_agent_allows_model_to_correct_invalid_tool_arguments() -> None:
 
     calls: list[str] = []
 
-    async def weather(city: str) -> ToolResult:
+    async def weather(params: CityInput) -> ToolResult:
         """Record valid tool invocations for the correction scenario."""
 
-        calls.append(city)
-        return ToolResult.text(f"{city}: sunny")
+        calls.append(params.city)
+        return ToolResult.text(f"{params.city}: sunny")
 
     provider = ProviderStreamMock(
         [
@@ -619,12 +624,15 @@ def test_agent_allows_model_to_correct_invalid_tool_arguments() -> None:
 
     executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
     assert calls == ["Munich"]
-    assert [event.outcome.result.is_error for event in executions] == [True, False]
+    assert [event.outcome.tool_result_turn.is_error for event in executions] == [
+        True,
+        False,
+    ]
     assert isinstance(executions[0].outcome.details, ToolInputValidationFailure)
     retry_result = expect_tool_result_turn(provider.history(1)[-1])
     assert retry_result.is_error is True
     assert "Invalid arguments for tool 'get_weather'" in tool_text(
-        executions[0].outcome.result
+        executions[0].outcome.tool_result_turn
     )
     corrected_result = expect_tool_result_turn(provider.history(2)[-1])
     assert corrected_result.is_error is False

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, JsonValue, SerializeAsAny
+from pydantic import BaseModel, SerializeAsAny
 
 from tile.result import COMPLETE_TOOL_NAME
 from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
@@ -20,13 +20,12 @@ class CompleteDetails(ToolDetails):
 def tool(result: type[BaseModel]) -> ToolDefinition:
     """Build a complete tool that validates results against one schema."""
 
-    async def complete(**arguments: JsonValue) -> ToolResult:
-        """Validate the run's final result against the required schema."""
+    async def fn(params: BaseModel) -> ToolResult:
+        """Record the result already validated by the tool executor."""
 
-        value = result.model_validate(arguments)
         return ToolResult.text(
             "Result recorded.",
-            details=CompleteDetails(value=value),
+            details=CompleteDetails(value=params),
             terminate=True,
         )
 
@@ -39,5 +38,5 @@ def tool(result: type[BaseModel]) -> ToolDefinition:
             "task is done."
         ),
         input_model=result,
-        fn=complete,
+        fn=fn,
     )
