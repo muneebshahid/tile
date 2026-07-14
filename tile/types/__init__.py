@@ -36,6 +36,11 @@ from tile.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from tile.types.tool_execution import (
+    ToolInputIssue,
+    ToolInputValidationFailure,
+    ToolInvocationFailure,
+)
 from tile.types.tools import (
     ImageMimeType,
     JsonObject,
@@ -43,6 +48,7 @@ from tile.types.tools import (
     ToolDetails,
     ToolFunction,
     ToolImageContent,
+    ToolInput,
     ToolResult,
     ToolResultContent,
     ToolTextContent,
@@ -84,6 +90,10 @@ __all__ = [
     "ToolDetails",
     "ToolFunction",
     "ToolImageContent",
+    "ToolInput",
+    "ToolInputIssue",
+    "ToolInputValidationFailure",
+    "ToolInvocationFailure",
     "ToolResult",
     "ToolResultContent",
     "ToolResultTurn",

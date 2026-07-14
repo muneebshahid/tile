@@ -135,8 +135,9 @@ def test_stream_maps_raw_events_into_text_stream() -> None:
 
 def test_stream_passes_serialized_tools_when_provided() -> None:
     client = build_fake_openai_client([response_completed_event(1, "resp_tools")])
+    tools = _sample_tools()
 
-    _collect_events(client, tools=_sample_tools())
+    _collect_events(client, tools=tools)
 
     client.responses.create.assert_awaited_once_with(
         model="gpt-5.4",
@@ -149,16 +150,7 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
                 "type": "function",
                 "name": "get_weather",
                 "description": "Return a simple weather report for a city.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "city": {
-                            "type": "string",
-                            "description": "The city to look up.",
-                        }
-                    },
-                    "required": ["city"],
-                },
+                "parameters": tools[0].input_schema,
                 "strict": False,
                 "defer_loading": False,
             }

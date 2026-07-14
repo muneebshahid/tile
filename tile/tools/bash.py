@@ -7,7 +7,9 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from pydantic import Field
+
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 from tile.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from tile.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
@@ -24,6 +26,16 @@ class BashDetails(ToolDetails):
 
     type: Literal["bash"] = "bash"
     output: ToolOutputDetails
+
+
+class BashInput(ToolInput):
+    """Model-controlled shell command arguments."""
+
+    command: str = Field(description="Bash command to execute.")
+    timeout: float | None = Field(
+        default=None,
+        description="Timeout in seconds. Defaults to 120 seconds when omitted.",
+    )
 
 
 async def fn(command: str, timeout: float | None = None, *, cwd: Path) -> ToolResult:
@@ -248,19 +260,6 @@ def _supports_process_groups() -> bool:
 tool = ToolDefinition(
     name="bash",
     description="Execute a bash command.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "Bash command to execute.",
-            },
-            "timeout": {
-                "type": "number",
-                "description": "Timeout in seconds. Defaults to 120 seconds when omitted.",
-            },
-        },
-        "required": ["command"],
-    },
+    input_model=BashInput,
     fn=fn,
 )

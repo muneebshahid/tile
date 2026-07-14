@@ -165,16 +165,7 @@ def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
             "type": "function",
             "name": "get_weather",
             "description": "Return the current weather for a city.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The city to look up.",
-                    }
-                },
-                "required": ["city"],
-            },
+            "parameters": tools[0].input_schema,
             "strict": False,
             "defer_loading": False,
         }

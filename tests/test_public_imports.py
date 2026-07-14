@@ -24,6 +24,9 @@ from tile.types import (
     StreamStartEvent,
     TextBlock,
     ToolDefinition,
+    ToolInput,
+    ToolInputValidationFailure,
+    ToolInvocationFailure,
     ToolResult,
 )
 
@@ -48,6 +51,8 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert len(session.history) == 2
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
+    assert ToolInputValidationFailure.model_fields["issues"]
+    assert ToolInvocationFailure.model_fields["exception_type"]
     assert callable(create_stream_api)
 
 
@@ -109,15 +114,16 @@ async def _fake_tool() -> ToolResult:
     return ToolResult.text("ok")
 
 
+class _FakeToolInput(ToolInput):
+    """Strict empty public input contract for the fake tool."""
+
+
 def _fake_tool_definition() -> ToolDefinition:
     """Build a tool definition from the public tool contract."""
 
     return ToolDefinition(
         name="fake_tool",
         description="Return a deterministic value.",
-        input_schema={
-            "type": "object",
-            "properties": {},
-        },
+        input_model=_FakeToolInput,
         fn=_fake_tool,
     )

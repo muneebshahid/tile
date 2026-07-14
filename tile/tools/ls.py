@@ -4,7 +4,9 @@ import asyncio
 from pathlib import Path
 from typing import Literal
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from pydantic import Field
+
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 
 from tile.tools.support.paths import resolve_to_cwd
 from tile.tools.support.truncation import (
@@ -20,6 +22,21 @@ class LsDetails(ToolDetails):
 
     type: Literal["ls"] = "ls"
     output: ToolOutputDetails
+
+
+class LsInput(ToolInput):
+    """Model-controlled directory listing arguments."""
+
+    path: str = Field(
+        default=".",
+        description=(
+            "The path of the directory to list. Defaults to the current directory."
+        ),
+    )
+    limit: int = Field(
+        default=500,
+        description="The maximum number of entries to list. Defaults to 500.",
+    )
 
 
 async def fn(path: str = ".", limit: int = 500, *, cwd: Path) -> ToolResult:
@@ -93,19 +110,6 @@ def _format_directory_entry(entry: Path) -> str:
 tool = ToolDefinition(
     name="ls",
     description="List the contents of a directory.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "The path of the directory to list. Defaults to the current directory.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "The maximum number of entries to list. Defaults to 500.",
-            },
-        },
-        "required": [],
-    },
+    input_model=LsInput,
     fn=fn,
 )

@@ -38,6 +38,6 @@ def tool(result: type[BaseModel]) -> ToolDefinition:
             "are returned for correction. Call this exactly once, when the "
             "task is done."
         ),
-        input_schema=result.model_json_schema(),
+        input_model=result,
         fn=complete,
     )

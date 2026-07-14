@@ -15,7 +15,7 @@ from tests.support.tool_results import tool_text
 def test_ls_schema_requires_no_arguments() -> None:
     """Allow callers to omit path and limit."""
 
-    assert ls.tool.input_schema["required"] == []
+    assert ls.tool.input_schema.get("required", []) == []
 
 
 @pytest.fixture

@@ -8,11 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
+
 from tile.types.tools import (
     ImageMimeType,
     ToolDefinition,
     ToolDetails,
     ToolImageContent,
+    ToolInput,
     ToolResult,
 )
 from tile.tools.support.image_processing import (
@@ -45,6 +48,20 @@ class ReadDetails(ToolDetails):
 
     type: Literal["read"] = "read"
     output: ToolOutputDetails
+
+
+class ReadInput(ToolInput):
+    """Model-controlled file read arguments."""
+
+    path: str = Field(description="Path to the file to read, relative or absolute.")
+    offset: int | None = Field(
+        default=None,
+        description="Line number to start reading from, 1-indexed.",
+    )
+    limit: int = Field(
+        default=OUTPUT_LINE_LIMIT,
+        description="Maximum number of lines to read.",
+    )
 
 
 @dataclass(frozen=True)
@@ -351,24 +368,6 @@ tool = ToolDefinition(
         "output is truncated to 2000 lines or 50KB. Use offset and limit for "
         "large text files."
     ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the file to read, relative or absolute.",
-            },
-            "offset": {
-                "type": "integer",
-                "description": "Line number to start reading from, 1-indexed.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of lines to read.",
-                "default": OUTPUT_LINE_LIMIT,
-            },
-        },
-        "required": ["path"],
-    },
+    input_model=ReadInput,
     fn=fn,
 )

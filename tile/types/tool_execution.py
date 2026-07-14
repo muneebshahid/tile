@@ -1,9 +1,36 @@
 """Runtime contracts for model-requested tool executions."""
 
+from typing import Literal
+
 from pydantic import BaseModel, SerializeAsAny
 
 from tile.types.conversation import ToolResultTurn
 from tile.types.tools import ToolDetails, ToolResult
+
+
+class ToolInputIssue(BaseModel):
+    """One stable, serializable model-input validation issue."""
+
+    location: tuple[str | int, ...]
+    code: str
+    message: str
+
+
+class ToolInputValidationFailure(ToolDetails):
+    """Runtime metadata for rejected model-supplied tool arguments."""
+
+    type: Literal["tool_input_validation_failure"] = "tool_input_validation_failure"
+    tool_name: str
+    issues: list[ToolInputIssue]
+
+
+class ToolInvocationFailure(ToolDetails):
+    """Runtime metadata for an exception raised by a tool implementation."""
+
+    type: Literal["tool_invocation_failure"] = "tool_invocation_failure"
+    tool_name: str
+    exception_type: str
+    message: str
 
 
 class ToolExecutionOutcome(BaseModel):
@@ -20,6 +47,7 @@ class ToolExecutionOutcome(BaseModel):
         return ToolResult(
             content=self.tool_result_turn.content,
             details=self.details,
+            is_error=self.tool_result_turn.is_error,
             terminate=self.terminate,
         )
 
@@ -30,7 +58,6 @@ class ToolExecutionOutcome(BaseModel):
         call_id: str,
         tool_name: str,
         result: ToolResult,
-        is_error: bool,
     ) -> "ToolExecutionOutcome":
         """Build an execution outcome from a raw tool result."""
 
@@ -39,8 +66,8 @@ class ToolExecutionOutcome(BaseModel):
                 call_id=call_id,
                 tool_name=tool_name,
                 content=result.content,
-                is_error=is_error,
+                is_error=result.is_error,
             ),
             details=result.details,
-            terminate=result.terminate and not is_error,
+            terminate=result.terminate,
         )

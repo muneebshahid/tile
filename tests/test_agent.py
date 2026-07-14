@@ -50,10 +50,12 @@ from tile.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from tile.types.tool_execution import ToolInputValidationFailure, ToolInvocationFailure
 from tile.tools.read import ReadDetails
 from tile.tool_truncation import ToolOutputDetails
 from tile.types.tools import (
     ToolDefinition,
+    ToolInput,
     ToolResult,
 )
 from tests.support.agent_streams import (
@@ -487,14 +489,14 @@ def test_agent_run_executes_registered_tool_definition() -> None:
 def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
     """Expose non-replay tool details through execution outcomes."""
 
+    class NoInput(ToolInput):
+        """Strict empty input for the deterministic read tool."""
+
     tools = [
         ToolDefinition(
             name="read_file",
             description="Read a deterministic file.",
-            input_schema={
-                "type": "object",
-                "properties": {},
-            },
+            input_model=NoInput,
             fn=_read_file,
         )
     ]
@@ -571,11 +573,62 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
     assert tool_execution_end.outcome.tool_result_turn.is_error is True
     assert tool_text(tool_execution_end.outcome.result) == "boom"
     assert tool_execution_end.outcome.tool_result_turn.tool_name == "fail_weather"
+    assert isinstance(tool_execution_end.outcome.details, ToolInvocationFailure)
 
     follow_up_request_history = provider.history(1)
     tool_result = expect_tool_result_turn(follow_up_request_history[2])
     assert tool_result.is_error is True
     assert tool_result.tool_name == "fail_weather"
+
+
+def test_agent_allows_model_to_correct_invalid_tool_arguments() -> None:
+    """Persist an input error, then execute the model's corrected tool call."""
+
+    calls: list[str] = []
+
+    async def weather(city: str) -> ToolResult:
+        """Record valid tool invocations for the correction scenario."""
+
+        calls.append(city)
+        return ToolResult.text(f"{city}: sunny")
+
+    provider = ProviderStreamMock(
+        [
+            tool_call_stream(
+                response_id="resp_invalid",
+                call_id="call_invalid",
+                tool_name="get_weather",
+                arguments={"city": 5},
+            ),
+            tool_call_stream(
+                response_id="resp_valid",
+                call_id="call_valid",
+                tool_name="get_weather",
+                arguments={"city": "Munich"},
+            ),
+            final_text_stream("resp_done", "The weather is sunny."),
+        ]
+    )
+    history = [UserMessage(content="What is the weather in Munich?")]
+
+    events = _collect_run_events(
+        history,
+        stream_fn=provider.fn,
+        tools=[city_tool("get_weather", "Return the weather.", weather)],
+    )
+
+    executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
+    assert calls == ["Munich"]
+    assert [event.outcome.result.is_error for event in executions] == [True, False]
+    assert isinstance(executions[0].outcome.details, ToolInputValidationFailure)
+    retry_result = expect_tool_result_turn(provider.history(1)[-1])
+    assert retry_result.is_error is True
+    assert "Invalid arguments for tool 'get_weather'" in tool_text(
+        executions[0].outcome.result
+    )
+    corrected_result = expect_tool_result_turn(provider.history(2)[-1])
+    assert corrected_result.is_error is False
+    assert "details" not in ToolResultTurn.model_fields
 
 
 def test_agent_run_handles_multiple_tool_use_turns() -> None:

@@ -3,7 +3,9 @@
 from pathlib import Path
 from typing import Literal
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from pydantic import Field
+
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 from tile.tools.support.executables import execute, require_executable
 from tile.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
@@ -18,6 +20,24 @@ class FindDetails(ToolDetails):
 
     type: Literal["find"] = "find"
     output: ToolOutputDetails
+
+
+class FindInput(ToolInput):
+    """Model-controlled file path search arguments."""
+
+    pattern: str = Field(
+        description=(
+            "The glob pattern to match file paths, for example '*.py' or 'src/**/*.py'."
+        )
+    )
+    path: str = Field(
+        default=".",
+        description="The directory path to search. Defaults to the current directory.",
+    )
+    limit: int = Field(
+        default=1000,
+        description="The maximum number of file paths to return. Defaults to 1000.",
+    )
 
 
 async def fn(
@@ -121,23 +141,6 @@ def _matches_full_path(pattern: str) -> bool:
 tool = ToolDefinition(
     name="find",
     description="Search for files by glob pattern.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "The glob pattern to match file paths, for example '*.py' or 'src/**/*.py'.",
-            },
-            "path": {
-                "type": "string",
-                "description": "The directory path to search. Defaults to the current directory.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "The maximum number of file paths to return. Defaults to 1000.",
-            },
-        },
-        "required": ["pattern"],
-    },
+    input_model=FindInput,
     fn=fn,
 )

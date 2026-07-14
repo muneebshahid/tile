@@ -31,6 +31,7 @@ from tile.types.stream_events import (
 from tile.types.tools import (
     ToolDefinition,
     ToolFunction,
+    ToolInput,
     ToolResult,
     ToolTextContent,
 )
@@ -52,6 +53,10 @@ from tests.support.conversation_assertions import (
     expect_user_message,
 )
 from tests.support.tool_definitions import city_tool
+
+
+class _NoInput(ToolInput):
+    """Strict empty input for deterministic runtime tools."""
 
 
 def _collect_prompt_events(
@@ -270,7 +275,7 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
         return ToolDefinition(
             name=name,
             description=f"Exercise cwd binding via {name}.",
-            input_schema={"type": "object", "properties": {}, "required": []},
+            input_model=_NoInput,
             fn=fn,
         )
 
@@ -315,6 +320,11 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
 def test_runtime_rejects_cwd_schema_property_on_injected_tool() -> None:
     """Reject tools that declare cwd for injection yet expose it to the model."""
 
+    class CwdInput(ToolInput):
+        """Invalidly expose the runtime-controlled cwd capability."""
+
+        cwd: str
+
     async def clash(cwd: Path) -> ToolResult:
         """Declare cwd while the schema also exposes it."""
 
@@ -323,11 +333,7 @@ def test_runtime_rejects_cwd_schema_property_on_injected_tool() -> None:
     bad_tool = ToolDefinition(
         name="clash",
         description="Conflicting cwd declaration.",
-        input_schema={
-            "type": "object",
-            "properties": {"cwd": {"type": "string"}},
-            "required": [],
-        },
+        input_model=CwdInput,
         fn=clash,
     )
 

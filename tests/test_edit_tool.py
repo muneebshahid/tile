@@ -29,13 +29,22 @@ def test_edit_schema_exposes_edit_controls() -> None:
 def test_edit_schema_describes_each_replacement() -> None:
     """Expose old_text and new_text for every edit item."""
 
-    properties = edit.tool.input_schema["properties"]
+    schema = edit.tool.input_schema
+    properties = schema["properties"]
     assert isinstance(properties, dict)
 
     edits_schema = properties["edits"]
     assert isinstance(edits_schema, dict)
 
     item_schema = edits_schema["items"]
+    assert isinstance(item_schema, dict)
+
+    reference = item_schema["$ref"]
+    assert isinstance(reference, str)
+    definition_name = reference.rsplit("/", maxsplit=1)[-1]
+    definitions = schema["$defs"]
+    assert isinstance(definitions, dict)
+    item_schema = definitions[definition_name]
     assert isinstance(item_schema, dict)
 
     item_properties = item_schema["properties"]

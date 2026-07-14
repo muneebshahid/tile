@@ -4,9 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 from tile.tools.support.executables import execute, require_executable
 from tile.tools.support.truncation import (
     GREP_LINE_CHARACTER_LIMIT,
@@ -64,6 +64,51 @@ class SearchEvent(BaseModel):
 
     type: Literal["match", "context"]
     data: EventData
+
+
+class GrepInput(ToolInput):
+    """Model-controlled file content search arguments."""
+
+    pattern: str = Field(
+        description=(
+            "The search pattern to find. Treated as a regular expression unless "
+            "literal is true."
+        )
+    )
+    path: str = Field(
+        default=".",
+        description=(
+            "The file or directory path to search. Defaults to the current directory."
+        ),
+    )
+    glob: str | None = Field(
+        default=None,
+        description=(
+            "Filter searched files by glob pattern, for example '*.py' or "
+            "'**/*_test.py'."
+        ),
+    )
+    ignore_case: bool = Field(
+        default=False,
+        description="Whether to search case-insensitively. Defaults to false.",
+    )
+    literal: bool = Field(
+        default=False,
+        description=(
+            "Whether to treat the pattern as a literal string instead of a regular "
+            "expression. Defaults to false."
+        ),
+    )
+    context: int = Field(
+        default=0,
+        description=(
+            "The number of lines to include before and after each match. Defaults to 0."
+        ),
+    )
+    limit: int = Field(
+        default=100,
+        description="The maximum number of matches to return. Defaults to 100.",
+    )
 
 
 async def fn(
@@ -235,39 +280,6 @@ def _format_line(line: Line) -> tuple[str, bool]:
 tool = ToolDefinition(
     name="grep",
     description="Search file contents for a pattern.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "pattern": {
-                "type": "string",
-                "description": "The search pattern to find. Treated as a regular expression unless literal is true.",
-            },
-            "path": {
-                "type": "string",
-                "description": "The file or directory path to search. Defaults to the current directory.",
-            },
-            "glob": {
-                "type": "string",
-                "description": "Filter searched files by glob pattern, for example '*.py' or '**/*_test.py'.",
-            },
-            "ignore_case": {
-                "type": "boolean",
-                "description": "Whether to search case-insensitively. Defaults to false.",
-            },
-            "literal": {
-                "type": "boolean",
-                "description": "Whether to treat the pattern as a literal string instead of a regular expression. Defaults to false.",
-            },
-            "context": {
-                "type": "integer",
-                "description": "The number of lines to include before and after each match. Defaults to 0.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "The maximum number of matches to return. Defaults to 100.",
-            },
-        },
-        "required": ["pattern"],
-    },
+    input_model=GrepInput,
     fn=fn,
 )
