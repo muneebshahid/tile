@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Sequence
 from typing import Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, SerializeAsAny
+from pydantic import BaseModel
 
 from tile.result import RunOutcome
 from tile.types.contracts import AsyncEventStream
@@ -14,11 +14,10 @@ from tile.types.conversation import (
     UserMessage,
 )
 from tile.types.stream_events import StreamUpdateEvent
+from tile.types.tool_execution import ToolExecutionOutcome
 from tile.types.tools import (
     JsonObject,
     ToolDefinition,
-    ToolDetails,
-    ToolResult,
 )
 
 
@@ -69,46 +68,6 @@ class TurnStartEvent(AgentEvent):
     """Marks the start of a single assistant turn."""
 
     type: Literal["turn_start"] = "turn_start"
-
-
-class ToolExecutionOutcome(BaseModel):
-    """Full runtime outcome for a tool execution."""
-
-    tool_result_turn: ToolResultTurn
-    details: SerializeAsAny[ToolDetails] | None = None
-    terminate: bool = False
-
-    @property
-    def result(self) -> ToolResult:
-        """Return the full tool result including non-replay metadata."""
-
-        return ToolResult(
-            content=self.tool_result_turn.content,
-            details=self.details,
-            terminate=self.terminate,
-        )
-
-    @classmethod
-    def from_result(
-        cls,
-        *,
-        call_id: str,
-        tool_name: str,
-        result: ToolResult,
-        is_error: bool,
-    ) -> "ToolExecutionOutcome":
-        """Build an execution outcome from a raw tool result."""
-
-        return cls(
-            tool_result_turn=ToolResultTurn(
-                call_id=call_id,
-                tool_name=tool_name,
-                content=result.content,
-                is_error=is_error,
-            ),
-            details=result.details,
-            terminate=result.terminate and not is_error,
-        )
 
 
 class TurnEndEvent(AgentEvent):
