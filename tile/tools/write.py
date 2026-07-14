@@ -5,15 +5,24 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from tile.types.tools import ToolDefinition, ToolResult
+from pydantic import Field
+
+from tile.types.tools import ToolDefinition, ToolInput, ToolResult
 from tile.tools.support.paths import resolve_to_cwd
 
 
-async def fn(path: str, content: str, *, cwd: Path) -> ToolResult:
+class WriteInput(ToolInput):
+    """Model-controlled file write arguments."""
+
+    path: str = Field(description="Path to the file to write, relative or absolute.")
+    content: str = Field(description="Content to write to the file.")
+
+
+async def fn(params: WriteInput, *, cwd: Path) -> ToolResult:
     """Write content to a file."""
 
-    resolved_path = _resolve_path(path, cwd)
-    bytes_written = await _execute(resolved_path, content)
+    resolved_path = _resolve_path(params.path, cwd)
+    bytes_written = await _execute(resolved_path, params.content)
     return _build_result(bytes_written, resolved_path)
 
 
@@ -49,19 +58,6 @@ tool = ToolDefinition(
         "Write content to a file. Creates the file if it doesn't exist, "
         "overwrites if it does. Automatically creates parent directories."
     ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the file to write, relative or absolute.",
-            },
-            "content": {
-                "type": "string",
-                "description": "Content to write to the file.",
-            },
-        },
-        "required": ["path", "content"],
-    },
+    input_model=WriteInput,
     fn=fn,
 )

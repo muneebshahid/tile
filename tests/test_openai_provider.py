@@ -42,7 +42,7 @@ from tests.support.stream_assertions import (
     expect_stream_event as _expect_event_type,
     expect_text_block as _expect_text_block,
 )
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
 
 
 def _collect_events(
@@ -71,15 +71,14 @@ def _sample_tools() -> list[ToolDefinition]:
             "get_weather",
             "Return a simple weather report for a city.",
             _sample_tool_fn,
-            city_description="The city to look up.",
         )
     ]
 
 
-async def _sample_tool_fn(city: str) -> ToolResult:
+async def _sample_tool_fn(params: CityInput) -> ToolResult:
     """Return a deterministic payload for provider-only tool definitions."""
 
-    return ToolResult.text(f"city={city}")
+    return ToolResult.text(f"city={params.city}")
 
 
 def test_stream_maps_raw_events_into_text_stream() -> None:
@@ -135,8 +134,9 @@ def test_stream_maps_raw_events_into_text_stream() -> None:
 
 def test_stream_passes_serialized_tools_when_provided() -> None:
     client = build_fake_openai_client([response_completed_event(1, "resp_tools")])
+    tools = _sample_tools()
 
-    _collect_events(client, tools=_sample_tools())
+    _collect_events(client, tools=tools)
 
     client.responses.create.assert_awaited_once_with(
         model="gpt-5.4",
@@ -149,16 +149,7 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
                 "type": "function",
                 "name": "get_weather",
                 "description": "Return a simple weather report for a city.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "city": {
-                            "type": "string",
-                            "description": "The city to look up.",
-                        }
-                    },
-                    "required": ["city"],
-                },
+                "parameters": tools[0].input_schema,
                 "strict": False,
                 "defer_loading": False,
             }

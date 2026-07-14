@@ -31,7 +31,10 @@ async def test_write_creates_file_and_parent_directories(tmp_path: Path) -> None
     file_path = tmp_path / "nested" / "sample.txt"
 
     result = tool_text(
-        await write.fn(path=str(file_path), content="hello", cwd=Path.cwd())
+        await write.fn(
+            write.WriteInput(path=str(file_path), content="hello"),
+            cwd=Path.cwd(),
+        )
     )
 
     assert file_path.read_text(encoding="utf-8") == "hello"
@@ -46,7 +49,10 @@ async def test_write_overwrites_existing_file(tmp_path: Path) -> None:
     file_path.write_text("old", encoding="utf-8")
 
     result = tool_text(
-        await write.fn(path=str(file_path), content="new", cwd=Path.cwd())
+        await write.fn(
+            write.WriteInput(path=str(file_path), content="new"),
+            cwd=Path.cwd(),
+        )
     )
 
     assert file_path.read_text(encoding="utf-8") == "new"
@@ -59,7 +65,12 @@ async def test_write_reports_utf8_byte_count(tmp_path: Path) -> None:
 
     file_path = tmp_path / "sample.txt"
 
-    result = tool_text(await write.fn(path=str(file_path), content="é", cwd=Path.cwd()))
+    result = tool_text(
+        await write.fn(
+            write.WriteInput(path=str(file_path), content="é"),
+            cwd=Path.cwd(),
+        )
+    )
 
     assert result == f"Successfully wrote 2 bytes to {file_path}"
 
@@ -74,7 +85,10 @@ async def test_write_resolves_relative_paths(
     monkeypatch.chdir(tmp_path)
 
     result = tool_text(
-        await write.fn(path="relative/sample.txt", content="hello", cwd=tmp_path)
+        await write.fn(
+            write.WriteInput(path="relative/sample.txt", content="hello"),
+            cwd=tmp_path,
+        )
     )
 
     file_path = tmp_path / "relative" / "sample.txt"
@@ -96,7 +110,10 @@ async def test_write_resolves_relative_path_against_supplied_cwd(
     monkeypatch.chdir(other)
 
     result = tool_text(
-        await write.fn(path="relative/sample.txt", content="hello", cwd=project)
+        await write.fn(
+            write.WriteInput(path="relative/sample.txt", content="hello"),
+            cwd=project,
+        )
     )
 
     file_path = project / "relative" / "sample.txt"
@@ -115,7 +132,10 @@ async def test_write_expands_home_directory(
     monkeypatch.setenv("HOME", str(tmp_path))
 
     result = tool_text(
-        await write.fn(path="~/sample.txt", content="hello", cwd=Path.cwd())
+        await write.fn(
+            write.WriteInput(path="~/sample.txt", content="hello"),
+            cwd=Path.cwd(),
+        )
     )
 
     file_path = tmp_path / "sample.txt"
@@ -132,7 +152,6 @@ async def test_write_raises_when_parent_path_is_file(tmp_path: Path) -> None:
 
     with pytest.raises(FileExistsError):
         await write.fn(
-            path=str(parent / "sample.txt"),
-            content="hello",
+            write.WriteInput(path=str(parent / "sample.txt"), content="hello"),
             cwd=Path.cwd(),
         )

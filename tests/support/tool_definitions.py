@@ -1,33 +1,26 @@
 """Shared tool definition builders for tests."""
 
-from tile.types.tools import JsonObject, ToolDefinition, ToolFunction
+from pydantic import Field
+
+from tile.types.tools import ToolDefinition, ToolFunction, ToolInput
+
+
+class CityInput(ToolInput):
+    """Strict city input shared by deterministic test tools."""
+
+    city: str = Field(description="The city to look up.")
 
 
 def city_tool(
     name: str,
     description: str,
     fn: ToolFunction,
-    *,
-    city_description: str | None = None,
 ) -> ToolDefinition:
     """Build a deterministic tool definition with a single city parameter."""
 
     return ToolDefinition(
         name=name,
         description=description,
-        input_schema=_city_input_schema(city_description),
+        input_model=CityInput,
         fn=fn,
     )
-
-
-def _city_input_schema(city_description: str | None) -> JsonObject:
-    """Build the object schema for a single required city string parameter."""
-
-    city_schema: JsonObject = {"type": "string"}
-    if city_description is not None:
-        city_schema["description"] = city_description
-    return {
-        "type": "object",
-        "properties": {"city": city_schema},
-        "required": ["city"],
-    }

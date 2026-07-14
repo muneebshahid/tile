@@ -8,9 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import Field
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 from tile.tools.support.paths import (
     normalize_at_prefix,
     normalize_unicode_spaces,
@@ -25,15 +25,6 @@ BOM = "\ufeff"
 LineEnding = Literal["\n", "\r\n"]
 
 
-async def fn(path: str, edits: list[dict[str, str]], *, cwd: Path) -> ToolResult:
-    """Edit a file with one or more targeted text replacements."""
-
-    resolved_path = _resolve_path(path, cwd)
-    replacements = _parse_edits(edits)
-    result = await _execute(resolved_path, replacements, path)
-    return _build_result(result, path)
-
-
 class EditDetails(ToolDetails):
     """File edit metadata for UI and persistence."""
 
@@ -41,11 +32,44 @@ class EditDetails(ToolDetails):
     diff: str
 
 
-class EditReplacement(BaseModel):
+class EditReplacement(ToolInput):
     """A single exact text replacement requested by the model."""
 
-    old_text: str
-    new_text: str
+    old_text: str = Field(
+        description=(
+            "Exact text for one targeted replacement. It must be unique in the "
+            "original file and must not overlap with any other edits[].old_text in "
+            "the same call."
+        )
+    )
+    new_text: str = Field(description="Replacement text for this targeted edit.")
+
+
+class EditInput(ToolInput):
+    """Model-controlled file edit arguments."""
+
+    path: str = Field(description="Path to the file to edit (relative or absolute).")
+    edits: list[EditReplacement] = Field(
+        min_length=1,
+        description=(
+            "One or more targeted replacements. Each edit is matched against the "
+            "original file, not incrementally. Do not include overlapping or nested "
+            "edits. If two changes touch the same block or nearby lines, merge them "
+            "into one edit instead."
+        ),
+    )
+
+
+async def fn(
+    params: EditInput,
+    *,
+    cwd: Path,
+) -> ToolResult:
+    """Edit a file with one or more targeted text replacements."""
+
+    resolved_path = _resolve_path(params.path, cwd)
+    result = await _execute(resolved_path, params.edits, params.path)
+    return _build_result(result, params.path)
 
 
 @dataclass(frozen=True)
@@ -96,15 +120,6 @@ async def _execute(
     """Apply validated replacements to a file asynchronously."""
 
     return await asyncio.to_thread(_edit_file, path, replacements, display_path)
-
-
-def _parse_edits(edits: list[dict[str, str]]) -> list[EditReplacement]:
-    """Parse raw edit dictionaries into replacement models."""
-
-    replacements = [EditReplacement.model_validate(edit) for edit in edits]
-    if not replacements:
-        raise RuntimeError("edits must contain at least one replacement")
-    return replacements
 
 
 def _build_result(result: EditExecutionResult, path: str) -> ToolResult:
@@ -582,43 +597,6 @@ tool = ToolDefinition(
         "edit instead of emitting overlapping edits. Do not include large "
         "unchanged regions just to connect distant changes."
     ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the file to edit (relative or absolute).",
-            },
-            "edits": {
-                "type": "array",
-                "description": (
-                    "One or more targeted replacements. Each edit is matched "
-                    "against the original file, not incrementally. Do not include "
-                    "overlapping or nested edits. If two changes touch the same "
-                    "block or nearby lines, merge them into one edit instead."
-                ),
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "old_text": {
-                            "type": "string",
-                            "description": (
-                                "Exact text for one targeted replacement. It "
-                                "must be unique in the original file and must "
-                                "not overlap with any other edits[].old_text in "
-                                "the same call."
-                            ),
-                        },
-                        "new_text": {
-                            "type": "string",
-                            "description": "Replacement text for this targeted edit.",
-                        },
-                    },
-                    "required": ["old_text", "new_text"],
-                },
-            },
-        },
-        "required": ["path", "edits"],
-    },
+    input_model=EditInput,
     fn=fn,
 )

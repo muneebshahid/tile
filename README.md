@@ -74,12 +74,39 @@ asyncio.run(main())
 announced to the model in the system prompt and injected into every tool whose
 function declares a `cwd` parameter. `BUILTIN_TOOLS` (`read`, `bash`, `edit`,
 `grep`, `find`, `ls`, `write`) are plain, unbound definitions — the runtime
-binds them. A custom tool opts into the working directory the same way:
+binds them. Tool inputs are Pydantic models: Tile generates the provider schema
+from the model and validates every model-supplied call before invocation.
+A custom tool opts into the working directory the same way:
 
 ```python
-async def my_tool(query: str, cwd: Path) -> ToolResult: ...   # receives cwd
-async def my_api_tool(query: str) -> ToolResult: ...          # left alone
+from pathlib import Path
+
+from pydantic import Field
+
+from tile.types import ToolDefinition, ToolInput, ToolResult
+
+
+class SearchInput(ToolInput):
+    query: str = Field(description="Text to search for.")
+
+
+async def search(params: SearchInput, *, cwd: Path) -> ToolResult:
+    ...  # use params.query; cwd is injected and never exposed to the model
+
+
+search_tool = ToolDefinition(
+    name="search",
+    description="Search the current workspace.",
+    input_model=SearchInput,
+    fn=search,
+)
 ```
+
+`ToolInput` rejects wrong types and extra fields. Tile passes the validated model
+instance directly to the tool, preserving nested models, aliases, and defaults.
+Validation errors are returned to the model for correction. A tool may return
+`ToolResult.error(...)` for an expected failure; an exception that escapes the
+tool is normalized by the runtime as an invocation failure.
 
 Prompt execution is task-owned: `session.prompt(...)` submits a run and returns
 a handle immediately, the runtime drives it to completion, and any number of
@@ -171,13 +198,16 @@ from tile import AgentRuntime, Completed, Failed, InMemoryHistoryStore, Run
 from tile.events import AgentEvent, MessageEndEvent, StreamFn
 from tile.providers.openai import create_stream_api
 from tile.tools import BUILTIN_TOOLS
-from tile.types import ToolDefinition, ToolResult
+from tile.types import ToolDefinition, ToolInput, ToolResult
+from tile.types import ToolInputValidationFailure, ToolInvocationFailure
 ```
 
 `tile` exposes the runtime, session, run-handle, outcome, history-store, and
 runtime-error contracts. `tile.events` exposes the structured events yielded by
 `Run.events()`. `tile.types` exposes provider-neutral conversation, stream, and
-tool contracts. `tile.providers.openai` exposes `create_stream_api`, which
+tool contracts, including structured validation and invocation failures on
+tool-execution event details. `tile.providers.openai` exposes
+`create_stream_api`, which
 binds a caller-constructed `AsyncOpenAI` client and optional provider reasoning
 options to the runtime's stream-function contract:
 `create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Literal
 
+from pydantic import Field
+
 from tile.result import FAIL_TOOL_NAME
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 
 
 class FailDetails(ToolDetails):
@@ -15,14 +17,18 @@ class FailDetails(ToolDetails):
     reason: str
 
 
-async def fail(reason: str) -> ToolResult:
+class FailInput(ToolInput):
+    """Model-controlled declared failure arguments."""
+
+    reason: str = Field(description="Why the task cannot be completed.")
+
+
+async def fn(params: FailInput) -> ToolResult:
     """Record the model's reason for not delivering a result."""
 
-    if not isinstance(reason, str):
-        raise ValueError("`reason` must be a string.")
     return ToolResult.text(
         "Failure recorded.",
-        details=FailDetails(reason=reason),
+        details=FailDetails(reason=params.reason),
         terminate=True,
     )
 
@@ -33,15 +39,6 @@ tool = ToolDefinition(
         "Report that the task cannot be completed and end the run. "
         "Provide a clear reason naming what is missing or impossible."
     ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "reason": {
-                "type": "string",
-                "description": "Why the task cannot be completed.",
-            }
-        },
-        "required": ["reason"],
-    },
-    fn=fail,
+    input_model=FailInput,
+    fn=fn,
 )

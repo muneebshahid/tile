@@ -8,11 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from pydantic import Field
+
 from tile.types.tools import (
     ImageMimeType,
     ToolDefinition,
     ToolDetails,
     ToolImageContent,
+    ToolInput,
     ToolResult,
 )
 from tile.tools.support.image_processing import (
@@ -47,6 +50,20 @@ class ReadDetails(ToolDetails):
     output: ToolOutputDetails
 
 
+class ReadInput(ToolInput):
+    """Model-controlled file read arguments."""
+
+    path: str = Field(description="Path to the file to read, relative or absolute.")
+    offset: int | None = Field(
+        default=None,
+        description="Line number to start reading from, 1-indexed.",
+    )
+    limit: int = Field(
+        default=OUTPUT_LINE_LIMIT,
+        description="Maximum number of lines to read.",
+    )
+
+
 @dataclass(frozen=True)
 class ReadSelection:
     """Readable file content after offset selection."""
@@ -57,22 +74,20 @@ class ReadSelection:
 
 
 async def fn(
-    path: str,
-    offset: int | None = None,
-    limit: int = OUTPUT_LINE_LIMIT,
+    params: ReadInput,
     *,
     cwd: Path,
 ) -> ToolResult:
     """Read a UTF-8 text file or supported image file."""
 
-    resolved_path = _resolve_path(path, cwd)
+    resolved_path = _resolve_path(params.path, cwd)
     image_mime_type = _detect_supported_image_mime_type(resolved_path)
     if image_mime_type is not None:
         return _read_image(resolved_path, image_mime_type)
 
     content = await _execute(resolved_path)
-    limit = max(1, limit)
-    return _build_result(content, offset, path, limit)
+    limit = max(1, params.limit)
+    return _build_result(content, params.offset, params.path, limit)
 
 
 async def _execute(path: Path) -> str:
@@ -351,24 +366,6 @@ tool = ToolDefinition(
         "output is truncated to 2000 lines or 50KB. Use offset and limit for "
         "large text files."
     ),
-    input_schema={
-        "type": "object",
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Path to the file to read, relative or absolute.",
-            },
-            "offset": {
-                "type": "integer",
-                "description": "Line number to start reading from, 1-indexed.",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of lines to read.",
-                "default": OUTPUT_LINE_LIMIT,
-            },
-        },
-        "required": ["path"],
-    },
+    input_model=ReadInput,
     fn=fn,
 )

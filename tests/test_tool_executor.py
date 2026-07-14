@@ -1,31 +1,51 @@
 """Tests for model-requested tool execution."""
 
+import asyncio
+from collections.abc import Callable
+from typing import Literal
+
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from pydantic.errors import PydanticInvalidForJsonSchema
 
 from tile.tool_executor import ToolExecutor
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
-from tests.support.tool_definitions import city_tool
+from tile.types.tool_execution import (
+    ToolInputValidationFailure,
+    ToolInvocationFailure,
+)
+from tile.types.tools import (
+    JsonObject,
+    ToolDefinition,
+    ToolDetails,
+    ToolInput,
+    ToolResult,
+)
+from tests.support.tool_definitions import CityInput, city_tool
 from tests.support.tool_results import tool_text
 
 
-async def _get_weather(city: str) -> ToolResult:
+async def _get_weather(params: CityInput) -> ToolResult:
     """Return deterministic weather for a city."""
 
-    return ToolResult.text(f"{city}: sunny")
+    return ToolResult.text(f"{params.city}: sunny")
 
 
-async def _raise_error(city: str) -> ToolResult:
+async def _raise_error(params: CityInput) -> ToolResult:
     """Raise a deterministic tool error."""
 
-    _ = city
+    _ = params
     raise RuntimeError("boom")
 
 
-async def _noop() -> ToolResult:
+async def _noop(params: BaseModel) -> ToolResult:
     """Return a fixed result for tools that take no arguments."""
 
+    _ = params
     return ToolResult.text("ok")
+
+
+class _NoInput(ToolInput):
+    """Strict empty input for deterministic test tools."""
 
 
 def _sample_tool() -> ToolDefinition:
@@ -48,6 +68,50 @@ def _failing_tool() -> ToolDefinition:
     )
 
 
+def test_tool_definition_generates_schema_from_input_model() -> None:
+    """Use one Pydantic model for provider schema and execution validation."""
+
+    tool = _sample_tool()
+
+    assert tool.input_schema == tool.input_model.model_json_schema()
+    assert tool.input_schema is tool.input_schema
+
+
+def test_tool_definition_rejects_input_model_without_json_schema() -> None:
+    """Fail tool construction before a provider receives an invalid schema."""
+
+    class InvalidInput(ToolInput):
+        """Input containing a callable that JSON Schema cannot represent."""
+
+        callback: Callable[[], str]
+
+    with pytest.raises(PydanticInvalidForJsonSchema, match="CallableSchema"):
+        ToolDefinition(
+            name="invalid",
+            description="Cannot expose this input to a provider.",
+            input_model=InvalidInput,
+            fn=_noop,
+        )
+
+
+def test_tool_executor_rejects_function_without_input_parameter() -> None:
+    """Fail runtime setup when a function cannot receive its input model."""
+
+    async def invalid() -> ToolResult:
+        """Expose an invalid callback without an input-model parameter."""
+
+        return ToolResult.text("invalid")
+
+    tool = city_tool(
+        "invalid",
+        "Function does not accept the validated input model.",
+        invalid,
+    )
+
+    with pytest.raises(ValueError, match="must accept one validated input model"):
+        ToolExecutor([tool])
+
+
 @pytest.mark.asyncio
 async def test_tool_executor_executes_registered_tool() -> None:
     """Execute a registered tool and return a normalized outcome."""
@@ -63,7 +127,51 @@ async def test_tool_executor_executes_registered_tool() -> None:
     assert outcome.tool_result_turn.call_id == "call_weather"
     assert outcome.tool_result_turn.tool_name == "get_weather"
     assert outcome.tool_result_turn.is_error is False
-    assert tool_text(outcome.result) == "Munich: sunny"
+    assert tool_text(outcome.tool_result_turn) == "Munich: sunny"
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_preserves_nested_input_models() -> None:
+    """Pass nested validated models into tool code without flattening them."""
+
+    class Item(BaseModel):
+        """One nested item consumed by the deterministic tool."""
+
+        name: str
+
+    class ItemsInput(ToolInput):
+        """Model-controlled collection of nested items."""
+
+        items: list[Item]
+
+    captured: list[Item] = []
+
+    async def inspect_items(params: ItemsInput) -> ToolResult:
+        """Capture the concrete nested model received by the tool."""
+
+        captured.extend(params.items)
+        return ToolResult.text(params.items[0].name)
+
+    executor = ToolExecutor(
+        [
+            ToolDefinition(
+                name="inspect_items",
+                description="Inspect nested items.",
+                input_model=ItemsInput,
+                fn=inspect_items,
+            )
+        ]
+    )
+
+    outcome = await executor.execute(
+        call_id="call_items",
+        tool_name="inspect_items",
+        arguments={"items": [{"name": "first"}]},
+    )
+
+    assert len(captured) == 1
+    assert isinstance(captured[0], Item)
+    assert tool_text(outcome.tool_result_turn) == "first"
 
 
 @pytest.mark.asyncio
@@ -81,7 +189,7 @@ async def test_tool_executor_normalizes_missing_tool() -> None:
     assert outcome.tool_result_turn.call_id == "call_missing"
     assert outcome.tool_result_turn.tool_name == "missing_tool"
     assert outcome.tool_result_turn.is_error is True
-    assert tool_text(outcome.result) == "Tool 'missing_tool' not found"
+    assert tool_text(outcome.tool_result_turn) == "Tool 'missing_tool' not found"
 
 
 @pytest.mark.asyncio
@@ -99,7 +207,131 @@ async def test_tool_executor_normalizes_tool_exception() -> None:
     assert outcome.tool_result_turn.call_id == "call_fail"
     assert outcome.tool_result_turn.tool_name == "fail_weather"
     assert outcome.tool_result_turn.is_error is True
-    assert tool_text(outcome.result) == "boom"
+    assert tool_text(outcome.tool_result_turn) == "boom"
+    details = outcome.details
+    assert isinstance(details, ToolInvocationFailure)
+    assert details.tool_name == "fail_weather"
+    assert details.exception_type == "RuntimeError"
+    assert details.message == "boom"
+    assert "exception" not in details.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_does_not_normalize_cancellation() -> None:
+    """Let task cancellation propagate through the tool boundary."""
+
+    async def cancel(params: CityInput) -> ToolResult:
+        """Raise cancellation from a deterministic tool."""
+
+        _ = params
+        raise asyncio.CancelledError
+
+    executor = ToolExecutor(
+        [city_tool("cancel", "Cancel deterministic execution.", cancel)]
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await executor.execute(
+            call_id="call_cancel",
+            tool_name="cancel",
+            arguments={"city": "Munich"},
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arguments", "location", "code"),
+    [
+        ({}, ("city",), "missing"),
+        ({"city": 5}, ("city",), "string_type"),
+        (
+            {"city": "Munich", "unexpected": True},
+            ("unexpected",),
+            "extra_forbidden",
+        ),
+    ],
+)
+async def test_tool_executor_rejects_invalid_arguments_before_invocation(
+    arguments: JsonObject,
+    location: tuple[str, ...],
+    code: str,
+) -> None:
+    """Return structured correction details without invoking invalid input."""
+
+    calls: list[str] = []
+
+    async def capture(params: CityInput) -> ToolResult:
+        """Record valid invocations for the boundary assertion."""
+
+        calls.append(params.city)
+        return ToolResult.text(params.city)
+
+    executor = ToolExecutor(
+        [city_tool("weather", "Return deterministic weather.", capture)]
+    )
+
+    outcome = await executor.execute(
+        call_id="call_invalid",
+        tool_name="weather",
+        arguments=arguments,
+    )
+
+    assert calls == []
+    assert outcome.tool_result_turn.is_error is True
+    assert tool_text(outcome.tool_result_turn).startswith(
+        "Invalid arguments for tool 'weather':"
+    )
+    details = outcome.details
+    assert isinstance(details, ToolInputValidationFailure)
+    assert [(issue.location, issue.code) for issue in details.issues] == [
+        (location, code)
+    ]
+    assert "input" not in details.model_dump()
+
+
+class _ExpectedFailureDetails(ToolDetails):
+    """Domain metadata for an intentionally returned tool failure."""
+
+    type: Literal["expected_failure"] = "expected_failure"
+    reason: str
+
+
+@pytest.mark.asyncio
+async def test_tool_executor_preserves_returned_error_result() -> None:
+    """Let tools report handled failures without raising exceptions."""
+
+    async def unavailable(params: CityInput) -> ToolResult:
+        """Return a deterministic handled failure."""
+
+        return ToolResult.error(
+            f"Weather unavailable for {params.city}",
+            details=_ExpectedFailureDetails(reason="maintenance"),
+        )
+
+    executor = ToolExecutor(
+        [city_tool("weather", "Return deterministic weather.", unavailable)]
+    )
+
+    outcome = await executor.execute(
+        call_id="call_unavailable",
+        tool_name="weather",
+        arguments={"city": "Munich"},
+    )
+
+    assert outcome.tool_result_turn.is_error is True
+    assert tool_text(outcome.tool_result_turn) == "Weather unavailable for Munich"
+    assert isinstance(outcome.details, _ExpectedFailureDetails)
+
+
+def test_tool_result_rejects_error_that_terminates_run() -> None:
+    """Keep correction errors distinct from successful terminal tools."""
+
+    with pytest.raises(ValidationError, match="cannot terminate"):
+        ToolResult(
+            content=[],
+            is_error=True,
+            terminate=True,
+        )
 
 
 class _DatabaseDetails(ToolDetails):
@@ -109,9 +341,10 @@ class _DatabaseDetails(ToolDetails):
     rows_scanned: int
 
 
-async def _query_database() -> ToolResult:
+async def _query_database(params: _NoInput) -> ToolResult:
     """Return a result carrying user-defined details."""
 
+    _ = params
     return ToolResult.text("2 rows", details=_DatabaseDetails(rows_scanned=2))
 
 
@@ -122,11 +355,7 @@ async def test_tool_executor_preserves_user_defined_details() -> None:
     tool = ToolDefinition(
         name="query_database",
         description="Query a database.",
-        input_schema={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
+        input_model=_NoInput,
         fn=_query_database,
     )
     executor = ToolExecutor([tool])
@@ -137,10 +366,10 @@ async def test_tool_executor_preserves_user_defined_details() -> None:
         arguments={},
     )
 
-    details = outcome.result.details
+    details = outcome.details
     assert isinstance(details, _DatabaseDetails)
     assert details.rows_scanned == 2
-    assert outcome.result.model_dump()["details"] == {
+    assert details.model_dump() == {
         "type": "database",
         "rows_scanned": 2,
     }
@@ -154,11 +383,7 @@ def test_tool_definition_rejects_empty_or_padded_names(name: str) -> None:
         ToolDefinition(
             name=name,
             description="Read a file.",
-            input_schema={
-                "type": "object",
-                "properties": {},
-                "required": [],
-            },
+            input_model=_NoInput,
             fn=_noop,
         )
 
@@ -170,11 +395,7 @@ async def test_tool_executor_finds_tool_registered_with_uppercase_name() -> None
     tool = ToolDefinition(
         name="Read",
         description="Read a file.",
-        input_schema={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
+        input_model=_NoInput,
         fn=_noop,
     )
     executor = ToolExecutor([tool])
@@ -186,7 +407,7 @@ async def test_tool_executor_finds_tool_registered_with_uppercase_name() -> None
     )
 
     assert outcome.tool_result_turn.is_error is False
-    assert tool_text(outcome.result) == "ok"
+    assert tool_text(outcome.tool_result_turn) == "ok"
 
 
 @pytest.mark.asyncio
@@ -196,11 +417,7 @@ async def test_tool_executor_finds_tool_registered_with_lowercase_name() -> None
     tool = ToolDefinition(
         name="read",
         description="Read a file.",
-        input_schema={
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
+        input_model=_NoInput,
         fn=_noop,
     )
     executor = ToolExecutor([tool])
@@ -212,4 +429,4 @@ async def test_tool_executor_finds_tool_registered_with_lowercase_name() -> None
     )
 
     assert outcome.tool_result_turn.is_error is False
-    assert tool_text(outcome.result) == "ok"
+    assert tool_text(outcome.tool_result_turn) == "ok"

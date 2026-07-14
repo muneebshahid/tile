@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import tile.tools.edit as edit
 from tile.tools.edit import EditDetails
@@ -26,16 +27,32 @@ def test_edit_schema_exposes_edit_controls() -> None:
     assert set(properties) == {"path", "edits"}
 
 
+def test_edit_input_requires_at_least_one_replacement() -> None:
+    """Reject empty edit collections at the model boundary."""
+
+    with pytest.raises(ValidationError, match="at least 1 item"):
+        edit.EditInput(path="sample.txt", edits=[])
+
+
 def test_edit_schema_describes_each_replacement() -> None:
     """Expose old_text and new_text for every edit item."""
 
-    properties = edit.tool.input_schema["properties"]
+    schema = edit.tool.input_schema
+    properties = schema["properties"]
     assert isinstance(properties, dict)
 
     edits_schema = properties["edits"]
     assert isinstance(edits_schema, dict)
 
     item_schema = edits_schema["items"]
+    assert isinstance(item_schema, dict)
+
+    reference = item_schema["$ref"]
+    assert isinstance(reference, str)
+    definition_name = reference.rsplit("/", maxsplit=1)[-1]
+    definitions = schema["$defs"]
+    assert isinstance(definitions, dict)
+    item_schema = definitions[definition_name]
     assert isinstance(item_schema, dict)
 
     item_properties = item_schema["properties"]
@@ -87,8 +104,10 @@ async def test_edit_replaces_text_in_file(tmp_path: Path) -> None:
 
     result = tool_text(
         await edit.fn(
-            path=str(file_path),
-            edits=[{"old_text": "world", "new_text": "testing"}],
+            _edit_input(
+                path=str(file_path),
+                edits=[{"old_text": "world", "new_text": "testing"}],
+            ),
             cwd=Path.cwd(),
         )
     )
@@ -104,11 +123,13 @@ async def test_edit_replaces_multiple_disjoint_blocks(tmp_path: Path) -> None:
     file_path = _write_text(tmp_path / "sample.txt", "alpha\nbeta\ngamma\n")
 
     await edit.fn(
-        path=str(file_path),
-        edits=[
-            {"old_text": "alpha\n", "new_text": "ALPHA\n"},
-            {"old_text": "gamma\n", "new_text": "GAMMA\n"},
-        ],
+        _edit_input(
+            path=str(file_path),
+            edits=[
+                {"old_text": "alpha\n", "new_text": "ALPHA\n"},
+                {"old_text": "gamma\n", "new_text": "GAMMA\n"},
+            ],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -122,11 +143,13 @@ async def test_edit_matches_against_original_content(tmp_path: Path) -> None:
     file_path = _write_text(tmp_path / "sample.txt", "foo\nbar\nbaz\n")
 
     await edit.fn(
-        path=str(file_path),
-        edits=[
-            {"old_text": "foo\n", "new_text": "foo bar\n"},
-            {"old_text": "bar\n", "new_text": "BAR\n"},
-        ],
+        _edit_input(
+            path=str(file_path),
+            edits=[
+                {"old_text": "foo\n", "new_text": "foo bar\n"},
+                {"old_text": "bar\n", "new_text": "BAR\n"},
+            ],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -140,8 +163,10 @@ async def test_edit_returns_unified_diff_details(tmp_path: Path) -> None:
     file_path = _write_text(tmp_path / "sample.txt", "alpha\nbeta\ngamma\n")
 
     tool_result = await edit.fn(
-        path=str(file_path),
-        edits=[{"old_text": "beta\n", "new_text": "BETA\n"}],
+        _edit_input(
+            path=str(file_path),
+            edits=[{"old_text": "beta\n", "new_text": "BETA\n"}],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -177,8 +202,10 @@ async def test_edit_preserves_file_encoding_metadata(
     file_path = _write_text(tmp_path / "sample.txt", content)
 
     await edit.fn(
-        path=str(file_path),
-        edits=[{"old_text": "second\n", "new_text": "REPLACED\n"}],
+        _edit_input(
+            path=str(file_path),
+            edits=[{"old_text": "second\n", "new_text": "REPLACED\n"}],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -197,11 +224,6 @@ async def test_edit_preserves_file_encoding_metadata(
             "foo foo foo",
             [{"old_text": "foo", "new_text": "bar"}],
             "Found 3 occurrences",
-        ),
-        (
-            "hello\nworld\n",
-            [],
-            "edits must contain at least one",
         ),
         (
             "hello\nworld\n",
@@ -238,7 +260,6 @@ async def test_edit_preserves_file_encoding_metadata(
     ids=[
         "old-text-missing",
         "duplicate-occurrences",
-        "empty-edit-list",
         "empty-old-text",
         "overlapping-edits",
         "one-invalid-edit-among-valid",
@@ -258,7 +279,10 @@ async def test_edit_rejects_invalid_edits_and_leaves_file_unchanged(
     file_path = _write_text(tmp_path / "sample.txt", content)
 
     with pytest.raises(RuntimeError, match=error_match):
-        await edit.fn(path=str(file_path), edits=edits, cwd=Path.cwd())
+        await edit.fn(
+            _edit_input(path=str(file_path), edits=edits),
+            cwd=Path.cwd(),
+        )
 
     assert _read_text(file_path) == content
 
@@ -311,8 +335,10 @@ async def test_edit_fuzzy_matches_normalized_line_variants(
     file_path = _write_text(tmp_path / "sample.txt", content)
 
     await edit.fn(
-        path=str(file_path),
-        edits=[{"old_text": old_text, "new_text": new_text}],
+        _edit_input(
+            path=str(file_path),
+            edits=[{"old_text": old_text, "new_text": new_text}],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -374,8 +400,10 @@ async def test_edit_fuzzy_maps_terminators_like_exact_replacement(
     file_path = _write_text(tmp_path / "sample.txt", content)
 
     await edit.fn(
-        path=str(file_path),
-        edits=[{"old_text": old_text, "new_text": new_text}],
+        _edit_input(
+            path=str(file_path),
+            edits=[{"old_text": old_text, "new_text": new_text}],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -394,13 +422,15 @@ async def test_edit_fuzzy_preserves_untouched_regions_and_diffs_original(
     )
 
     tool_result = await edit.fn(
-        path=str(file_path),
-        edits=[
-            {
-                "old_text": "console.log('hello');",
-                "new_text": "console.log('world');",
-            }
-        ],
+        _edit_input(
+            path=str(file_path),
+            edits=[
+                {
+                    "old_text": "console.log('hello');",
+                    "new_text": "console.log('world');",
+                }
+            ],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -423,8 +453,10 @@ async def test_edit_fuzzy_skips_unterminated_final_line_for_terminated_old(
     file_path = _write_text(tmp_path / "sample.txt", "log(‘x’);\nabc\nlog(‘x’);")
 
     await edit.fn(
-        path=str(file_path),
-        edits=[{"old_text": "log('x');\n", "new_text": "log('y');\n"}],
+        _edit_input(
+            path=str(file_path),
+            edits=[{"old_text": "log('x');\n", "new_text": "log('y');\n"}],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -441,13 +473,15 @@ async def test_edit_prefers_exact_match_over_fuzzy_match(tmp_path: Path) -> None
     )
 
     await edit.fn(
-        path=str(file_path),
-        edits=[
-            {
-                "old_text": "const x = 'exact';",
-                "new_text": "const x = 'changed';",
-            }
-        ],
+        _edit_input(
+            path=str(file_path),
+            edits=[
+                {
+                    "old_text": "const x = 'exact';",
+                    "new_text": "const x = 'changed';",
+                }
+            ],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -467,14 +501,16 @@ async def test_edit_fuzzy_matches_multiple_edits(tmp_path: Path) -> None:
     )
 
     await edit.fn(
-        path=str(file_path),
-        edits=[
-            {
-                "old_text": "console.log('hello');\n",
-                "new_text": "console.log('world');\n",
-            },
-            {"old_text": "hello world\n", "new_text": "hello universe\n"},
-        ],
+        _edit_input(
+            path=str(file_path),
+            edits=[
+                {
+                    "old_text": "console.log('hello');\n",
+                    "new_text": "console.log('world');\n",
+                },
+                {"old_text": "hello world\n", "new_text": "hello universe\n"},
+            ],
+        ),
         cwd=Path.cwd(),
     )
 
@@ -530,6 +566,12 @@ def _write_text(path: Path, content: str) -> Path:
     with path.open("w", encoding="utf-8", newline="") as file:
         file.write(content)
     return path
+
+
+def _edit_input(*, path: str, edits: list[dict[str, str]]) -> edit.EditInput:
+    """Validate JSON-shaped replacements for direct tool-function tests."""
+
+    return edit.EditInput.model_validate({"path": path, "edits": edits})
 
 
 def _read_text(path: Path) -> str:

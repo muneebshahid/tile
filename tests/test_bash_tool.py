@@ -30,6 +30,14 @@ def test_bash_schema_exposes_command_controls() -> None:
     assert set(properties) == {"command", "timeout"}
 
 
+def test_bash_input_accepts_integer_timeout() -> None:
+    """Accept whole-second JSON numbers for a floating-point timeout."""
+
+    params = bash.BashInput.model_validate({"command": "true", "timeout": 30})
+
+    assert params.timeout == 30.0
+
+
 @pytest.fixture
 def execution(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     """Patch shell execution with an async mock for fn-level tests."""
@@ -45,7 +53,7 @@ async def test_fn_runs_command_from_supplied_cwd(tmp_path: Path) -> None:
 
     (tmp_path / "sample.txt").write_text("content", encoding="utf-8")
 
-    tool_result = await bash.fn(command="pwd && ls", cwd=tmp_path)
+    tool_result = await bash.fn(bash.BashInput(command="pwd && ls"), cwd=tmp_path)
     result = tool_text(tool_result)
 
     assert result.splitlines() == [str(tmp_path.resolve()), "sample.txt"]
@@ -57,7 +65,10 @@ async def test_fn_combines_stderr_with_stdout(tmp_path: Path) -> None:
     """Return stdout and stderr in one text result."""
 
     result = tool_text(
-        await bash.fn(command="printf 'out'; printf 'err' >&2", cwd=tmp_path)
+        await bash.fn(
+            bash.BashInput(command="printf 'out'; printf 'err' >&2"),
+            cwd=tmp_path,
+        )
     )
 
     assert result == "outerr"
@@ -67,7 +78,7 @@ async def test_fn_combines_stderr_with_stdout(tmp_path: Path) -> None:
 async def test_fn_returns_no_output_marker(tmp_path: Path) -> None:
     """Return an explicit marker when a successful command emits nothing."""
 
-    tool_result = await bash.fn(command="true", cwd=tmp_path)
+    tool_result = await bash.fn(bash.BashInput(command="true"), cwd=tmp_path)
     result = tool_text(tool_result)
 
     assert result == "(no output)"
@@ -84,7 +95,10 @@ async def test_fn_truncates_to_tail_output(
     output = "\n".join(f"line {index}" for index in range(2002))
     execution.return_value = _snapshot(output)
 
-    tool_result = await bash.fn(command="generate-output", cwd=tmp_path)
+    tool_result = await bash.fn(
+        bash.BashInput(command="generate-output"),
+        cwd=tmp_path,
+    )
     result = tool_text(tool_result)
 
     assert result.startswith("line 2\n")
@@ -107,7 +121,7 @@ async def test_fn_raises_with_output_on_nonzero_exit(tmp_path: Path) -> None:
     """Raise command output and exit code when the command fails."""
 
     with pytest.raises(RuntimeError) as error:
-        await bash.fn(command="printf 'boom'; exit 7", cwd=tmp_path)
+        await bash.fn(bash.BashInput(command="printf 'boom'; exit 7"), cwd=tmp_path)
 
     assert str(error.value) == "boom\n\nCommand exited with code 7"
 
@@ -119,7 +133,7 @@ async def test_fn_raises_status_only_when_failed_command_has_no_output(
     """Avoid adding a no-output marker to failed commands."""
 
     with pytest.raises(RuntimeError) as error:
-        await bash.fn(command="exit 7", cwd=tmp_path)
+        await bash.fn(bash.BashInput(command="exit 7"), cwd=tmp_path)
 
     assert str(error.value) == "Command exited with code 7"
 
@@ -129,7 +143,10 @@ async def test_fn_raises_with_timeout_status(tmp_path: Path) -> None:
     """Terminate commands that exceed the supplied timeout."""
 
     with pytest.raises(RuntimeError) as error:
-        await bash.fn(command="printf 'start'; sleep 2", timeout=0.1, cwd=tmp_path)
+        await bash.fn(
+            bash.BashInput(command="printf 'start'; sleep 2", timeout=0.1),
+            cwd=tmp_path,
+        )
 
     assert str(error.value) == "start\n\nCommand timed out after 0.1 seconds"
 
@@ -145,7 +162,7 @@ async def test_fn_applies_default_timeout(
 
     execution.return_value = _snapshot("ok")
 
-    await bash.fn(command="true", timeout=timeout, cwd=tmp_path)
+    await bash.fn(bash.BashInput(command="true", timeout=timeout), cwd=tmp_path)
 
     execution.assert_awaited_once_with(
         "true",

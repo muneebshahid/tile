@@ -13,14 +13,14 @@ from tile.types.stream_events import (
     ToolCallBlock,
 )
 from tile.types.tools import ToolImageContent, ToolResult
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
 from openai.types.responses.response_input_param import ResponseInputParam
 
 
-async def _sample_tool_fn(city: str) -> ToolResult:
+async def _sample_tool_fn(params: CityInput) -> ToolResult:
     """Return a deterministic payload for serialization-only tool definitions."""
 
-    return ToolResult.text(f"city={city}")
+    return ToolResult.text(f"city={params.city}")
 
 
 def test_serialize_response_input_flattens_sample_thread() -> None:
@@ -156,7 +156,6 @@ def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
             "get_weather",
             "Return the current weather for a city.",
             _sample_tool_fn,
-            city_description="The city to look up.",
         )
     ]
 
@@ -165,16 +164,7 @@ def test_serialize_tools_maps_tool_definitions_to_function_tools() -> None:
             "type": "function",
             "name": "get_weather",
             "description": "Return the current weather for a city.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "The city to look up.",
-                    }
-                },
-                "required": ["city"],
-            },
+            "parameters": tools[0].input_schema,
             "strict": False,
             "defer_loading": False,
         }

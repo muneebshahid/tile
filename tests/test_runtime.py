@@ -31,6 +31,7 @@ from tile.types.stream_events import (
 from tile.types.tools import (
     ToolDefinition,
     ToolFunction,
+    ToolInput,
     ToolResult,
     ToolTextContent,
 )
@@ -51,7 +52,11 @@ from tests.support.conversation_assertions import (
     expect_tool_result_turn,
     expect_user_message,
 )
-from tests.support.tool_definitions import city_tool
+from tests.support.tool_definitions import CityInput, city_tool
+
+
+class _NoInput(ToolInput):
+    """Strict empty input for deterministic runtime tools."""
 
 
 def _collect_prompt_events(
@@ -157,16 +162,16 @@ def _weather_tool(fn: ToolFunction) -> ToolDefinition:
     )
 
 
-async def _get_weather(city: str) -> ToolResult:
+async def _get_weather(params: CityInput) -> ToolResult:
     """Return deterministic weather text for runtime tests."""
 
-    return ToolResult.text(f"{city}: sunny")
+    return ToolResult.text(f"{params.city}: sunny")
 
 
-async def _raise_weather_error(city: str) -> ToolResult:
+async def _raise_weather_error(params: CityInput) -> ToolResult:
     """Raise a deterministic weather failure for runtime tests."""
 
-    _ = city
+    _ = params
     raise RuntimeError("weather unavailable")
 
 
@@ -253,15 +258,17 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
 
     captured: dict[str, Path] = {}
 
-    async def where(cwd: Path) -> ToolResult:
+    async def where(params: _NoInput, *, cwd: Path) -> ToolResult:
         """Capture the injected working directory."""
 
+        _ = params
         captured["where"] = cwd
         return ToolResult.text(str(cwd))
 
-    async def plain() -> ToolResult:
+    async def plain(params: _NoInput) -> ToolResult:
         """Run without any cwd involvement."""
 
+        _ = params
         return ToolResult.text("plain ran")
 
     def _no_arg_tool(name: str, fn: ToolFunction) -> ToolDefinition:
@@ -270,7 +277,7 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
         return ToolDefinition(
             name=name,
             description=f"Exercise cwd binding via {name}.",
-            input_schema={"type": "object", "properties": {}, "required": []},
+            input_model=_NoInput,
             fn=fn,
         )
 
@@ -315,19 +322,21 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
 def test_runtime_rejects_cwd_schema_property_on_injected_tool() -> None:
     """Reject tools that declare cwd for injection yet expose it to the model."""
 
-    async def clash(cwd: Path) -> ToolResult:
+    class CwdInput(ToolInput):
+        """Invalidly expose the runtime-controlled cwd capability."""
+
+        cwd: str
+
+    async def clash(params: CwdInput, *, cwd: Path) -> ToolResult:
         """Declare cwd while the schema also exposes it."""
 
+        _ = params
         return ToolResult.text(str(cwd))
 
     bad_tool = ToolDefinition(
         name="clash",
         description="Conflicting cwd declaration.",
-        input_schema={
-            "type": "object",
-            "properties": {"cwd": {"type": "string"}},
-            "required": [],
-        },
+        input_model=CwdInput,
         fn=clash,
     )
 
@@ -472,10 +481,10 @@ def test_run_abort_heals_unanswered_tool_calls() -> None:
 
         gate = asyncio.Event()
 
-        async def _blocked_weather(city: str) -> ToolResult:
+        async def _blocked_weather(params: CityInput) -> ToolResult:
             """Wait for a release gate that never opens."""
 
-            _ = city
+            _ = params
             await gate.wait()
             raise AssertionError("Tool must not complete.")
 
@@ -1064,11 +1073,11 @@ def test_tool_execution_start_precedes_persisted_result() -> None:
 
         gate = asyncio.Event()
 
-        async def _blocked_weather(city: str) -> ToolResult:
+        async def _blocked_weather(params: CityInput) -> ToolResult:
             """Wait for the release gate before answering."""
 
             await gate.wait()
-            return ToolResult.text(f"{city}: sunny")
+            return ToolResult.text(f"{params.city}: sunny")
 
         runtime, _ = _runtime_with_streams(
             [

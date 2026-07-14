@@ -7,7 +7,9 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolResult
+from pydantic import Field
+
+from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
 from tile.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from tile.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
@@ -26,11 +28,25 @@ class BashDetails(ToolDetails):
     output: ToolOutputDetails
 
 
-async def fn(command: str, timeout: float | None = None, *, cwd: Path) -> ToolResult:
+class BashInput(ToolInput):
+    """Model-controlled shell command arguments."""
+
+    command: str = Field(description="Bash command to execute.")
+    timeout: float | None = Field(
+        default=None,
+        description="Timeout in seconds. Defaults to 120 seconds when omitted.",
+    )
+
+
+async def fn(params: BashInput, *, cwd: Path) -> ToolResult:
     """Execute a shell command from the agent working directory."""
 
     resolved_cwd = _resolve_cwd(cwd)
-    result = await _execute(command, _effective_timeout(timeout), resolved_cwd)
+    result = await _execute(
+        params.command,
+        _effective_timeout(params.timeout),
+        resolved_cwd,
+    )
     return _build_result(result)
 
 
@@ -248,19 +264,6 @@ def _supports_process_groups() -> bool:
 tool = ToolDefinition(
     name="bash",
     description="Execute a bash command.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            "command": {
-                "type": "string",
-                "description": "Bash command to execute.",
-            },
-            "timeout": {
-                "type": "number",
-                "description": "Timeout in seconds. Defaults to 120 seconds when omitted.",
-            },
-        },
-        "required": ["command"],
-    },
+    input_model=BashInput,
     fn=fn,
 )

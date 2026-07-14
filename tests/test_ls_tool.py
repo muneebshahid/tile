@@ -15,7 +15,7 @@ from tests.support.tool_results import tool_text
 def test_ls_schema_requires_no_arguments() -> None:
     """Allow callers to omit path and limit."""
 
-    assert ls.tool.input_schema["required"] == []
+    assert ls.tool.input_schema.get("required", []) == []
 
 
 @pytest.fixture
@@ -83,7 +83,10 @@ def mixed_case_directory(tmp_path: Path) -> Path:
 async def test_ls_returns_all_directory_entries(populated_directory: Path) -> None:
     """Return every file and directory name when the result is under the limit."""
 
-    tool_result = await ls.fn(path=str(populated_directory), limit=10, cwd=Path.cwd())
+    tool_result = await ls.fn(
+        ls.LsInput(path=str(populated_directory), limit=10),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
 
     assert result.splitlines() == ["README.md", "src/", "uv.lock"]
@@ -104,7 +107,7 @@ async def test_ls_resolves_relative_path_against_supplied_cwd(
     _create_file(project / "sample.txt")
     monkeypatch.chdir(other)
 
-    result = tool_text(await ls.fn(path=".", limit=10, cwd=project))
+    result = tool_text(await ls.fn(ls.LsInput(path=".", limit=10), cwd=project))
 
     assert result == "sample.txt"
 
@@ -115,7 +118,7 @@ async def test_ls_uses_cwd_when_path_is_omitted(tmp_path: Path) -> None:
 
     _create_file(tmp_path / "sample.txt")
 
-    tool_result = await ls.fn(limit=10, cwd=tmp_path)
+    tool_result = await ls.fn(ls.LsInput(limit=10), cwd=tmp_path)
     result = tool_text(tool_result)
 
     assert result == "sample.txt"
@@ -128,7 +131,10 @@ async def test_ls_respects_limit_after_sorting_entries(
 ) -> None:
     """Return only the first sorted entries up to the requested limit."""
 
-    tool_result = await ls.fn(path=str(unsorted_directory), limit=2, cwd=Path.cwd())
+    tool_result = await ls.fn(
+        ls.LsInput(path=str(unsorted_directory), limit=2),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
 
     assert result.splitlines() == [
@@ -151,7 +157,10 @@ async def test_ls_clamps_limit_to_one(unsorted_directory: Path) -> None:
     """Keep entry limits positive when callers pass a low limit."""
 
     result = tool_text(
-        await ls.fn(path=str(unsorted_directory), limit=0, cwd=Path.cwd())
+        await ls.fn(
+            ls.LsInput(path=str(unsorted_directory), limit=0),
+            cwd=Path.cwd(),
+        )
     )
 
     assert result.splitlines() == [
@@ -167,7 +176,7 @@ async def test_ls_reports_byte_limit(long_directory: Callable[[int], Path]) -> N
 
     path = long_directory(270)
 
-    tool_result = await ls.fn(path=str(path), limit=500, cwd=Path.cwd())
+    tool_result = await ls.fn(ls.LsInput(path=str(path), limit=500), cwd=Path.cwd())
     result = tool_text(tool_result)
     notice = "\n\n[50.0KB limit reached. Directory has 270 entries]"
     body = result.removesuffix(notice)
@@ -192,7 +201,9 @@ async def test_ls_reports_first_truncation_boundary(
 
     path = long_directory(300)
 
-    result = tool_text(await ls.fn(path=str(path), limit=260, cwd=Path.cwd()))
+    result = tool_text(
+        await ls.fn(ls.LsInput(path=str(path), limit=260), cwd=Path.cwd())
+    )
 
     assert result.endswith("\n\n[50.0KB limit reached. Directory has 300 entries]")
 
@@ -205,8 +216,7 @@ async def test_ls_appends_slash_to_directories(
 
     result = tool_text(
         await ls.fn(
-            path=str(directory_with_child_directory),
-            limit=10,
+            ls.LsInput(path=str(directory_with_child_directory), limit=10),
             cwd=Path.cwd(),
         )
     )
@@ -221,7 +231,10 @@ async def test_ls_includes_dotfiles_and_dot_directories(
     """Include hidden files and hidden directories in directory listings."""
 
     result = tool_text(
-        await ls.fn(path=str(hidden_entries_directory), limit=10, cwd=Path.cwd())
+        await ls.fn(
+            ls.LsInput(path=str(hidden_entries_directory), limit=10),
+            cwd=Path.cwd(),
+        )
     )
 
     assert result.splitlines() == [".hidden-dir/", ".hidden-file"]
@@ -234,7 +247,10 @@ async def test_ls_sorts_entries_case_insensitively(
     """Sort entries alphabetically without separating upper and lower case names."""
 
     result = tool_text(
-        await ls.fn(path=str(mixed_case_directory), limit=10, cwd=Path.cwd())
+        await ls.fn(
+            ls.LsInput(path=str(mixed_case_directory), limit=10),
+            cwd=Path.cwd(),
+        )
     )
 
     assert result.splitlines() == ["Alpha.txt", "beta.txt", "charlie.txt"]
@@ -244,7 +260,10 @@ async def test_ls_sorts_entries_case_insensitively(
 async def test_ls_reports_empty_directory(tmp_path: Path) -> None:
     """Return an explicit marker for empty directories."""
 
-    tool_result = await ls.fn(path=str(tmp_path), limit=10, cwd=Path.cwd())
+    tool_result = await ls.fn(
+        ls.LsInput(path=str(tmp_path), limit=10),
+        cwd=Path.cwd(),
+    )
     result = tool_text(tool_result)
 
     assert result == "(empty directory)"
@@ -256,7 +275,10 @@ async def test_ls_raises_when_path_does_not_exist(tmp_path: Path) -> None:
     """Raise filesystem errors so the agent can mark tool execution as failed."""
 
     with pytest.raises(FileNotFoundError):
-        await ls.fn(path=str(tmp_path / "missing"), limit=10, cwd=Path.cwd())
+        await ls.fn(
+            ls.LsInput(path=str(tmp_path / "missing"), limit=10),
+            cwd=Path.cwd(),
+        )
 
 
 @pytest.mark.asyncio
@@ -267,7 +289,10 @@ async def test_ls_raises_when_path_is_not_directory(tmp_path: Path) -> None:
     _create_file(file_path)
 
     with pytest.raises(NotADirectoryError):
-        await ls.fn(path=str(file_path), limit=10, cwd=Path.cwd())
+        await ls.fn(
+            ls.LsInput(path=str(file_path), limit=10),
+            cwd=Path.cwd(),
+        )
 
 
 def _create_file(path: Path) -> None:
