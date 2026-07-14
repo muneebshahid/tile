@@ -2,8 +2,8 @@
 
 from collections.abc import Sequence
 
+from tile.types.tool_execution import ToolExecutionOutcome
 from tile.types.tools import JsonObject, ToolDefinition, ToolFunction, ToolResult
-from tile.events import ToolExecutionOutcome
 
 
 class ToolExecutor:

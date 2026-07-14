@@ -21,6 +21,7 @@ from tile.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from tile.types.tool_execution import ToolExecutionOutcome
 from tile.types.tools import JsonObject
 from tile.prompt import DEFAULT_INSTRUCTIONS, build_system_prompt
 from tile.tool_executor import ToolExecutor
@@ -33,7 +34,6 @@ from tile.events import (
     MessageUpdateEvent,
     StreamFn,
     ToolExecutionEndEvent,
-    ToolExecutionOutcome,
     ToolExecutionStartEvent,
     TurnEndEvent,
     TurnStartEvent,
