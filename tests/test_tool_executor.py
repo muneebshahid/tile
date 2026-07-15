@@ -17,6 +17,7 @@ from tile.types.tools import (
     JsonObject,
     ToolDefinition,
     ToolDetails,
+    ToolError,
     ToolInput,
     ToolResult,
 )
@@ -290,20 +291,20 @@ async def test_tool_executor_rejects_invalid_arguments_before_invocation(
 
 
 class _ExpectedFailureDetails(ToolDetails):
-    """Domain metadata for an intentionally returned tool failure."""
+    """Domain metadata for an intentionally raised tool failure."""
 
     type: Literal["expected_failure"] = "expected_failure"
     reason: str
 
 
 @pytest.mark.asyncio
-async def test_tool_executor_preserves_returned_error_result() -> None:
-    """Let tools report handled failures without raising exceptions."""
+async def test_tool_executor_normalizes_intentional_tool_error() -> None:
+    """Convert an intentional tool exception into model-visible error data."""
 
     async def unavailable(params: CityInput) -> ToolResult:
-        """Return a deterministic handled failure."""
+        """Raise a deterministic handled failure."""
 
-        return ToolResult.error(
+        raise ToolError(
             f"Weather unavailable for {params.city}",
             details=_ExpectedFailureDetails(reason="maintenance"),
         )
@@ -323,15 +324,11 @@ async def test_tool_executor_preserves_returned_error_result() -> None:
     assert isinstance(outcome.details, _ExpectedFailureDetails)
 
 
-def test_tool_result_rejects_error_that_terminates_run() -> None:
-    """Keep correction errors distinct from successful terminal tools."""
+def test_tool_result_has_no_error_state() -> None:
+    """Keep model-visible failures outside the tool success contract."""
 
-    with pytest.raises(ValidationError, match="cannot terminate"):
-        ToolResult(
-            content=[],
-            is_error=True,
-            terminate=True,
-        )
+    assert "is_error" not in ToolResult.model_fields
+    assert not hasattr(ToolResult, "error")
 
 
 class _DatabaseDetails(ToolDetails):

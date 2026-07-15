@@ -14,6 +14,7 @@ from tile.types.tools import (
     ImageMimeType,
     ToolDefinition,
     ToolDetails,
+    ToolError,
     ToolImageContent,
     ToolInput,
     ToolResult,
@@ -80,14 +81,17 @@ async def fn(
 ) -> ToolResult:
     """Read a UTF-8 text file or supported image file."""
 
-    resolved_path = _resolve_path(params.path, cwd)
-    image_mime_type = _detect_supported_image_mime_type(resolved_path)
-    if image_mime_type is not None:
-        return _read_image(resolved_path, image_mime_type)
+    try:
+        resolved_path = _resolve_path(params.path, cwd)
+        image_mime_type = _detect_supported_image_mime_type(resolved_path)
+        if image_mime_type is not None:
+            return _read_image(resolved_path, image_mime_type)
 
-    content = await _execute(resolved_path)
-    limit = max(1, params.limit)
-    return _build_result(content, params.offset, params.path, limit)
+        content = await _execute(resolved_path)
+        limit = max(1, params.limit)
+        return _build_result(content, params.offset, params.path, limit)
+    except (OSError, UnicodeError) as error:
+        raise ToolError(str(error)) from error
 
 
 async def _execute(path: Path) -> str:
@@ -116,7 +120,7 @@ def _select_content(content: str, offset: int | None) -> ReadSelection:
     lines = content.split("\n")
     start_index = _start_index(offset)
     if start_index >= len(lines):
-        raise RuntimeError(
+        raise ToolError(
             f"Offset {offset} is beyond end of file ({len(lines)} lines total)"
         )
 

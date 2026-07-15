@@ -10,7 +10,13 @@ from typing import Literal
 
 from pydantic import Field
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
+from tile.types.tools import (
+    ToolDefinition,
+    ToolDetails,
+    ToolError,
+    ToolInput,
+    ToolResult,
+)
 from tile.tools.support.paths import (
     normalize_at_prefix,
     normalize_unicode_spaces,
@@ -67,9 +73,12 @@ async def fn(
 ) -> ToolResult:
     """Edit a file with one or more targeted text replacements."""
 
-    resolved_path = _resolve_path(params.path, cwd)
-    result = await _execute(resolved_path, params.edits, params.path)
-    return _build_result(result, params.path)
+    try:
+        resolved_path = _resolve_path(params.path, cwd)
+        result = await _execute(resolved_path, params.edits, params.path)
+        return _build_result(result, params.path)
+    except (OSError, UnicodeError) as error:
+        raise ToolError(str(error)) from error
 
 
 @dataclass(frozen=True)
@@ -108,7 +117,7 @@ class ReplacementApplication:
     new_content: str
 
 
-class MatchNotFound(RuntimeError):
+class MatchNotFound(ToolError):
     """Raised when a replacement old_text cannot be found."""
 
 
@@ -226,7 +235,7 @@ def _build_application(
     """Reject no-op replacements and pair original with edited content."""
 
     if content == new_content:
-        raise RuntimeError(_no_change_error(display_path, len(replacements)))
+        raise ToolError(_no_change_error(display_path, len(replacements)))
     return ReplacementApplication(base_content=content, new_content=new_content)
 
 
@@ -399,7 +408,7 @@ def _require_unique_match(
     if not starts:
         raise MatchNotFound(_not_found_error(display_path, edit_index, total_edits))
     if len(starts) > 1:
-        raise RuntimeError(
+        raise ToolError(
             _duplicate_error(display_path, edit_index, total_edits, len(starts))
         )
     return starts[0]
@@ -414,7 +423,7 @@ def _validate_non_overlapping(
     ordered = sorted(spans, key=lambda span: span.start)
     for previous, current in zip(ordered, ordered[1:]):
         if previous.end > current.start:
-            raise RuntimeError(
+            raise ToolError(
                 _overlap_error(previous.edit_index, current.edit_index, display_path)
             )
 
@@ -469,7 +478,7 @@ def _validate_non_empty_old_text(
 
     for index, replacement in enumerate(replacements):
         if replacement.old_text == "":
-            raise RuntimeError(
+            raise ToolError(
                 _empty_old_text_error(display_path, index, len(replacements))
             )
 

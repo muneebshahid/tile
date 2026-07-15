@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,7 +13,13 @@ from tile.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
-from tile.runtime import AgentRuntime, Run, SessionBusyError
+from tile.runtime import (
+    AgentRuntime,
+    Run,
+    RunFailure,
+    SessionBusyError,
+    TurnFailedError,
+)
 from tile.events import (
     AgentEndEvent,
     AgentEvent,
@@ -23,7 +29,7 @@ from tile.events import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
 )
-from tile.types.conversation import UserMessage
+from tile.types.conversation import ConversationItem, UserMessage
 from tile.types.stream_events import (
     ProviderStreamEvent,
     TextBlock,
@@ -144,6 +150,23 @@ class FalsyHistoryStore(InMemoryHistoryStore):
         """Return false to exercise explicit None defaulting."""
 
         return False
+
+
+class FailingHistoryStore(InMemoryHistoryStore):
+    """History store with a switchable append failure for finalization tests."""
+
+    fail_appends: bool = False
+
+    def append_history(
+        self,
+        session_id: str,
+        items: Sequence[ConversationItem],
+    ) -> None:
+        """Append history unless the test has enabled deterministic failure."""
+
+        if self.fail_appends:
+            raise RuntimeError("history unavailable")
+        super().append_history(session_id, items)
 
 
 def _sample_tools() -> list[ToolDefinition]:
@@ -376,6 +399,122 @@ def test_run_completes_and_reports_status() -> None:
         assert await run.wait() == "completed"
         assert run.status == "completed"
         assert run.error_message is None
+        assert run.failure is None
+        assert run.exception is None
+
+    asyncio.run(_run())
+
+
+def test_run_records_finalization_failure_and_releases_session() -> None:
+    """Fail run finalization without stranding its session as active."""
+
+    async def _run() -> None:
+        """Abort during a tool call while history healing is unavailable."""
+
+        gate = asyncio.Event()
+
+        async def _blocked_weather(params: CityInput) -> ToolResult:
+            """Wait until cancellation interrupts the tool execution."""
+
+            _ = params
+            await gate.wait()
+            return ToolResult.text("unexpected")
+
+        store = FailingHistoryStore()
+        provider = ProviderStreamMock(
+            [
+                tool_call_stream(
+                    response_id="resp_tool",
+                    call_id="call_weather",
+                    tool_name="get_weather",
+                    arguments={"city": "Munich"},
+                ),
+                final_text_stream("resp_recovery", "Recovered."),
+            ]
+        )
+        runtime = AgentRuntime(
+            stream_fn=provider.fn,
+            model="gpt-5.4",
+            history_store=store,
+            tools=[_weather_tool(_blocked_weather)],
+            cwd=Path("."),
+        )
+        session = runtime.session(session_id="finalization-failure")
+
+        run = await session.prompt("check weather")
+        async for event in run.events():
+            if isinstance(event, ToolExecutionStartEvent):
+                break
+
+        store.fail_appends = True
+        run.abort()
+
+        assert await run.wait() == "failed"
+        assert run.failure == RunFailure(
+            origin="finalization",
+            exception_type="RuntimeError",
+            message="history unavailable",
+        )
+        assert isinstance(run.exception, RuntimeError)
+        assert run.error_message == "history unavailable"
+
+        store.fail_appends = False
+        recovery = await session.prompt("recover")
+        assert await recovery.wait() == "completed"
+
+    asyncio.run(_run())
+
+
+def test_run_reraises_finalization_control_exception_after_finishing() -> None:
+    """Preserve control flow after recording terminal run diagnostics."""
+
+    class ControlSignal(BaseException):
+        """Deterministic process-control signal for finalization testing."""
+
+    async def _run() -> None:
+        """Observe an interrupted owner callback through the event loop."""
+
+        signal = ControlSignal("stop")
+        reported: list[BaseException] = []
+
+        def interrupt(_: Run) -> None:
+            """Interrupt owner notification with a control exception."""
+
+            raise signal
+
+        def capture_exception(
+            _: asyncio.AbstractEventLoop,
+            context: dict[str, object],
+        ) -> None:
+            """Capture a control exception re-raised by a done callback."""
+
+            error = context.get("exception")
+            if isinstance(error, BaseException):
+                reported.append(error)
+
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(capture_exception)
+        try:
+            run = Run(
+                run_id="control-signal",
+                session_id="control-signal",
+                events=async_stream([]),
+                on_done=interrupt,
+            )
+            assert await run.wait() == "failed"
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        assert reported == [signal]
+        assert run.status == "failed"
+        assert run.failure == RunFailure(
+            origin="finalization",
+            exception_type="ControlSignal",
+            message="stop",
+        )
+        assert run.exception is signal
 
     asyncio.run(_run())
 
@@ -816,23 +955,26 @@ def _raise_mid_stream_runtime() -> AgentRuntime:
 
 
 @pytest.mark.parametrize(
-    ("make_runtime", "expected_error", "errored_turn_streamed"),
+    ("make_runtime", "expected_error", "expected_origin", "errored_turn_streamed"),
     [
         pytest.param(
             _in_band_error_runtime,
             "Socket closed",
+            "turn",
             True,
             id="in_band_stream_error",
         ),
         pytest.param(
             _raise_before_stream_runtime,
             "connection refused",
+            "execution",
             False,
             id="raise_before_stream",
         ),
         pytest.param(
             _raise_mid_stream_runtime,
             "connection reset",
+            "execution",
             False,
             id="raise_mid_stream",
         ),
@@ -841,6 +983,7 @@ def _raise_mid_stream_runtime() -> AgentRuntime:
 def test_provider_death_fails_run_without_outcome_or_history(
     make_runtime: Callable[[], AgentRuntime],
     expected_error: str,
+    expected_origin: Literal["turn", "execution"],
     errored_turn_streamed: bool,
 ) -> None:
     """Converge every provider death channel on the same failed-run state.
@@ -859,7 +1002,21 @@ def test_provider_death_fails_run_without_outcome_or_history(
         run = await session.prompt("hello")
         assert await run.wait() == "failed"
         assert run.error_message == expected_error
+        assert run.failure == RunFailure(
+            origin=expected_origin,
+            exception_type=(
+                "TurnFailedError" if expected_origin == "turn" else "ConnectionError"
+            ),
+            message=expected_error,
+        )
         assert run.outcome is None
+        if expected_origin == "turn":
+            error = run.exception
+            assert isinstance(error, TurnFailedError)
+            assert error.turn is not None
+            assert error.turn.error_message == expected_error
+        else:
+            assert isinstance(run.exception, ConnectionError)
         return [event async for event in run.events()]
 
     events = asyncio.run(_run())

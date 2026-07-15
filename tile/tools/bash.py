@@ -9,7 +9,13 @@ from typing import Literal
 
 from pydantic import Field
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
+from tile.types.tools import (
+    ToolDefinition,
+    ToolDetails,
+    ToolError,
+    ToolInput,
+    ToolResult,
+)
 from tile.tools.support.output_accumulator import OutputAccumulator, OutputSnapshot
 from tile.tools.support.truncation import (
     OUTPUT_BYTE_LIMIT_LABEL,
@@ -41,13 +47,16 @@ class BashInput(ToolInput):
 async def fn(params: BashInput, *, cwd: Path) -> ToolResult:
     """Execute a shell command from the agent working directory."""
 
-    resolved_cwd = _resolve_cwd(cwd)
-    result = await _execute(
-        params.command,
-        _effective_timeout(params.timeout),
-        resolved_cwd,
-    )
-    return _build_result(result)
+    try:
+        resolved_cwd = _resolve_cwd(cwd)
+        result = await _execute(
+            params.command,
+            _effective_timeout(params.timeout),
+            resolved_cwd,
+        )
+        return _build_result(result)
+    except OSError as error:
+        raise ToolError(str(error)) from error
 
 
 def _resolve_cwd(cwd: Path) -> Path:
@@ -151,14 +160,14 @@ def _raise_for_execution_failure(
     """Raise when shell execution timed out or exited unsuccessfully."""
 
     if timed_out:
-        raise RuntimeError(
+        raise ToolError(
             _append_status(
                 _build_error_output_text(snapshot),
                 _timeout_status(timeout),
             )
         )
     if exit_code not in (0, None):
-        raise RuntimeError(
+        raise ToolError(
             _append_status(
                 _build_error_output_text(snapshot),
                 f"Command exited with code {exit_code}",

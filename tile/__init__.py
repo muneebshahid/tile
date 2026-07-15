@@ -10,7 +10,16 @@ from tile.history import (
     SessionRecord,
 )
 from tile.result import Completed, Failed, RunOutcome
-from tile.runtime import AgentRuntime, Run, RunStatus, Session, SessionBusyError
+from tile.runtime import (
+    AgentRuntime,
+    Run,
+    RunFailure,
+    RunFailureOrigin,
+    RunStatus,
+    Session,
+    SessionBusyError,
+    TurnFailedError,
+)
 from tile.tool_executor import ToolExecutor
 
 __all__ = [
@@ -20,6 +29,8 @@ __all__ = [
     "HistoryStore",
     "InMemoryHistoryStore",
     "Run",
+    "RunFailure",
+    "RunFailureOrigin",
     "RunOutcome",
     "RunStatus",
     "Session",
@@ -30,4 +41,5 @@ __all__ = [
     "SQLiteHistoryStore",
     "SQLiteHistoryStoreSchemaError",
     "ToolExecutor",
+    "TurnFailedError",
 ]

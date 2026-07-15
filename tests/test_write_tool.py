@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import tile.tools.write as write
+from tile.types.tools import ToolError
 from tests.support.tool_results import tool_text
 
 
@@ -150,7 +151,7 @@ async def test_write_raises_when_parent_path_is_file(tmp_path: Path) -> None:
     parent = tmp_path / "parent"
     parent.write_text("not a directory", encoding="utf-8")
 
-    with pytest.raises(FileExistsError):
+    with pytest.raises(ToolError):
         await write.fn(
             write.WriteInput(path=str(parent / "sample.txt"), content="hello"),
             cwd=Path.cwd(),

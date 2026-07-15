@@ -3,7 +3,6 @@
 import inspect
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
 
 from pydantic import BaseModel, ValidationError
 
@@ -13,19 +12,12 @@ from tile.types.tool_execution import (
     ToolInputValidationFailure,
     ToolInvocationFailure,
 )
-from tile.types.tools import JsonObject, ToolDefinition, ToolResult
+from tile.types.tools import JsonObject, ToolDefinition, ToolError, ToolResult
 
 logger = logging.getLogger(__name__)
 
 # Placeholder used only to validate function signatures without constructing input.
 _SIGNATURE_ARGUMENT = object()
-
-
-@dataclass(frozen=True)
-class _ValidatedArguments:
-    """Successfully validated model-controlled arguments."""
-
-    value: BaseModel
 
 
 class ToolExecutor:
@@ -55,10 +47,28 @@ class ToolExecutor:
     ) -> ToolExecutionOutcome:
         """Execute one tool request and return a normalized outcome."""
 
-        result = await self._call_tool(
-            tool_name,
-            arguments,
-        )
+        try:
+            result = await self._call_tool(tool_name, arguments)
+        except ToolError as error:
+            return ToolExecutionOutcome.from_error(
+                call_id=call_id,
+                tool_name=tool_name,
+                message=str(error),
+                details=error.details,
+            )
+        except Exception as error:
+            logger.debug("Tool '%s' invocation failed", tool_name, exc_info=True)
+            return ToolExecutionOutcome.from_error(
+                call_id=call_id,
+                tool_name=tool_name,
+                message=str(error),
+                details=ToolInvocationFailure(
+                    tool_name=tool_name,
+                    exception_type=type(error).__name__,
+                    message=str(error),
+                ),
+            )
+
         return ToolExecutionOutcome.from_result(
             call_id=call_id,
             tool_name=tool_name,
@@ -70,17 +80,19 @@ class ToolExecutor:
         tool_name: str,
         arguments: JsonObject,
     ) -> ToolResult:
-        """Resolve and call a tool while normalizing tool failures."""
+        """Resolve, validate, and invoke one model-requested tool."""
+
+        tool = self._require_tool(tool_name)
+        validated = self._validate_arguments(tool, arguments)
+        return await tool.fn(validated)
+
+    def _require_tool(self, tool_name: str) -> ToolDefinition:
+        """Return a registered tool or raise a model-visible lookup failure."""
 
         tool = self._get_tool(tool_name)
         if tool is None:
-            return ToolResult.error(f"Tool '{tool_name}' not found")
-
-        validated = self._validate_arguments(tool, arguments)
-        if isinstance(validated, ToolResult):
-            return validated
-
-        return await self._invoke_tool(tool, validated.value)
+            raise ToolError(f"Tool '{tool_name}' not found")
+        return tool
 
     def _get_tool(self, tool_name: str) -> ToolDefinition | None:
         """Find a registered tool definition by case-insensitive name."""
@@ -95,40 +107,20 @@ class ToolExecutor:
     def _validate_arguments(
         tool: ToolDefinition,
         arguments: JsonObject,
-    ) -> _ValidatedArguments | ToolResult:
-        """Validate model arguments or return a model-correctable error."""
+    ) -> BaseModel:
+        """Validate model arguments or raise a model-correctable failure."""
 
         try:
-            return _ValidatedArguments(tool.input_model.model_validate(arguments))
+            return tool.input_model.model_validate(arguments)
         except ValidationError as error:
             issues = _validation_issues(error)
-            return ToolResult.error(
+            raise ToolError(
                 _format_validation_failure(tool.name, issues),
                 details=ToolInputValidationFailure(
                     tool_name=tool.name,
                     issues=issues,
                 ),
-            )
-
-    @staticmethod
-    async def _invoke_tool(
-        tool: ToolDefinition,
-        arguments: BaseModel,
-    ) -> ToolResult:
-        """Invoke validated tool code and normalize escaped exceptions."""
-
-        try:
-            return await tool.fn(arguments)
-        except Exception as error:
-            logger.debug("Tool '%s' invocation failed", tool.name, exc_info=True)
-            return ToolResult.error(
-                str(error),
-                details=ToolInvocationFailure(
-                    tool_name=tool.name,
-                    exception_type=type(error).__name__,
-                    message=str(error),
-                ),
-            )
+            ) from error
 
 
 def _validation_issues(error: ValidationError) -> list[ToolInputIssue]:

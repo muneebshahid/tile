@@ -83,7 +83,7 @@ from pathlib import Path
 
 from pydantic import Field
 
-from tile.types import ToolDefinition, ToolInput, ToolResult
+from tile.types import ToolDefinition, ToolError, ToolInput, ToolResult
 
 
 class SearchInput(ToolInput):
@@ -91,7 +91,9 @@ class SearchInput(ToolInput):
 
 
 async def search(params: SearchInput, *, cwd: Path) -> ToolResult:
-    ...  # use params.query; cwd is injected and never exposed to the model
+    if not params.query:
+        raise ToolError("A search query is required.")
+    ...  # cwd is injected and never exposed to the model
 
 
 search_tool = ToolDefinition(
@@ -104,9 +106,10 @@ search_tool = ToolDefinition(
 
 `ToolInput` rejects wrong types and extra fields. Tile passes the validated model
 instance directly to the tool, preserving nested models, aliases, and defaults.
-Validation errors are returned to the model for correction. A tool may return
-`ToolResult.error(...)` for an expected failure; an exception that escapes the
-tool is normalized by the runtime as an invocation failure.
+Validation errors are returned to the model for correction. Tool functions
+return `ToolResult` only for success and raise `ToolError` for intentional,
+model-visible failures. Any other exception is normalized as an unexpected
+invocation failure, while cancellation continues to propagate.
 
 Prompt execution is task-owned: `session.prompt(...)` submits a run and returns
 a handle immediately, the runtime drives it to completion, and any number of
@@ -172,6 +175,9 @@ whole session history at full price on each flip.
 
 `run.status` says whether the run *executed*; `run.outcome` says what the task
 *concluded*. `outcome` is non-`None` exactly when `status == "completed"`.
+When execution fails, `run.failure` provides serializable diagnostics and
+`run.exception` retains the original in-process exception. `run.error_message`
+remains as the failure message shorthand.
 
 | Run ending | `status` | `outcome` |
 |---|---|---|
@@ -179,7 +185,7 @@ whole session history at full price on each flip.
 | `complete` validates | `completed` | `Completed(value=model instance)` |
 | `fail(reason)` | `completed` | `Failed(reason)` |
 | Reminder cap exhausted | `completed` | `Failed(reason=...)` |
-| Provider dies (stream error or raise) | `failed` | `None` — see `run.error_message` |
+| Provider dies (stream error or raise) | `failed` | `None` — see `run.failure` |
 | Aborted | `aborted` | `None` |
 
 A provider death never corrupts the session: partial turns are dropped, history
@@ -188,17 +194,28 @@ accepts the next prompt immediately. Tile does not retry; request-level retries
 belong to the `AsyncOpenAI` client you construct (`max_retries`), and the
 recovery unit above that is re-prompting the session.
 
+Run events are the replayable prefix of facts emitted before termination. An
+exception may therefore end a run after a start event without a matching end
+event; `run.status` and `run.failure` are the authoritative terminal state.
+
 ## Public API
 
 Use the package facades for application code. Deep module paths are internal
 and may move as Tile grows.
 
 ```python
-from tile import AgentRuntime, Completed, Failed, InMemoryHistoryStore, Run
+from tile import (
+    AgentRuntime,
+    Completed,
+    Failed,
+    InMemoryHistoryStore,
+    Run,
+    RunFailure,
+)
 from tile.events import AgentEvent, MessageEndEvent, StreamFn
 from tile.providers.openai import create_stream_api
 from tile.tools import BUILTIN_TOOLS
-from tile.types import ToolDefinition, ToolInput, ToolResult
+from tile.types import ToolDefinition, ToolError, ToolInput, ToolResult
 from tile.types import ToolInputValidationFailure, ToolInvocationFailure
 ```
 
