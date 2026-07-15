@@ -1,8 +1,10 @@
 """Contract tests for durable run-summary repositories."""
 
 import sqlite3
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import ValidationError
@@ -15,6 +17,7 @@ from tile.runs import (
     RunFailure,
     RunNotFoundError,
     RunRecord,
+    RunStore,
     SQLiteRunStore,
     SQLiteRunStoreSchemaError,
 )
@@ -27,6 +30,43 @@ FAILURE = RunFailure(
     exception_type="ConnectionError",
     message="connection failed",
 )
+
+RunStoreFactory = Callable[[Path], RunStore]
+
+
+def _in_memory_store(tmp_path: Path) -> RunStore:
+    """Build an in-memory run store for contract tests."""
+
+    _ = tmp_path
+    return InMemoryRunStore()
+
+
+def _sqlite_store(tmp_path: Path) -> RunStore:
+    """Build a SQLite run store for contract tests."""
+
+    return SQLiteRunStore(tmp_path / "runs.db")
+
+
+@pytest.fixture(params=[_in_memory_store, _sqlite_store])
+def store_factory(request: pytest.FixtureRequest) -> Iterator[RunStoreFactory]:
+    """Return tracked run-store factories and close SQLite stores on teardown."""
+
+    stores: list[RunStore] = []
+    build_store = cast(RunStoreFactory, request.param)
+
+    def _tracked_store_factory(tmp_path: Path) -> RunStore:
+        """Build and track a run store for one contract test."""
+
+        store = build_store(tmp_path)
+        stores.append(store)
+        return store
+
+    try:
+        yield _tracked_store_factory
+    finally:
+        for store in stores:
+            if isinstance(store, SQLiteRunStore):
+                store.close()
 
 
 def test_run_record_transitions_from_running_to_completed() -> None:
@@ -108,10 +148,13 @@ def test_run_record_rejects_invalid_lifecycle_combinations(
         RunRecord.model_validate(record_values)
 
 
-def test_in_memory_run_store_creates_updates_and_lists_records() -> None:
+def test_run_store_creates_updates_and_lists_records(
+    tmp_path: Path,
+    store_factory: RunStoreFactory,
+) -> None:
     """Store session-local records in submission order through completion."""
 
-    store = InMemoryRunStore()
+    store = store_factory(tmp_path)
     first = _running_record(run_id="run-1")
     second = _running_record(run_id="run-2")
     other = _running_record(run_id="run-3", session_id="session-2")
@@ -127,10 +170,13 @@ def test_in_memory_run_store_creates_updates_and_lists_records() -> None:
     assert store.list_runs("missing") == ()
 
 
-def test_in_memory_run_store_returns_defensive_snapshots() -> None:
+def test_run_store_returns_defensive_snapshots(
+    tmp_path: Path,
+    store_factory: RunStoreFactory,
+) -> None:
     """Prevent callers from mutating nested data held by the repository."""
 
-    store = InMemoryRunStore()
+    store = store_factory(tmp_path)
     completed = _running_record().finish(
         status="completed",
         ended_at=ENDED_AT,
@@ -146,10 +192,13 @@ def test_in_memory_run_store_returns_defensive_snapshots() -> None:
     assert store.get_run(completed.run_id) == completed
 
 
-def test_in_memory_run_store_rejects_duplicate_and_unknown_records() -> None:
+def test_run_store_rejects_duplicate_and_unknown_records(
+    tmp_path: Path,
+    store_factory: RunStoreFactory,
+) -> None:
     """Raise domain errors for conflicting creates and missing lookups."""
 
-    store = InMemoryRunStore()
+    store = store_factory(tmp_path)
     record = _running_record()
     store.create_run(record)
 

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import TypeAlias, cast
 
 from pydantic import TypeAdapter
 
+from tile._sqlite import (
+    immediate_transaction,
+    initialize_schema,
+    resolve_connection_target,
+)
 from tile.result import RunOutcome
 from tile.runs.base import (
     RunAlreadyExistsError,
@@ -21,8 +25,29 @@ from tile.runs.base import (
 )
 
 SQLITE_RUN_SCHEMA_VERSION = "1"
-_IN_MEMORY_DATABASE = ":memory:"
 _RUN_SCHEMA_VERSION_KEY = "run_schema_version"
+
+_RUN_COLUMNS = (
+    "run_id",
+    "session_id",
+    "status",
+    "started_at",
+    "ended_at",
+    "model",
+    "provider",
+    "outcome_json",
+    "failure_json",
+)
+_INSERT_RUN_SQL = f"""
+    INSERT INTO run_records ({", ".join(_RUN_COLUMNS)})
+    VALUES ({", ".join("?" for _ in _RUN_COLUMNS)})
+"""
+_UPDATE_RUN_SQL = f"""
+    UPDATE run_records
+    SET {", ".join(f"{column} = ?" for column in _RUN_COLUMNS[1:])}
+    WHERE run_id = ?
+"""
+_SELECT_RUNS_SQL = f"SELECT {', '.join(_RUN_COLUMNS)} FROM run_records"
 
 _RunRow: TypeAlias = tuple[
     str,
@@ -54,13 +79,20 @@ class SQLiteRunStore:
     ) -> None:
         """Open a SQLite run database and initialize its schema."""
 
-        self._connection_target = _resolve_connection_target(
+        self._connection_target = resolve_connection_target(
             database_path=database_path,
             in_memory=in_memory,
         )
         self._connection = sqlite3.connect(self._connection_target)
         try:
-            self._initialize_schema()
+            initialize_schema(
+                self._connection,
+                version_key=_RUN_SCHEMA_VERSION_KEY,
+                expected_version=SQLITE_RUN_SCHEMA_VERSION,
+                store_label="run",
+                schema_error=SQLiteRunStoreSchemaError,
+                create_schema=self._create_current_schema,
+            )
         except BaseException:
             self._connection.close()
             raise
@@ -69,24 +101,8 @@ class SQLiteRunStore:
         """Persist a newly submitted running record."""
 
         try:
-            with self._immediate_transaction():
-                self._connection.execute(
-                    """
-                    INSERT INTO run_records (
-                        run_id,
-                        session_id,
-                        status,
-                        started_at,
-                        ended_at,
-                        model,
-                        provider,
-                        outcome_json,
-                        failure_json
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    _record_values(record),
-                )
+            with immediate_transaction(self._connection):
+                self._connection.execute(_INSERT_RUN_SQL, _record_values(record))
         except sqlite3.IntegrityError as error:
             raise RunAlreadyExistsError(
                 f"Run already exists: {record.run_id}"
@@ -95,20 +111,9 @@ class SQLiteRunStore:
     def update_run(self, record: RunRecord) -> None:
         """Replace an existing run record with its latest state."""
 
-        with self._immediate_transaction():
+        with immediate_transaction(self._connection):
             cursor = self._connection.execute(
-                """
-                UPDATE run_records
-                SET session_id = ?,
-                    status = ?,
-                    started_at = ?,
-                    ended_at = ?,
-                    model = ?,
-                    provider = ?,
-                    outcome_json = ?,
-                    failure_json = ?
-                WHERE run_id = ?
-                """,
+                _UPDATE_RUN_SQL,
                 (*_record_values(record)[1:], record.run_id),
             )
             if cursor.rowcount == 0:
@@ -118,19 +123,7 @@ class SQLiteRunStore:
         """Return a run record by its stable id."""
 
         row = self._connection.execute(
-            """
-            SELECT run_id,
-                   session_id,
-                   status,
-                   started_at,
-                   ended_at,
-                   model,
-                   provider,
-                   outcome_json,
-                   failure_json
-            FROM run_records
-            WHERE run_id = ?
-            """,
+            _SELECT_RUNS_SQL + " WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         run_row = cast("_RunRow | None", row)
@@ -142,20 +135,7 @@ class SQLiteRunStore:
         """Return run records for one session in submission order."""
 
         rows = self._connection.execute(
-            """
-            SELECT run_id,
-                   session_id,
-                   status,
-                   started_at,
-                   ended_at,
-                   model,
-                   provider,
-                   outcome_json,
-                   failure_json
-            FROM run_records
-            WHERE session_id = ?
-            ORDER BY rowid
-            """,
+            _SELECT_RUNS_SQL + " WHERE session_id = ? ORDER BY rowid",
             (session_id,),
         ).fetchall()
         run_rows = cast("Sequence[_RunRow]", rows)
@@ -165,29 +145,6 @@ class SQLiteRunStore:
         """Close the underlying SQLite connection."""
 
         self._connection.close()
-
-    def _initialize_schema(self) -> None:
-        """Create current schema objects or reject unsupported versions."""
-
-        with self._immediate_transaction():
-            self._create_meta_table()
-            stored_version = self._read_schema_version()
-            self._validate_schema_version(stored_version)
-            self._create_current_schema()
-            if stored_version is None:
-                self._write_schema_version(SQLITE_RUN_SCHEMA_VERSION)
-
-    def _create_meta_table(self) -> None:
-        """Create the database-wide metadata table when absent."""
-
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tile_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
 
     def _create_current_schema(self) -> None:
         """Create the current run-record table and lookup index."""
@@ -213,52 +170,6 @@ class SQLiteRunStore:
             ON run_records (session_id)
             """
         )
-
-    def _read_schema_version(self) -> str | None:
-        """Return the stored run schema version."""
-
-        row = self._connection.execute(
-            "SELECT value FROM tile_meta WHERE key = ?",
-            (_RUN_SCHEMA_VERSION_KEY,),
-        ).fetchone()
-        version_row = cast("tuple[str] | None", row)
-        if version_row is None:
-            return None
-        return version_row[0]
-
-    def _write_schema_version(self, version: str) -> None:
-        """Record the run schema version in shared database metadata."""
-
-        self._connection.execute(
-            """
-            INSERT INTO tile_meta (key, value)
-            VALUES (?, ?)
-            """,
-            (_RUN_SCHEMA_VERSION_KEY, version),
-        )
-
-    def _validate_schema_version(self, stored_version: str | None) -> None:
-        """Reject schema versions this implementation cannot safely read."""
-
-        if stored_version in (None, SQLITE_RUN_SCHEMA_VERSION):
-            return
-        raise SQLiteRunStoreSchemaError(
-            "Unsupported SQLite run schema version: "
-            f"{stored_version}. Expected {SQLITE_RUN_SCHEMA_VERSION}."
-        )
-
-    @contextmanager
-    def _immediate_transaction(self) -> Iterator[None]:
-        """Run a block inside an immediate SQLite write transaction."""
-
-        self._connection.execute("BEGIN IMMEDIATE")
-        try:
-            yield
-        except BaseException:
-            self._connection.rollback()
-            raise
-        else:
-            self._connection.commit()
 
 
 def _record_values(record: RunRecord) -> _RunRow:
@@ -322,17 +233,3 @@ def _load_outcome(payload_json: str | None) -> RunOutcome | None:
     if payload_json is None:
         return None
     return _OUTCOME_ADAPTER.validate_json(payload_json)
-
-
-def _resolve_connection_target(
-    *,
-    database_path: Path | str | None,
-    in_memory: bool,
-) -> str:
-    """Return the SQLite connection target for file or in-memory mode."""
-
-    if in_memory:
-        return _IN_MEMORY_DATABASE
-    if database_path is None:
-        raise ValueError("database_path is required unless in_memory=True.")
-    return str(Path(database_path).expanduser())

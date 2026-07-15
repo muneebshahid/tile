@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from pathlib import Path
 from typing import cast
 
+from tile._sqlite import (
+    immediate_transaction,
+    initialize_schema,
+    resolve_connection_target,
+)
 from tile.history.base import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
@@ -17,7 +21,6 @@ from tile.history.serialization import dump_conversation_item, load_conversation
 from tile.types.conversation import ConversationItem
 
 SQLITE_HISTORY_SCHEMA_VERSION = "1"
-_IN_MEMORY_DATABASE = ":memory:"
 _SCHEMA_VERSION_KEY = "schema_version"
 
 
@@ -36,15 +39,22 @@ class SQLiteHistoryStore:
     ) -> None:
         """Open a SQLite history database and initialize its schema."""
 
-        self._connection_target = _resolve_connection_target(
+        self._connection_target = resolve_connection_target(
             database_path=database_path,
             in_memory=in_memory,
         )
         self._connection = sqlite3.connect(self._connection_target)
         try:
             self._connection.execute("PRAGMA foreign_keys = ON")
-            self._initialize_schema()
-        except Exception:
+            initialize_schema(
+                self._connection,
+                version_key=_SCHEMA_VERSION_KEY,
+                expected_version=SQLITE_HISTORY_SCHEMA_VERSION,
+                store_label="history",
+                schema_error=SQLiteHistoryStoreSchemaError,
+                create_schema=self._create_current_schema,
+            )
+        except BaseException:
             self._connection.close()
             raise
 
@@ -56,7 +66,7 @@ class SQLiteHistoryStore:
     ) -> SessionRecord:
         """Create a session record when it does not already exist."""
 
-        with self._immediate_transaction():
+        with immediate_transaction(self._connection):
             self._connection.execute(
                 """
                 INSERT OR IGNORE INTO sessions (session_id, name)
@@ -112,7 +122,7 @@ class SQLiteHistoryStore:
     ) -> None:
         """Append completed conversation items to a session."""
 
-        with self._immediate_transaction():
+        with immediate_transaction(self._connection):
             self._require_session(session_id)
             if items:
                 next_position = self._next_history_position(session_id)
@@ -127,7 +137,7 @@ class SQLiteHistoryStore:
     ) -> SessionRecord:
         """Create a target session with copied source history."""
 
-        with self._immediate_transaction():
+        with immediate_transaction(self._connection):
             self._require_session(source_session_id)
             self._reject_existing_session(target_session_id)
             record = self._insert_session(target_session_id, target_name)
@@ -139,29 +149,6 @@ class SQLiteHistoryStore:
         """Close the underlying SQLite connection."""
 
         self._connection.close()
-
-    def _initialize_schema(self) -> None:
-        """Create current schema objects or reject unsupported schema versions."""
-
-        with self._immediate_transaction():
-            self._create_meta_table()
-            stored_version = self._read_schema_version()
-            self._validate_schema_version(stored_version)
-            self._create_current_schema()
-            if stored_version is None:
-                self._write_schema_version(SQLITE_HISTORY_SCHEMA_VERSION)
-
-    def _create_meta_table(self) -> None:
-        """Create the store metadata table."""
-
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS tile_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
 
     def _create_current_schema(self) -> None:
         """Create current history schema tables."""
@@ -185,39 +172,6 @@ class SQLiteHistoryStore:
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
             """
-        )
-
-    def _read_schema_version(self) -> str | None:
-        """Return the stored SQLite history schema version."""
-
-        row = self._connection.execute(
-            "SELECT value FROM tile_meta WHERE key = ?",
-            (_SCHEMA_VERSION_KEY,),
-        ).fetchone()
-        version_row = cast("tuple[str] | None", row)
-        if version_row is None:
-            return None
-        return version_row[0]
-
-    def _write_schema_version(self, version: str) -> None:
-        """Record the SQLite history schema version."""
-
-        self._connection.execute(
-            """
-            INSERT INTO tile_meta (key, value)
-            VALUES (?, ?)
-            """,
-            (_SCHEMA_VERSION_KEY, version),
-        )
-
-    def _validate_schema_version(self, stored_version: str | None) -> None:
-        """Reject schema versions this implementation cannot safely read."""
-
-        if stored_version in (None, SQLITE_HISTORY_SCHEMA_VERSION):
-            return
-        raise SQLiteHistoryStoreSchemaError(
-            "Unsupported SQLite history schema version: "
-            f"{stored_version}. Expected {SQLITE_HISTORY_SCHEMA_VERSION}."
         )
 
     def _fetch_session(self, session_id: str) -> SessionRecord:
@@ -306,30 +260,3 @@ class SQLiteHistoryStore:
             """,
             rows,
         )
-
-    @contextmanager
-    def _immediate_transaction(self) -> Iterator[None]:
-        """Run a block inside an immediate SQLite write transaction."""
-
-        self._connection.execute("BEGIN IMMEDIATE")
-        try:
-            yield
-        except Exception:
-            self._connection.rollback()
-            raise
-        else:
-            self._connection.commit()
-
-
-def _resolve_connection_target(
-    *,
-    database_path: Path | str | None,
-    in_memory: bool,
-) -> str:
-    """Return the SQLite connection target for a file-backed or in-memory store."""
-
-    if in_memory:
-        return _IN_MEMORY_DATABASE
-    if database_path is None:
-        raise ValueError("database_path is required unless in_memory=True.")
-    return str(Path(database_path).expanduser())
