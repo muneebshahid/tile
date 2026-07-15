@@ -22,7 +22,14 @@ from tile.types.tools import (
 
 
 class StreamFn(Protocol):
-    """Callable that starts a provider stream from model-visible history."""
+    """Callable that starts a provider stream from model-visible history.
+
+    ``provider`` names the provider identity this callable streams through,
+    declared once where the callable is constructed so run records can carry
+    provider identity before the first message finalizes.
+    """
+
+    provider: str
 
     def __call__(
         self,

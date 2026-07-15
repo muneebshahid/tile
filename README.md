@@ -131,8 +131,10 @@ not current capabilities.
 
 `HistoryStore` owns only model-visible conversation items. `RunStore` separately
 owns one summary per submitted prompt: stable run and session IDs, execution
-status, UTC start/end timestamps, configured model, provider identity when the
-provider supplied it, typed outcome, and structured execution failure.
+status, UTC start/end timestamps, configured model, provider identity, typed
+outcome, and structured execution failure. Provider identity comes from the
+stream function's declared `provider` attribute at submission; when a message
+finalizes, the identity observed on the provider stream replaces it.
 
 ```python
 from pathlib import Path
@@ -274,7 +276,9 @@ exposes
 `create_stream_api`, which
 binds a caller-constructed `AsyncOpenAI` client and optional provider reasoning
 options to the runtime's stream-function contract:
-`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.
+`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`. A stream
+function declares its provider identity via a `provider` attribute on the
+callable, stated once where the callable is constructed.
 
 ## Architecture
 

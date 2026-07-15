@@ -46,6 +46,7 @@ from tile.types.tools import (
 )
 from tile.result import Completed
 from tests.support.agent_streams import (
+    TEST_PROVIDER,
     GatedProviderStreamMock,
     ProviderStreamMock,
     error_stream,
@@ -146,7 +147,9 @@ def _runtime_with_gated_streams(
 def _runtime_with_failing_provider(error: Exception) -> AgentRuntime:
     """Build a runtime whose provider call raises before streaming."""
 
-    failing_stream_fn = cast("StreamFn", AsyncMock(side_effect=error))
+    failing_mock = AsyncMock(side_effect=error)
+    failing_mock.provider = TEST_PROVIDER
+    failing_stream_fn = cast("StreamFn", failing_mock)
     return AgentRuntime(stream_fn=failing_stream_fn, model="gpt-5.4", cwd=Path("."))
 
 
@@ -156,10 +159,9 @@ def _runtime_with_interrupted_stream(
 ) -> AgentRuntime:
     """Build a runtime whose provider stream raises after partial events."""
 
-    stream_fn = cast(
-        "StreamFn",
-        AsyncMock(return_value=async_stream(events, error=error)),
-    )
+    interrupted_mock = AsyncMock(return_value=async_stream(events, error=error))
+    interrupted_mock.provider = TEST_PROVIDER
+    stream_fn = cast("StreamFn", interrupted_mock)
     return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4", cwd=Path("."))
 
 
@@ -431,21 +433,27 @@ def test_runtime_persists_running_record_before_provider_execution() -> None:
     run_store = InMemoryRunStore()
     observed_records: list[RunRecord] = []
 
-    async def _stream_fn(
-        history: Sequence[ConversationItem],
-        model: str,
-        *,
-        instructions: str,
-        tools: Sequence[ToolDefinition] | None,
-    ) -> AsyncEventStream:
+    class _ObservingStreamFn:
         """Capture durable state at the provider execution boundary."""
 
-        _ = history, model, instructions, tools
-        observed_records.extend(run_store.list_runs("persist-before-provider"))
-        return async_stream(final_text_stream("resp_one", "done"))
+        provider = TEST_PROVIDER
+
+        async def __call__(
+            self,
+            history: Sequence[ConversationItem],
+            model: str,
+            *,
+            instructions: str,
+            tools: Sequence[ToolDefinition] | None,
+        ) -> AsyncEventStream:
+            """Record visible run records, then stream one final text."""
+
+            _ = history, model, instructions, tools
+            observed_records.extend(run_store.list_runs("persist-before-provider"))
+            return async_stream(final_text_stream("resp_one", "done"))
 
     runtime = AgentRuntime(
-        stream_fn=_stream_fn,
+        stream_fn=_ObservingStreamFn(),
         model="gpt-5.4",
         run_store=run_store,
         cwd=Path("."),
@@ -465,6 +473,7 @@ def test_runtime_persists_running_record_before_provider_execution() -> None:
     assert observed_records[0].run_id == run.id
     assert observed_records[0].status == "running"
     assert observed_records[0].ended_at is None
+    assert observed_records[0].provider == TEST_PROVIDER
 
 
 def test_runtime_persists_success_failure_and_abort_records(tmp_path: Path) -> None:
@@ -532,15 +541,15 @@ def _assert_terminal_run_records(completed: Run, failed: Run, aborted: Run) -> N
         "aborted",
     ]
     assert completed.record.outcome == Completed(value="done")
-    assert completed.record.provider == "test"
+    assert completed.record.provider == TEST_PROVIDER
     assert failed.record.failure == RunFailure(
         origin="turn",
         exception_type="TurnFailedError",
         message="provider failed",
     )
-    assert failed.record.provider == "test"
+    assert failed.record.provider == TEST_PROVIDER
     assert aborted.record.failure is None
-    assert aborted.record.provider is None
+    assert aborted.record.provider == TEST_PROVIDER
     assert all(record.ended_at is not None for record in records)
     assert all(
         record.ended_at is not None and record.started_at <= record.ended_at

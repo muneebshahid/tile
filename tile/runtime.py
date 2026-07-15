@@ -479,6 +479,7 @@ class AgentRuntime:
             status="running",
             started_at=datetime.now(UTC),
             model=self._model,
+            provider=self._stream_fn.provider,
         )
         self._run_store.create_run(record)
         return record

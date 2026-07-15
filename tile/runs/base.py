@@ -58,7 +58,7 @@ class RunRecord(BaseModel):
             started_at=self.started_at,
             ended_at=ended_at,
             model=model if model is not None else self.model,
-            provider=provider,
+            provider=provider if provider is not None else self.provider,
             outcome=outcome,
             failure=failure,
         )

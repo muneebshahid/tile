@@ -77,7 +77,16 @@ def test_documented_public_imports_run_fake_prompt() -> None:
 def _fake_stream_fn() -> StreamFn:
     """Build a fake provider stream from public provider-neutral contracts."""
 
-    async def _stream_fn(
+    return _FakeStreamFn()
+
+
+class _FakeStreamFn:
+    """Fake provider stream function carrying its declared provider identity."""
+
+    provider = "fake"
+
+    async def __call__(
+        self,
         history: Sequence[ConversationItem],
         model: str,
         *,
@@ -91,8 +100,6 @@ def _fake_stream_fn() -> StreamFn:
         assert model == "gpt-5.4"
         assert tools is not None
         return _stream_events(_assistant_response())
-
-    return _stream_fn
 
 
 def _assistant_response() -> tuple[ProviderStreamEvent, ...]:
