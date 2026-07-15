@@ -53,7 +53,7 @@ class ToolExecutor:
             return ToolExecutionOutcome.from_error(
                 call_id=call_id,
                 tool_name=tool_name,
-                message=error.message,
+                message=str(error),
                 details=error.details,
             )
         except Exception as error:
@@ -84,7 +84,7 @@ class ToolExecutor:
 
         tool = self._require_tool(tool_name)
         validated = self._validate_arguments(tool, arguments)
-        return await self._invoke_tool(tool, validated)
+        return await tool.fn(validated)
 
     def _require_tool(self, tool_name: str) -> ToolDefinition:
         """Return a registered tool or raise a model-visible lookup failure."""
@@ -121,15 +121,6 @@ class ToolExecutor:
                     issues=issues,
                 ),
             ) from error
-
-    @staticmethod
-    async def _invoke_tool(
-        tool: ToolDefinition,
-        arguments: BaseModel,
-    ) -> ToolResult:
-        """Invoke tool code with its validated input model."""
-
-        return await tool.fn(arguments)
 
 
 def _validation_issues(error: ValidationError) -> list[ToolInputIssue]:

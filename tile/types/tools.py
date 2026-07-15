@@ -62,7 +62,6 @@ class ToolError(RuntimeError):
     ) -> None:
         """Create a handled tool failure with optional observer metadata."""
 
-        self.message = message
         self.details = details
         super().__init__(message)
 

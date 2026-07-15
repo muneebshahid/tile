@@ -242,7 +242,21 @@ class Run:
         """Release owner state and record a terminal run status."""
 
         task_error = _task_error(task)
-        finalization_error = self._notify_owner()
+        try:
+            finalization_error = self._notify_owner()
+        except BaseException as control_error:
+            self._finish_after_owner_notification(task, task_error, control_error)
+            raise
+
+        self._finish_after_owner_notification(task, task_error, finalization_error)
+
+    def _finish_after_owner_notification(
+        self,
+        task: asyncio.Task[None],
+        task_error: BaseException | None,
+        finalization_error: BaseException | None,
+    ) -> None:
+        """Finish the run after its owner has released runtime state."""
 
         if task_error is not None:
             if finalization_error is not None:
@@ -255,12 +269,12 @@ class Run:
         else:
             self._finish("completed")
 
-    def _notify_owner(self) -> BaseException | None:
-        """Notify the owner, returning an escaped finalization failure."""
+    def _notify_owner(self) -> Exception | None:
+        """Notify the owner, returning an ordinary finalization failure."""
 
         try:
             self._on_done(self)
-        except BaseException as error:
+        except Exception as error:
             return error
         return None
 

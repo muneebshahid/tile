@@ -465,6 +465,60 @@ def test_run_records_finalization_failure_and_releases_session() -> None:
     asyncio.run(_run())
 
 
+def test_run_reraises_finalization_control_exception_after_finishing() -> None:
+    """Preserve control flow after recording terminal run diagnostics."""
+
+    class ControlSignal(BaseException):
+        """Deterministic process-control signal for finalization testing."""
+
+    async def _run() -> None:
+        """Observe an interrupted owner callback through the event loop."""
+
+        signal = ControlSignal("stop")
+        reported: list[BaseException] = []
+
+        def interrupt(_: Run) -> None:
+            """Interrupt owner notification with a control exception."""
+
+            raise signal
+
+        def capture_exception(
+            _: asyncio.AbstractEventLoop,
+            context: dict[str, object],
+        ) -> None:
+            """Capture a control exception re-raised by a done callback."""
+
+            error = context.get("exception")
+            if isinstance(error, BaseException):
+                reported.append(error)
+
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+        loop.set_exception_handler(capture_exception)
+        try:
+            run = Run(
+                run_id="control-signal",
+                session_id="control-signal",
+                events=async_stream([]),
+                on_done=interrupt,
+            )
+            assert await run.wait() == "failed"
+            await asyncio.sleep(0)
+        finally:
+            loop.set_exception_handler(previous_handler)
+
+        assert reported == [signal]
+        assert run.status == "failed"
+        assert run.failure == RunFailure(
+            origin="finalization",
+            exception_type="ControlSignal",
+            message="stop",
+        )
+        assert run.exception is signal
+
+    asyncio.run(_run())
+
+
 def test_run_events_replay_from_start_for_late_subscribers() -> None:
     """Replay the full event log to subscribers joining after completion."""
 
