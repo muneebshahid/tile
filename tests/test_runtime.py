@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 from unittest.mock import AsyncMock
@@ -13,6 +14,7 @@ from tile.history import (
     SessionAlreadyExistsError,
     SessionNotFoundError,
 )
+from tile.runs import InMemoryRunStore, RunRecord, RunStore, SQLiteRunStore
 from tile.runtime import (
     AgentRuntime,
     Run,
@@ -29,6 +31,7 @@ from tile.events import (
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
 )
+from tile.types.contracts import AsyncEventStream
 from tile.types.conversation import ConversationItem, UserMessage
 from tile.types.stream_events import (
     ProviderStreamEvent,
@@ -106,21 +109,38 @@ def _runtime_with_streams(
     *,
     tools: Sequence[ToolDefinition] = (),
     cwd: Path = Path("."),
+    run_store: RunStore | None = None,
 ) -> tuple[AgentRuntime, ProviderStreamMock]:
     """Build a runtime backed by queued fake provider streams."""
 
     provider = ProviderStreamMock(streams)
-    runtime = AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", tools=tools, cwd=cwd)
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        tools=tools,
+        cwd=cwd,
+        run_store=run_store,
+    )
     return runtime, provider
 
 
 def _runtime_with_gated_streams(
     releases: Sequence[asyncio.Event],
+    *,
+    run_store: RunStore | None = None,
 ) -> tuple[AgentRuntime, GatedProviderStreamMock]:
     """Build a runtime whose provider streams wait for explicit release."""
 
     provider = GatedProviderStreamMock(releases)
-    return AgentRuntime(stream_fn=provider.fn, model="gpt-5.4", cwd=Path(".")), provider
+    return (
+        AgentRuntime(
+            stream_fn=provider.fn,
+            model="gpt-5.4",
+            cwd=Path("."),
+            run_store=run_store,
+        ),
+        provider,
+    )
 
 
 def _runtime_with_failing_provider(error: Exception) -> AgentRuntime:
@@ -405,6 +425,129 @@ def test_run_completes_and_reports_status() -> None:
     asyncio.run(_run())
 
 
+def test_runtime_persists_running_record_before_provider_execution() -> None:
+    """Create the durable running record before the provider is invoked."""
+
+    run_store = InMemoryRunStore()
+    observed_records: list[RunRecord] = []
+
+    async def _stream_fn(
+        history: Sequence[ConversationItem],
+        model: str,
+        *,
+        instructions: str,
+        tools: Sequence[ToolDefinition] | None,
+    ) -> AsyncEventStream:
+        """Capture durable state at the provider execution boundary."""
+
+        _ = history, model, instructions, tools
+        observed_records.extend(run_store.list_runs("persist-before-provider"))
+        return async_stream(final_text_stream("resp_one", "done"))
+
+    runtime = AgentRuntime(
+        stream_fn=_stream_fn,
+        model="gpt-5.4",
+        run_store=run_store,
+        cwd=Path("."),
+    )
+    session = runtime.session(session_id="persist-before-provider")
+
+    async def _run() -> Run:
+        """Submit and complete one prompt."""
+
+        run = await session.prompt("hello")
+        assert await run.wait() == "completed"
+        return run
+
+    run = asyncio.run(_run())
+
+    assert len(observed_records) == 1
+    assert observed_records[0].run_id == run.id
+    assert observed_records[0].status == "running"
+    assert observed_records[0].ended_at is None
+
+
+def test_runtime_persists_success_failure_and_abort_records(tmp_path: Path) -> None:
+    """Reopen every current terminal run ending from durable SQLite state."""
+
+    database_path = tmp_path / "runs.db"
+    run_store = SQLiteRunStore(database_path)
+    completed, failed, aborted = asyncio.run(_exercise_terminal_runs(run_store))
+    run_store.close()
+
+    reopened = SQLiteRunStore(database_path)
+    try:
+        assert reopened.get_run(completed.id) == completed.record
+        assert reopened.get_run(failed.id) == failed.record
+        assert reopened.get_run(aborted.id) == aborted.record
+    finally:
+        reopened.close()
+
+    _assert_terminal_run_records(completed, failed, aborted)
+
+
+async def _exercise_terminal_runs(run_store: RunStore) -> tuple[Run, Run, Run]:
+    """Complete, fail, and abort prompts against one shared run store."""
+
+    completed_runtime, _ = _runtime_with_streams(
+        [final_text_stream("resp_completed", "done")],
+        run_store=run_store,
+    )
+    failed_runtime, _ = _runtime_with_streams(
+        [error_stream("resp_failed", "provider failed")],
+        run_store=run_store,
+    )
+    release = asyncio.Event()
+    aborted_runtime, aborted_provider = _runtime_with_gated_streams(
+        [release],
+        run_store=run_store,
+    )
+
+    completed = await completed_runtime.session(session_id="completed-session").prompt(
+        "complete"
+    )
+    assert await completed.wait() == "completed"
+    assert completed_runtime.runs_for("completed-session") == (completed.record,)
+
+    failed = await failed_runtime.session(session_id="failed-session").prompt("fail")
+    assert await failed.wait() == "failed"
+
+    aborted = await aborted_runtime.session(session_id="aborted-session").prompt(
+        "abort"
+    )
+    await _wait_for_invocation_count(aborted_provider, 1)
+    aborted.abort()
+    assert await aborted.wait() == "aborted"
+    return completed, failed, aborted
+
+
+def _assert_terminal_run_records(completed: Run, failed: Run, aborted: Run) -> None:
+    """Assert persisted terminal summaries retain their distinct semantics."""
+
+    records = (completed.record, failed.record, aborted.record)
+
+    assert [record.status for record in records] == [
+        "completed",
+        "failed",
+        "aborted",
+    ]
+    assert completed.record.outcome == Completed(value="done")
+    assert completed.record.provider == "test"
+    assert failed.record.failure == RunFailure(
+        origin="turn",
+        exception_type="TurnFailedError",
+        message="provider failed",
+    )
+    assert failed.record.provider == "test"
+    assert aborted.record.failure is None
+    assert aborted.record.provider is None
+    assert all(record.ended_at is not None for record in records)
+    assert all(
+        record.ended_at is not None and record.started_at <= record.ended_at
+        for record in records
+    )
+
+
 def test_run_records_finalization_failure_and_releases_session() -> None:
     """Fail run finalization without stranding its session as active."""
 
@@ -465,6 +608,49 @@ def test_run_records_finalization_failure_and_releases_session() -> None:
     asyncio.run(_run())
 
 
+def test_run_does_not_retry_terminal_record_persistence() -> None:
+    """Attempt one terminal write and expose its failure on the run handle."""
+
+    async def _run() -> None:
+        """Complete a run whose terminal record write fails."""
+
+        error = RuntimeError("run store unavailable")
+        attempted_records: list[RunRecord] = []
+
+        def release_owner(_: Run) -> None:
+            """Complete owner finalization successfully."""
+
+        def reject_record(record: RunRecord) -> None:
+            """Record the one write attempt before failing it."""
+
+            attempted_records.append(record)
+            raise error
+
+        run = Run(
+            record=RunRecord(
+                run_id="store-failure",
+                session_id="store-failure",
+                status="running",
+                started_at=datetime.now(UTC),
+                model="gpt-5.4",
+            ),
+            events=async_stream([]),
+            on_done=release_owner,
+            on_record=reject_record,
+        )
+
+        assert await run.wait() == "failed"
+        assert [record.status for record in attempted_records] == ["completed"]
+        assert run.failure == RunFailure(
+            origin="finalization",
+            exception_type="RuntimeError",
+            message="run store unavailable",
+        )
+        assert run.exception is error
+
+    asyncio.run(_run())
+
+
 def test_run_reraises_finalization_control_exception_after_finishing() -> None:
     """Preserve control flow after recording terminal run diagnostics."""
 
@@ -476,6 +662,7 @@ def test_run_reraises_finalization_control_exception_after_finishing() -> None:
 
         signal = ControlSignal("stop")
         reported: list[BaseException] = []
+        persisted: list[RunRecord] = []
 
         def interrupt(_: Run) -> None:
             """Interrupt owner notification with a control exception."""
@@ -497,10 +684,16 @@ def test_run_reraises_finalization_control_exception_after_finishing() -> None:
         loop.set_exception_handler(capture_exception)
         try:
             run = Run(
-                run_id="control-signal",
-                session_id="control-signal",
+                record=RunRecord(
+                    run_id="control-signal",
+                    session_id="control-signal",
+                    status="running",
+                    started_at=datetime.now(UTC),
+                    model="gpt-5.4",
+                ),
                 events=async_stream([]),
                 on_done=interrupt,
+                on_record=persisted.append,
             )
             assert await run.wait() == "failed"
             await asyncio.sleep(0)
@@ -515,6 +708,7 @@ def test_run_reraises_finalization_control_exception_after_finishing() -> None:
             message="stop",
         )
         assert run.exception is signal
+        assert persisted == [run.record]
 
     asyncio.run(_run())
 

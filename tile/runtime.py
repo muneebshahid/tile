@@ -7,9 +7,10 @@ import inspect
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
+from typing import cast
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -42,6 +43,15 @@ from tile.result import (
     Failed,
     RunOutcome,
 )
+from tile.runs import (
+    InMemoryRunStore,
+    RunFailure,
+    RunFailureOrigin,
+    RunRecord,
+    RunStatus,
+    RunStore,
+    TerminalRunStatus,
+)
 from tile.tool_executor import ToolExecutor
 from tile.tools.complete import tool as complete_tool
 from tile.tools.complete import CompleteDetails
@@ -55,9 +65,7 @@ from tile.events import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-
-RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
-RunFailureOrigin: TypeAlias = Literal["turn", "execution", "finalization"]
+from tile.types.stream_events import ProviderSource
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +82,6 @@ class TurnFailedError(RuntimeError):
 
         self.turn = turn
         super().__init__(_turn_failure_message(turn))
-
-
-class RunFailure(BaseModel):
-    """Serializable diagnostics for a failed run execution."""
-
-    type: Literal["run_failure"] = "run_failure"
-    origin: RunFailureOrigin
-    exception_type: str
-    message: str
 
 
 @dataclass
@@ -116,21 +115,19 @@ class Run:
     def __init__(
         self,
         *,
-        run_id: str,
-        session_id: str,
+        record: RunRecord,
         events: AsyncIterator[AgentEvent],
         on_done: Callable[[Run], None],
+        on_record: Callable[[RunRecord], None],
     ) -> None:
         """Start a run that drives the given event source to completion."""
 
-        self._run_id = run_id
-        self._session_id = session_id
+        self._record = record
         self._events: list[AgentEvent] = []
-        self._status: RunStatus = "running"
-        self._failure: RunFailure | None = None
         self._exception: BaseException | None = None
         self._changed = asyncio.Event()
         self._on_done = on_done
+        self._on_record = on_record
         self._task = asyncio.create_task(self._pump(events))
         self._task.add_done_callback(self._finalize)
 
@@ -138,33 +135,39 @@ class Run:
     def id(self) -> str:
         """Return the stable run id."""
 
-        return self._run_id
+        return self._record.run_id
 
     @property
     def session_id(self) -> str:
         """Return the id of the session this run belongs to."""
 
-        return self._session_id
+        return self._record.session_id
 
     @property
     def status(self) -> RunStatus:
         """Return the current run status."""
 
-        return self._status
+        return self._record.status
+
+    @property
+    def record(self) -> RunRecord:
+        """Return a defensive snapshot of the run's current durable summary."""
+
+        return self._record.model_copy(deep=True)
 
     @property
     def error_message(self) -> str | None:
         """Return the failure message when the run execution has failed."""
 
-        if self._failure is None:
+        if self._record.failure is None:
             return None
-        return self._failure.message
+        return self._record.failure.message
 
     @property
     def failure(self) -> RunFailure | None:
         """Return serializable execution failure diagnostics, when available."""
 
-        return self._failure
+        return self._record.failure
 
     @property
     def exception(self) -> BaseException | None:
@@ -194,10 +197,7 @@ class Run:
         error message carry that story.
         """
 
-        for event in reversed(self._events):
-            if isinstance(event, AgentEndEvent):
-                return event.outcome
-        return None
+        return self._record.outcome
 
     @property
     def conversation_items(self) -> tuple[ConversationItem, ...]:
@@ -216,7 +216,7 @@ class Run:
             while index < len(self._events):
                 yield self._events[index]
                 index += 1
-            if self._status != "running":
+            if self.status != "running":
                 return
             await self._changed.wait()
 
@@ -224,7 +224,7 @@ class Run:
         """Wait until the run reaches a terminal status and return it."""
 
         await asyncio.wait({self._task})
-        return self._status
+        return self.status
 
     def abort(self) -> None:
         """Request cancellation of the run task."""
@@ -243,45 +243,76 @@ class Run:
 
         task_error = _task_error(task)
         try:
-            finalization_error = self._notify_owner()
+            self._on_done(self)
+            if task_error is not None:
+                self._fail(task_error, origin=_execution_failure_origin(task_error))
+            elif task.cancelled():
+                self._abort()
+            else:
+                self._complete()
+        except Exception as finalization_error:
+            self._fail_from_finalization_error(task_error, finalization_error)
         except BaseException as control_error:
-            self._finish_after_owner_notification(task, task_error, control_error)
+            self._fail_from_finalization_error(task_error, control_error)
+            self._persist_terminal_record_best_effort()
             raise
 
-        self._finish_after_owner_notification(task, task_error, finalization_error)
+        self._persist_terminal_record()
 
-    def _finish_after_owner_notification(
+    def _fail_from_finalization_error(
         self,
-        task: asyncio.Task[None],
         task_error: BaseException | None,
-        finalization_error: BaseException | None,
+        finalization_error: BaseException,
     ) -> None:
-        """Finish the run after its owner has released runtime state."""
+        """Preserve a task failure, or fail from the finalization error."""
 
         if task_error is not None:
-            if finalization_error is not None:
-                _log_secondary_finalization_error(finalization_error)
+            _log_secondary_finalization_error(finalization_error)
             self._fail(task_error, origin=_execution_failure_origin(task_error))
-        elif finalization_error is not None:
-            self._fail(finalization_error, origin="finalization")
-        elif task.cancelled():
-            self._finish("aborted")
-        else:
-            self._finish("completed")
+            return
+        self._fail(finalization_error, origin="finalization")
 
-    def _notify_owner(self) -> Exception | None:
-        """Notify the owner, returning an ordinary finalization failure."""
+    def _persist_terminal_record(self) -> None:
+        """Persist terminal state and classify a store failure as finalization."""
 
         try:
-            self._on_done(self)
+            self._on_record(self._record)
         except Exception as error:
-            return error
-        return None
+            self._record_persistence_failure(error)
+        except BaseException as control_error:
+            self._record_persistence_failure(control_error)
+            raise
+
+    def _persist_terminal_record_best_effort(self) -> None:
+        """Persist without replacing a primary owner control exception."""
+
+        try:
+            self._on_record(self._record)
+        except BaseException as persistence_error:
+            _log_secondary_finalization_error(persistence_error)
+
+    def _record_persistence_failure(self, error: BaseException) -> None:
+        """Keep a primary run failure or record a finalization failure."""
+
+        if self.status == "failed":
+            _log_secondary_finalization_error(error)
+            return
+        self._fail(error, origin="finalization")
+
+    def _complete(self) -> None:
+        """Record successful run execution."""
+
+        self._set_terminal_state("completed")
+
+    def _abort(self) -> None:
+        """Record an aborted run execution."""
+
+        self._set_terminal_state("aborted")
 
     def _fail(self, error: BaseException, *, origin: RunFailureOrigin) -> None:
         """Record one failed execution with serializable and live diagnostics."""
 
-        self._finish(
+        self._set_terminal_state(
             "failed",
             failure=RunFailure(
                 origin=origin,
@@ -297,17 +328,24 @@ class Run:
         self._events.append(event)
         self._changed.set()
 
-    def _finish(
+    def _set_terminal_state(
         self,
-        status: RunStatus,
+        status: TerminalRunStatus,
         *,
         failure: RunFailure | None = None,
         exception: BaseException | None = None,
     ) -> None:
-        """Record the terminal status and wake subscribers."""
+        """Set the terminal record state and wake subscribers."""
 
-        self._status = status
-        self._failure = failure
+        source = _latest_provider_source(self._events)
+        self._record = self._record.finish(
+            status=status,
+            ended_at=datetime.now(UTC),
+            provider=source.provider if source is not None else None,
+            model=source.model if source is not None else None,
+            outcome=_event_outcome(self._events) if status == "completed" else None,
+            failure=failure,
+        )
         self._exception = exception
         self._changed.set()
 
@@ -322,6 +360,7 @@ class AgentRuntime:
         model: str,
         cwd: Path | str,
         history_store: HistoryStore | None = None,
+        run_store: RunStore | None = None,
         tools: Sequence[ToolDefinition] = (),
         instructions: str = DEFAULT_INSTRUCTIONS,
         auto_mode: bool = True,
@@ -340,6 +379,7 @@ class AgentRuntime:
         self._history_store = (
             history_store if history_store is not None else InMemoryHistoryStore()
         )
+        self._run_store = run_store if run_store is not None else InMemoryRunStore()
         self._tool_executor = ToolExecutor(_bind_cwd_tools(tools, self._cwd))
         self._instructions = instructions
         self._auto_mode = auto_mode
@@ -379,6 +419,16 @@ class AgentRuntime:
 
         return self._history_store.get_history(session_id)
 
+    def get_run(self, run_id: str) -> RunRecord:
+        """Return a durable run summary by its stable id."""
+
+        return self._run_store.get_run(run_id)
+
+    def runs_for(self, session_id: str) -> Sequence[RunRecord]:
+        """Return durable run summaries for one session."""
+
+        return self._run_store.list_runs(session_id)
+
     def fork_session(
         self,
         *,
@@ -407,17 +457,31 @@ class AgentRuntime:
         self._start_prompt(session_id)
         try:
             self._append_user_message(session_id, content)
+            record = self._create_run_record(session_id)
             run = Run(
-                run_id=str(uuid4()),
-                session_id=session_id,
+                record=record,
                 events=self._run_events(session_id, result=result),
                 on_done=self._release_run,
+                on_record=self._run_store.update_run,
             )
         except BaseException:
             self._finish_prompt(session_id)
             raise
         self._active_runs.add(run)
         return run
+
+    def _create_run_record(self, session_id: str) -> RunRecord:
+        """Persist one running summary before provider execution can start."""
+
+        record = RunRecord(
+            run_id=str(uuid4()),
+            session_id=session_id,
+            status="running",
+            started_at=datetime.now(UTC),
+            model=self._model,
+        )
+        self._run_store.create_run(record)
+        return record
 
     async def _run_events(
         self,
@@ -712,6 +776,26 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
     if isinstance(event, ResultFollowUpEvent):
         return (event.message,)
     return ()
+
+
+def _event_outcome(events: Sequence[AgentEvent]) -> RunOutcome | None:
+    """Return the last prompt-level outcome emitted by a run."""
+
+    for event in reversed(events):
+        if isinstance(event, AgentEndEvent):
+            return event.outcome
+    return None
+
+
+def _latest_provider_source(
+    events: Sequence[AgentEvent],
+) -> ProviderSource | None:
+    """Return the latest provider identity available from a finalized message."""
+
+    for event in reversed(events):
+        if isinstance(event, MessageEndEvent):
+            return event.assistant_turn.source
+    return None
 
 
 def _require_completed_turn(turn: AssistantTurn | None) -> AssistantTurn:

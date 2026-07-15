@@ -9,9 +9,12 @@ from tile import (
     AgentRuntime,
     HistoryStore,
     InMemoryHistoryStore,
+    InMemoryRunStore,
     Run,
     RunFailure,
     RunFailureOrigin,
+    RunRecord,
+    RunStore,
     Session,
     SessionBusyError,
     SessionNotFoundError,
@@ -40,10 +43,12 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     """Run one prompt using only documented public imports."""
 
     store: HistoryStore = InMemoryHistoryStore()
+    run_store: RunStore = InMemoryRunStore()
     runtime = AgentRuntime(
         stream_fn=_fake_stream_fn(),
         model="gpt-5.4",
         history_store=store,
+        run_store=run_store,
         tools=[_fake_tool_definition()],
         cwd=Path("."),
     )
@@ -54,6 +59,10 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert isinstance(events[-1], AgentEndEvent)
     assert any(isinstance(event, MessageEndEvent) for event in events)
     assert len(session.history) == 2
+    run_records = runtime.runs_for(session.id)
+    assert len(run_records) == 1
+    assert isinstance(run_records[0], RunRecord)
+    assert run_records[0].status == "completed"
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
     assert issubclass(TurnFailedError, RuntimeError)
