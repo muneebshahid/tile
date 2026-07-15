@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from tile.result import RunOutcome
 
 RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
-RunFailureOrigin: TypeAlias = Literal["turn", "execution", "finalization"]
+RunFailureOrigin: TypeAlias = Literal["submission", "turn", "execution", "finalization"]
 TerminalRunStatus: TypeAlias = Literal["completed", "failed", "aborted"]
 
 

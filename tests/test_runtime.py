@@ -191,6 +191,27 @@ class FailingHistoryStore(InMemoryHistoryStore):
         super().append_history(session_id, items)
 
 
+class FailingRunStore(InMemoryRunStore):
+    """Run store with switchable create and update failures for submission tests."""
+
+    fail_creates: bool = False
+    fail_updates: bool = False
+
+    def create_run(self, record: RunRecord) -> None:
+        """Create the record unless the test has enabled deterministic failure."""
+
+        if self.fail_creates:
+            raise RuntimeError("run store create unavailable")
+        super().create_run(record)
+
+    def update_run(self, record: RunRecord) -> None:
+        """Update the record unless the test has enabled deterministic failure."""
+
+        if self.fail_updates:
+            raise RuntimeError("run store update unavailable")
+        super().update_run(record)
+
+
 def _sample_tools() -> list[ToolDefinition]:
     """Build deterministic tool definitions for runtime tests."""
 
@@ -474,6 +495,103 @@ def test_runtime_persists_running_record_before_provider_execution() -> None:
     assert observed_records[0].status == "running"
     assert observed_records[0].ended_at is None
     assert observed_records[0].provider == TEST_PROVIDER
+
+
+def test_prompt_leaves_history_unchanged_when_run_creation_fails() -> None:
+    """Reject a prompt without persisting its user message when create fails."""
+
+    run_store = FailingRunStore()
+    run_store.fail_creates = True
+    runtime, _ = _runtime_with_streams(
+        [final_text_stream("resp_one", "recovered")],
+        run_store=run_store,
+    )
+    session = runtime.session(session_id="create-fails")
+
+    async def _run() -> None:
+        """Fail one submission, then recover on the same session."""
+
+        with pytest.raises(RuntimeError, match="run store create unavailable"):
+            await session.prompt("rejected")
+
+        assert len(session.history) == 0
+        assert runtime.runs_for(session.id) == ()
+
+        run_store.fail_creates = False
+        recovery = await session.prompt("recover")
+        assert await recovery.wait() == "completed"
+
+    asyncio.run(_run())
+
+
+def test_prompt_abandons_run_record_when_history_append_fails() -> None:
+    """Fail the persisted record as a submission failure when history fails."""
+
+    history_store = FailingHistoryStore()
+    history_store.fail_appends = True
+    run_store = FailingRunStore()
+    provider = ProviderStreamMock([final_text_stream("resp_one", "recovered")])
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=history_store,
+        run_store=run_store,
+        cwd=Path("."),
+    )
+    session = runtime.session(session_id="append-fails")
+
+    async def _run() -> None:
+        """Fail one submission, then verify the abandoned durable record."""
+
+        with pytest.raises(RuntimeError, match="history unavailable"):
+            await session.prompt("rejected")
+
+        records = runtime.runs_for(session.id)
+        assert len(records) == 1
+        assert records[0].status == "failed"
+        assert records[0].ended_at is not None
+        assert records[0].provider == TEST_PROVIDER
+        assert records[0].failure == RunFailure(
+            origin="submission",
+            exception_type="RuntimeError",
+            message="history unavailable",
+        )
+
+        history_store.fail_appends = False
+        recovery = await session.prompt("recover")
+        assert await recovery.wait() == "completed"
+
+    asyncio.run(_run())
+
+
+def test_prompt_reraises_submission_error_when_abandonment_write_fails() -> None:
+    """Propagate the submission failure even when the abandonment write fails."""
+
+    history_store = FailingHistoryStore()
+    history_store.fail_appends = True
+    run_store = FailingRunStore()
+    run_store.fail_updates = True
+    provider = ProviderStreamMock([])
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=history_store,
+        run_store=run_store,
+        cwd=Path("."),
+    )
+    session = runtime.session(session_id="abandonment-fails")
+
+    async def _run() -> None:
+        """Observe the original submission failure, not the store failure."""
+
+        with pytest.raises(RuntimeError, match="history unavailable"):
+            await session.prompt("rejected")
+
+    asyncio.run(_run())
+
+    records = runtime.runs_for(session.id)
+    assert len(records) == 1
+    assert records[0].status == "running"
 
 
 def test_runtime_persists_success_failure_and_abort_records(tmp_path: Path) -> None:

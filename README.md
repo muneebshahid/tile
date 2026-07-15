@@ -166,10 +166,12 @@ session_records = runtime.runs_for(session.id)
 
 The SQLite stores are separate contracts and use separate tables and schema
 version markers, even when they share one database file. A running record is
-written before provider execution starts and replaced with its terminal state
-after runtime cleanup. A hard process death may therefore leave a record marked
-`running`; automatic interruption classification and recovery are outside this
-contract.
+written before the prompt enters history, so a rejected submission never
+leaves a user message without a run record; if submission fails after the
+record exists, the record is finished as `failed` with a `submission`-origin
+failure. The terminal state is written after runtime cleanup. A hard process
+death may therefore leave a record marked `running`; automatic interruption
+classification and recovery are outside this contract.
 
 ## Typed results
 

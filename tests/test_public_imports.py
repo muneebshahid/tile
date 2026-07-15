@@ -67,7 +67,12 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert issubclass(SessionNotFoundError, KeyError)
     assert issubclass(TurnFailedError, RuntimeError)
     assert RunFailure.model_fields["origin"]
-    assert get_args(RunFailureOrigin) == ("turn", "execution", "finalization")
+    assert get_args(RunFailureOrigin) == (
+        "submission",
+        "turn",
+        "execution",
+        "finalization",
+    )
     assert ToolInputValidationFailure.model_fields["issues"]
     assert ToolInvocationFailure.model_fields["exception_type"]
     assert issubclass(ToolError, RuntimeError)

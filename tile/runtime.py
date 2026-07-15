@@ -455,20 +455,41 @@ class AgentRuntime:
         """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
+        record: RunRecord | None = None
         try:
-            self._append_user_message(session_id, content)
             record = self._create_run_record(session_id)
+            self._append_user_message(session_id, content)
             run = Run(
                 record=record,
                 events=self._run_events(session_id, result=result),
                 on_done=self._release_run,
                 on_record=self._run_store.update_run,
             )
-        except BaseException:
+        except BaseException as submission_error:
+            if record is not None:
+                self._abandon_run_record(record, submission_error)
             self._finish_prompt(session_id)
             raise
         self._active_runs.add(run)
         return run
+
+    def _abandon_run_record(self, record: RunRecord, error: BaseException) -> None:
+        """Best-effort fail a running record whose submission never started."""
+
+        try:
+            self._run_store.update_run(
+                record.finish(
+                    status="failed",
+                    ended_at=datetime.now(UTC),
+                    failure=RunFailure(
+                        origin="submission",
+                        exception_type=type(error).__name__,
+                        message=str(error),
+                    ),
+                )
+            )
+        except BaseException as abandonment_error:
+            _log_abandoned_record_error(abandonment_error)
 
     def _create_run_record(self, session_id: str) -> RunRecord:
         """Persist one running summary before provider execution can start."""
@@ -838,6 +859,15 @@ def _log_secondary_finalization_error(error: BaseException) -> None:
 
     logger.error(
         "Run finalization also failed",
+        exc_info=(type(error), error, error.__traceback__),
+    )
+
+
+def _log_abandoned_record_error(error: BaseException) -> None:
+    """Log an unpersisted submission abandonment without masking its cause."""
+
+    logger.error(
+        "Abandoned run record could not be persisted",
         exc_info=(type(error), error, error.__traceback__),
     )
 
