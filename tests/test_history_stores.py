@@ -9,6 +9,7 @@ from typing import cast
 import pytest
 
 from tile import AgentRuntime, Session
+from tile.runs import InMemoryRunStore
 from tile.history import (
     HistoryStore,
     InMemoryHistoryStore,
@@ -272,6 +273,7 @@ def test_sqlite_history_store_survives_runtime_restart(tmp_path: Path) -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=first_store,
+        run_store=InMemoryRunStore(),
         cwd=Path("."),
     )
     first_session = first_runtime.session(session_id="restart")
@@ -283,6 +285,7 @@ def test_sqlite_history_store_survives_runtime_restart(tmp_path: Path) -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=second_store,
+        run_store=InMemoryRunStore(),
         cwd=Path("."),
     )
     restarted_session = second_runtime.get_session("restart")

@@ -8,7 +8,13 @@ from typing import TextIO
 
 from openai import AsyncOpenAI
 
-from tile import AgentRuntime, HistoryStore, RunStatus
+from tile import (
+    AgentRuntime,
+    HistoryStore,
+    InMemoryHistoryStore,
+    InMemoryRunStore,
+    RunStatus,
+)
 from tile.events import AgentEvent, StreamFn
 from tile.providers.openai import create_stream_api
 from tile.tools import BUILTIN_TOOLS
@@ -54,7 +60,10 @@ async def run_prompt(
     runtime = AgentRuntime(
         stream_fn=stream_fn,
         model=model or settings.openai_model,
-        history_store=history_store,
+        history_store=history_store
+        if history_store is not None
+        else InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
         tools=active_tools,
         cwd=cwd if cwd is not None else Path.cwd(),
     )

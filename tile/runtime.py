@@ -7,9 +7,10 @@ import inspect
 import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
-from typing import Literal, TypeAlias, cast
+from typing import cast
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -29,7 +30,7 @@ from tile.types.tools import (
 )
 from tile.tools.support.paths import normalize_cwd
 from tile.agent import run_agent
-from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
+from tile.history import HistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
 from tile.result import (
     COMPLETE_TOOL_NAME,
@@ -41,6 +42,14 @@ from tile.result import (
     Completed,
     Failed,
     RunOutcome,
+)
+from tile.runs import (
+    RunFailure,
+    RunFailureOrigin,
+    RunRecord,
+    RunStatus,
+    RunStore,
+    TerminalRunStatus,
 )
 from tile.tool_executor import ToolExecutor
 from tile.tools.complete import tool as complete_tool
@@ -55,9 +64,7 @@ from tile.events import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-
-RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
-RunFailureOrigin: TypeAlias = Literal["turn", "execution", "finalization"]
+from tile.types.stream_events import ProviderSource
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +81,6 @@ class TurnFailedError(RuntimeError):
 
         self.turn = turn
         super().__init__(_turn_failure_message(turn))
-
-
-class RunFailure(BaseModel):
-    """Serializable diagnostics for a failed run execution."""
-
-    type: Literal["run_failure"] = "run_failure"
-    origin: RunFailureOrigin
-    exception_type: str
-    message: str
 
 
 @dataclass
@@ -116,21 +114,20 @@ class Run:
     def __init__(
         self,
         *,
-        run_id: str,
-        session_id: str,
+        record: RunRecord,
         events: AsyncIterator[AgentEvent],
         on_done: Callable[[Run], None],
+        on_record: Callable[[RunRecord], None],
     ) -> None:
         """Start a run that drives the given event source to completion."""
 
-        self._run_id = run_id
-        self._session_id = session_id
+        self._record = record
         self._events: list[AgentEvent] = []
-        self._status: RunStatus = "running"
-        self._failure: RunFailure | None = None
         self._exception: BaseException | None = None
+        self._persistence_error: BaseException | None = None
         self._changed = asyncio.Event()
         self._on_done = on_done
+        self._on_record = on_record
         self._task = asyncio.create_task(self._pump(events))
         self._task.add_done_callback(self._finalize)
 
@@ -138,39 +135,55 @@ class Run:
     def id(self) -> str:
         """Return the stable run id."""
 
-        return self._run_id
+        return self._record.run_id
 
     @property
     def session_id(self) -> str:
         """Return the id of the session this run belongs to."""
 
-        return self._session_id
+        return self._record.session_id
 
     @property
     def status(self) -> RunStatus:
         """Return the current run status."""
 
-        return self._status
+        return self._record.status
+
+    @property
+    def record(self) -> RunRecord:
+        """Return a defensive snapshot of the run's current durable summary."""
+
+        return self._record.model_copy(deep=True)
 
     @property
     def error_message(self) -> str | None:
         """Return the failure message when the run execution has failed."""
 
-        if self._failure is None:
+        if self._record.failure is None:
             return None
-        return self._failure.message
+        return self._record.failure.message
 
     @property
     def failure(self) -> RunFailure | None:
         """Return serializable execution failure diagnostics, when available."""
 
-        return self._failure
+        return self._record.failure
 
     @property
     def exception(self) -> BaseException | None:
         """Return the original in-process exception for a failed run."""
 
         return self._exception
+
+    @property
+    def persistence_error(self) -> BaseException | None:
+        """Return the error that left the durable terminal record unwritten.
+
+        A non-None value means the run's status and outcome are authoritative
+        on this handle, but the run store may still report the run as running.
+        """
+
+        return self._persistence_error
 
     @property
     def output_text(self) -> str | None:
@@ -187,17 +200,17 @@ class Run:
 
     @property
     def outcome(self) -> RunOutcome | None:
-        """Return the terminal run outcome once the agent run has ended.
+        """Return the run outcome as soon as the agent run has ended.
 
-        Returns None while the run is in flight and for runs that ended
-        without a verdict (execution failure or abort); the run status and
-        error message carry that story.
+        Available from the moment the run's end event is published, before
+        the terminal status lands. Returns None before then and for runs
+        that ended without a verdict (execution failure or abort); the run
+        status and error message carry that story.
         """
 
-        for event in reversed(self._events):
-            if isinstance(event, AgentEndEvent):
-                return event.outcome
-        return None
+        if self._record.status == "running":
+            return _event_outcome(self._events)
+        return self._record.outcome
 
     @property
     def conversation_items(self) -> tuple[ConversationItem, ...]:
@@ -216,7 +229,7 @@ class Run:
             while index < len(self._events):
                 yield self._events[index]
                 index += 1
-            if self._status != "running":
+            if self.status != "running":
                 return
             await self._changed.wait()
 
@@ -224,7 +237,7 @@ class Run:
         """Wait until the run reaches a terminal status and return it."""
 
         await asyncio.wait({self._task})
-        return self._status
+        return self.status
 
     def abort(self) -> None:
         """Request cancellation of the run task."""
@@ -239,49 +252,63 @@ class Run:
             self._publish(event)
 
     def _finalize(self, task: asyncio.Task[None]) -> None:
-        """Release owner state and record a terminal run status."""
+        """Record the terminal run state, then persist and release it.
+
+        The terminal status and outcome are derived only from the task's
+        execution result and written exactly once. Persistence and owner
+        release are bookkeeping: their failures are logged and exposed, but
+        never rewrite what the caller sees.
+        """
 
         task_error = _task_error(task)
-        try:
-            finalization_error = self._notify_owner()
-        except BaseException as control_error:
-            self._finish_after_owner_notification(task, task_error, control_error)
-            raise
-
-        self._finish_after_owner_notification(task, task_error, finalization_error)
-
-    def _finish_after_owner_notification(
-        self,
-        task: asyncio.Task[None],
-        task_error: BaseException | None,
-        finalization_error: BaseException | None,
-    ) -> None:
-        """Finish the run after its owner has released runtime state."""
-
         if task_error is not None:
-            if finalization_error is not None:
-                _log_secondary_finalization_error(finalization_error)
             self._fail(task_error, origin=_execution_failure_origin(task_error))
-        elif finalization_error is not None:
-            self._fail(finalization_error, origin="finalization")
         elif task.cancelled():
-            self._finish("aborted")
+            self._abort()
         else:
-            self._finish("completed")
+            self._complete()
+        try:
+            self._persist_terminal_record()
+        finally:
+            self._release_owner()
 
-    def _notify_owner(self) -> Exception | None:
-        """Notify the owner, returning an ordinary finalization failure."""
+    def _persist_terminal_record(self) -> None:
+        """Persist the terminal record without touching the live run state."""
+
+        try:
+            self._on_record(self._record)
+        except BaseException as persistence_error:
+            self._persistence_error = persistence_error
+            _log_run_bookkeeping_error(
+                "Terminal run record could not be persisted", persistence_error
+            )
+            if not isinstance(persistence_error, Exception):
+                raise
+
+    def _release_owner(self) -> None:
+        """Release owner state without touching the live run state."""
 
         try:
             self._on_done(self)
-        except Exception as error:
-            return error
-        return None
+        except BaseException as release_error:
+            _log_run_bookkeeping_error("Run owner release failed", release_error)
+            if not isinstance(release_error, Exception):
+                raise
+
+    def _complete(self) -> None:
+        """Record successful run execution."""
+
+        self._set_terminal_state("completed")
+
+    def _abort(self) -> None:
+        """Record an aborted run execution."""
+
+        self._set_terminal_state("aborted")
 
     def _fail(self, error: BaseException, *, origin: RunFailureOrigin) -> None:
         """Record one failed execution with serializable and live diagnostics."""
 
-        self._finish(
+        self._set_terminal_state(
             "failed",
             failure=RunFailure(
                 origin=origin,
@@ -297,17 +324,29 @@ class Run:
         self._events.append(event)
         self._changed.set()
 
-    def _finish(
+    def _set_terminal_state(
         self,
-        status: RunStatus,
+        status: TerminalRunStatus,
         *,
         failure: RunFailure | None = None,
         exception: BaseException | None = None,
     ) -> None:
-        """Record the terminal status and wake subscribers."""
+        """Set the terminal record state and wake subscribers.
 
-        self._status = status
-        self._failure = failure
+        This transition must not raise: the end timestamp is clamped so a
+        backward clock step cannot trip the record's lifecycle validator and
+        strand the run in a running state.
+        """
+
+        source = _latest_provider_source(self._events)
+        self._record = self._record.finish(
+            status=status,
+            ended_at=max(datetime.now(UTC), self._record.started_at),
+            provider=source.provider if source is not None else None,
+            model=source.model if source is not None else None,
+            outcome=_event_outcome(self._events) if status == "completed" else None,
+            failure=failure,
+        )
         self._exception = exception
         self._changed.set()
 
@@ -321,7 +360,8 @@ class AgentRuntime:
         stream_fn: StreamFn,
         model: str,
         cwd: Path | str,
-        history_store: HistoryStore | None = None,
+        history_store: HistoryStore,
+        run_store: RunStore,
         tools: Sequence[ToolDefinition] = (),
         instructions: str = DEFAULT_INSTRUCTIONS,
         auto_mode: bool = True,
@@ -330,16 +370,17 @@ class AgentRuntime:
 
         ``cwd`` is the runtime's single working directory: it is announced in
         the system prompt and injected into every tool whose function declares
-        a ``cwd`` parameter. Pass tools unbound; the runtime binds them.
+        a ``cwd`` parameter. Pass tools unbound; the runtime binds them. The
+        stores are required so the caller decides where records live; pass
+        the in-memory stores for process-lifetime state.
         """
 
         _reject_reserved_tool_names(tools)
         self._stream_fn = stream_fn
         self._model = model
         self._cwd = normalize_cwd(cwd)
-        self._history_store = (
-            history_store if history_store is not None else InMemoryHistoryStore()
-        )
+        self._history_store = history_store
+        self._run_store = run_store
         self._tool_executor = ToolExecutor(_bind_cwd_tools(tools, self._cwd))
         self._instructions = instructions
         self._auto_mode = auto_mode
@@ -379,6 +420,16 @@ class AgentRuntime:
 
         return self._history_store.get_history(session_id)
 
+    def get_run(self, run_id: str) -> RunRecord:
+        """Return a durable run summary by its stable id."""
+
+        return self._run_store.get_run(run_id)
+
+    def runs_for(self, session_id: str) -> Sequence[RunRecord]:
+        """Return durable run summaries for one session."""
+
+        return self._run_store.list_runs(session_id)
+
     def fork_session(
         self,
         *,
@@ -405,19 +456,57 @@ class AgentRuntime:
         """Submit one prompt for task-owned execution and return its run handle."""
 
         self._start_prompt(session_id)
+        record: RunRecord | None = None
         try:
+            record = self._create_run_record(session_id)
             self._append_user_message(session_id, content)
             run = Run(
-                run_id=str(uuid4()),
-                session_id=session_id,
+                record=record,
                 events=self._run_events(session_id, result=result),
                 on_done=self._release_run,
+                on_record=self._run_store.update_run,
             )
-        except BaseException:
+        except BaseException as submission_error:
+            if record is not None:
+                self._abandon_run_record(record, submission_error)
             self._finish_prompt(session_id)
             raise
         self._active_runs.add(run)
         return run
+
+    def _abandon_run_record(self, record: RunRecord, error: BaseException) -> None:
+        """Best-effort fail a running record whose submission never started."""
+
+        try:
+            self._run_store.update_run(
+                record.finish(
+                    status="failed",
+                    ended_at=max(datetime.now(UTC), record.started_at),
+                    failure=RunFailure(
+                        origin="submission",
+                        exception_type=type(error).__name__,
+                        message=str(error),
+                    ),
+                )
+            )
+        except BaseException as abandonment_error:
+            _log_run_bookkeeping_error(
+                "Abandoned run record could not be persisted", abandonment_error
+            )
+
+    def _create_run_record(self, session_id: str) -> RunRecord:
+        """Persist one running summary before provider execution can start."""
+
+        record = RunRecord(
+            run_id=str(uuid4()),
+            session_id=session_id,
+            status="running",
+            started_at=datetime.now(UTC),
+            model=self._model,
+            provider=self._stream_fn.provider,
+        )
+        self._run_store.create_run(record)
+        return record
 
     async def _run_events(
         self,
@@ -714,6 +803,26 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
     return ()
 
 
+def _event_outcome(events: Sequence[AgentEvent]) -> RunOutcome | None:
+    """Return the last prompt-level outcome emitted by a run."""
+
+    for event in reversed(events):
+        if isinstance(event, AgentEndEvent):
+            return event.outcome
+    return None
+
+
+def _latest_provider_source(
+    events: Sequence[AgentEvent],
+) -> ProviderSource | None:
+    """Return the latest provider identity available from a finalized message."""
+
+    for event in reversed(events):
+        if isinstance(event, MessageEndEvent):
+            return event.assistant_turn.source
+    return None
+
+
 def _require_completed_turn(turn: AssistantTurn | None) -> AssistantTurn:
     """Return the run's final assistant turn, raising when it did not complete."""
 
@@ -748,13 +857,10 @@ def _execution_failure_origin(error: BaseException) -> RunFailureOrigin:
     return "execution"
 
 
-def _log_secondary_finalization_error(error: BaseException) -> None:
-    """Log finalization failure without replacing the primary task failure."""
+def _log_run_bookkeeping_error(message: str, error: BaseException) -> None:
+    """Log a bookkeeping failure that must not rewrite the run's terminal state."""
 
-    logger.error(
-        "Run finalization also failed",
-        exc_info=(type(error), error, error.__traceback__),
-    )
+    logger.error(message, exc_info=(type(error), error, error.__traceback__))
 
 
 def _result_outcome(terminal_details: ToolDetails | None) -> RunOutcome | None:

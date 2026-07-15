@@ -23,6 +23,8 @@ from tile.types.stream_events import (
 from tile.types.tools import JsonObject, ToolDefinition
 from tests.support.async_streams import async_stream
 
+TEST_PROVIDER = "test"
+
 
 class ProviderStreamMock:
     """Async mock-backed fake provider stream with typed call inspectors."""
@@ -31,6 +33,7 @@ class ProviderStreamMock:
         """Create a fake provider stream from queued event streams."""
 
         self.mock = AsyncMock(side_effect=[async_stream(stream) for stream in streams])
+        self.mock.provider = TEST_PROVIDER
 
     @property
     def fn(self) -> StreamFn:
@@ -93,6 +96,7 @@ class GatedProviderStreamMock(ProviderStreamMock):
         self._releases = tuple(releases)
         self._next_stream_index = 0
         self.mock = AsyncMock(side_effect=self._stream)
+        self.mock.provider = TEST_PROVIDER
 
     async def _stream(
         self,
@@ -225,4 +229,4 @@ def tool_call_block(
 def provider_source() -> ProviderSource:
     """Build the deterministic provider source used by agent tests."""
 
-    return ProviderSource(provider="test", model="gpt-5.4")
+    return ProviderSource(provider=TEST_PROVIDER, model="gpt-5.4")

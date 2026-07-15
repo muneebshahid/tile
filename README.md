@@ -6,14 +6,13 @@
 A compact, Python-native runtime for headless, tool-using agent sessions.
 
 Tile is a **runtime, not a framework**. You construct the pieces — a provider
-client, a tool list, a working directory, optionally a history store — and hand
-them to `AgentRuntime`. It runs prompt-driven agent sessions on top of them:
-provider streaming, a tool-execution loop, typed run outcomes, and session
-history. There are no plugins or global configuration. The
-provider stream, model, tools, and working directory are explicit runtime
-inputs; conversation history defaults to an in-memory store, and applications
-can supply a `HistoryStore` when persistence is required. Embed it in an
-application, or build a service on top.
+client, a tool list, a working directory, and the history and run stores —
+and hand them to `AgentRuntime`. It runs prompt-driven agent sessions on top
+of them: provider streaming, a tool-execution loop, typed run outcomes, session
+history, and durable run summaries. There are no plugins or global
+configuration. The provider stream, model, working directory, and both stores
+are explicit runtime inputs with no defaults; pass the in-memory stores for
+process-lifetime state. Embed it in an application, or build a service on top.
 
 **Status: 0.x.** APIs change without deprecation cycles. OpenAI (Responses API)
 is the only provider today; more are planned. Requires Python 3.13+.
@@ -49,7 +48,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from tile import AgentRuntime
+from tile import AgentRuntime, InMemoryHistoryStore, InMemoryRunStore
 from tile.providers.openai import create_stream_api
 from tile.tools import BUILTIN_TOOLS
 
@@ -60,6 +59,8 @@ async def main() -> None:
         model="gpt-5.4",
         tools=BUILTIN_TOOLS,
         cwd=Path.cwd(),
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
     )
     session = runtime.session(name="quickstart")
     run = await session.prompt("List the files in the current directory.")
@@ -123,9 +124,59 @@ status = await run.wait()  # "completed" | "failed" | "aborted"
 ```
 
 Run events are currently replayable in process while the `Run` handle exists.
-Conversation history can be persisted with SQLite. Durable run records,
-cross-process event replay, approval resumption, and service mode are planned,
+Conversation history and run summaries can be persisted with SQLite.
+Cross-process event replay, approval resumption, and service mode are planned,
 not current capabilities.
+
+## Durable run records
+
+`HistoryStore` owns only model-visible conversation items. `RunStore` separately
+owns one summary per submitted prompt: stable run and session IDs, execution
+status, UTC start/end timestamps, configured model, provider identity, typed
+outcome, and structured execution failure. Provider identity comes from the
+stream function's declared `provider` attribute at submission; when a message
+finalizes, the identity observed on the provider stream replaces it.
+
+```python
+from pathlib import Path
+
+from openai import AsyncOpenAI
+
+from tile import AgentRuntime, SQLiteHistoryStore, SQLiteRunStore
+from tile.providers.openai import create_stream_api
+
+
+database_path = Path("tile.db")
+history_store = SQLiteHistoryStore(database_path)
+run_store = SQLiteRunStore(database_path)
+runtime = AgentRuntime(
+    stream_fn=create_stream_api(AsyncOpenAI()),
+    model="gpt-5.4",
+    cwd=Path.cwd(),
+    history_store=history_store,
+    run_store=run_store,
+)
+
+session = runtime.session()
+run = await session.prompt("Inspect this repository")
+await run.wait()
+
+record = runtime.get_run(run.id)
+session_records = runtime.runs_for(session.id)
+```
+
+The SQLite stores are separate contracts and use separate tables and schema
+version markers, even when they share one database file. A running record is
+written before the prompt enters history, so a rejected submission never
+leaves a user message without a run record; if submission fails after the
+record exists, the record is finished as `failed` with a `submission`-origin
+failure. A run's terminal status and outcome are derived only from agent
+execution; the terminal store write is best-effort bookkeeping. When that
+write fails, the live `Run` handle keeps the true state and exposes the error
+as `run.persistence_error`, while the store retains its last written state
+and may report the run as `running`. A hard process death leaves the same
+stale `running` record; automatic interruption classification and recovery
+are outside this contract.
 
 ## Typed results
 
@@ -209,8 +260,12 @@ from tile import (
     Completed,
     Failed,
     InMemoryHistoryStore,
+    InMemoryRunStore,
     Run,
     RunFailure,
+    RunRecord,
+    SQLiteHistoryStore,
+    SQLiteRunStore,
 )
 from tile.events import AgentEvent, MessageEndEvent, StreamFn
 from tile.providers.openai import create_stream_api
@@ -219,15 +274,18 @@ from tile.types import ToolDefinition, ToolError, ToolInput, ToolResult
 from tile.types import ToolInputValidationFailure, ToolInvocationFailure
 ```
 
-`tile` exposes the runtime, session, run-handle, outcome, history-store, and
-runtime-error contracts. `tile.events` exposes the structured events yielded by
-`Run.events()`. `tile.types` exposes provider-neutral conversation, stream, and
-tool contracts, including structured validation and invocation failures on
-tool-execution event details. `tile.providers.openai` exposes
+`tile` exposes the runtime, session, run handle, outcome, history-store,
+run-store, and runtime-error contracts. `tile.events` exposes the structured
+events yielded by `Run.events()`. `tile.types` exposes provider-neutral
+conversation, stream, and tool contracts, including structured validation and
+invocation failures on tool-execution event details. `tile.providers.openai`
+exposes
 `create_stream_api`, which
 binds a caller-constructed `AsyncOpenAI` client and optional provider reasoning
 options to the runtime's stream-function contract:
-`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`.
+`create_stream_api(AsyncOpenAI(...), reasoning={"effort": "medium"})`. A stream
+function declares its provider identity via a `provider` attribute on the
+callable, stated once where the callable is constructed.
 
 ## Architecture
 
@@ -235,6 +293,7 @@ options to the runtime's stream-function contract:
 tile/
 ├── history/         # Session metadata and conversation history stores
 ├── providers/       # Provider integrations (OpenAI today)
+├── runs/            # Durable run-summary contracts and stores
 ├── tools/           # Built-in local tool implementations
 ├── types/           # Provider-neutral contracts for conversations and tools
 ├── agent.py         # Stateless agent loop: provider turns and tool batches

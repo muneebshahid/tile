@@ -33,7 +33,22 @@ def create_stream_api(
 ) -> StreamFn:
     """Bind a caller-constructed OpenAI client to an API-transport stream function."""
 
-    async def stream_api(
+    return _StreamApi(client, reasoning=reasoning)
+
+
+class _StreamApi:
+    """API-transport stream function bound to one OpenAI client."""
+
+    provider = "openai"
+
+    def __init__(self, client: AsyncOpenAI, *, reasoning: Reasoning | None) -> None:
+        """Bind the client and reasoning options for every stream call."""
+
+        self._client = client
+        self._reasoning = reasoning
+
+    async def __call__(
+        self,
         history: Sequence[ConversationItem],
         model: str,
         *,
@@ -46,16 +61,14 @@ def create_stream_api(
             history,
             model,
             instructions=instructions,
-            reasoning=reasoning,
+            reasoning=self._reasoning,
             tools=tools,
         )
-        raw_stream = await client.responses.create(**request_params)
+        raw_stream = await self._client.responses.create(**request_params)
         return assemble_stream(
             normalize_sdk_events(raw_stream),
-            source=ProviderSource(provider="openai", model=model),
+            source=ProviderSource(provider=self.provider, model=model),
         )
-
-    return stream_api
 
 
 def _build_stream_request_params(
