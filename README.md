@@ -6,14 +6,13 @@
 A compact, Python-native runtime for headless, tool-using agent sessions.
 
 Tile is a **runtime, not a framework**. You construct the pieces — a provider
-client, a tool list, a working directory, and optionally history and run stores
-— and hand them to `AgentRuntime`. It runs prompt-driven agent sessions on top
+client, a tool list, a working directory, and the history and run stores —
+and hand them to `AgentRuntime`. It runs prompt-driven agent sessions on top
 of them: provider streaming, a tool-execution loop, typed run outcomes, session
 history, and durable run summaries. There are no plugins or global
-configuration. The provider stream, model, tools, and working directory are
-explicit runtime inputs; both stores default to in-memory implementations and
-can be replaced independently. Embed it in an application, or build a service
-on top.
+configuration. The provider stream, model, working directory, and both stores
+are explicit runtime inputs with no defaults; pass the in-memory stores for
+process-lifetime state. Embed it in an application, or build a service on top.
 
 **Status: 0.x.** APIs change without deprecation cycles. OpenAI (Responses API)
 is the only provider today; more are planned. Requires Python 3.13+.
@@ -49,7 +48,7 @@ from pathlib import Path
 
 from openai import AsyncOpenAI
 
-from tile import AgentRuntime
+from tile import AgentRuntime, InMemoryHistoryStore, InMemoryRunStore
 from tile.providers.openai import create_stream_api
 from tile.tools import BUILTIN_TOOLS
 
@@ -60,6 +59,8 @@ async def main() -> None:
         model="gpt-5.4",
         tools=BUILTIN_TOOLS,
         cwd=Path.cwd(),
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
     )
     session = runtime.session(name="quickstart")
     run = await session.prompt("List the files in the current directory.")

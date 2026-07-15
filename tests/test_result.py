@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tile.agent import run_agent
 from tile.history import InMemoryHistoryStore
+from tile.runs import InMemoryRunStore
 from tile.result import (
     MAX_RESULT_FOLLOW_UPS,
     NO_RESULT_REASON,
@@ -323,7 +324,12 @@ def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
     )
 
     runtime = AgentRuntime(
-        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+        auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> Failed | None:
@@ -386,6 +392,7 @@ def test_runtime_nudges_text_only_agent_run_toward_result() -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=store,
+        run_store=InMemoryRunStore(),
         auto_mode=False,
         cwd=Path("."),
     )
@@ -424,7 +431,12 @@ def test_runtime_fails_after_follow_up_cap() -> None:
     provider = ProviderStreamMock(streams)
 
     runtime = AgentRuntime(
-        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+        auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> Failed | None:
@@ -450,7 +462,12 @@ def test_runtime_without_contract_completes_with_text() -> None:
     )
 
     runtime = AgentRuntime(
-        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+        auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> Completed | None:
@@ -480,6 +497,7 @@ def test_runtime_fails_when_nudge_attempt_hits_stream_error() -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=store,
+        run_store=InMemoryRunStore(),
         auto_mode=False,
         cwd=Path("."),
     )
@@ -572,7 +590,12 @@ def test_runtime_keeps_terminal_text_separate_from_result_value() -> None:
     )
 
     runtime = AgentRuntime(
-        stream_fn=provider.fn, model="gpt-5.4", auto_mode=False, cwd=Path(".")
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+        auto_mode=False,
+        cwd=Path("."),
     )
 
     async def _run() -> tuple[Completed | None, str | None]:
@@ -605,6 +628,7 @@ def test_session_prompt_composes_result_tools_and_contract() -> None:
         stream_fn=provider.fn,
         model="gpt-5.4",
         history_store=store,
+        run_store=InMemoryRunStore(),
         auto_mode=False,
         cwd=Path("."),
     )
@@ -640,6 +664,8 @@ def test_session_mixes_contract_and_plain_prompts() -> None:
     runtime = AgentRuntime(
         stream_fn=provider.fn,
         model="gpt-5.4",
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
         auto_mode=False,
         cwd=Path("."),
     )
@@ -677,4 +703,6 @@ def test_runtime_rejects_reserved_tool_names() -> None:
             model="gpt-5.4",
             tools=[city_tool("complete", "Not the real complete.", _weather)],
             cwd=Path("."),
+            history_store=InMemoryHistoryStore(),
+            run_store=InMemoryRunStore(),
         )

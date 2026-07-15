@@ -120,7 +120,8 @@ def _runtime_with_streams(
         model="gpt-5.4",
         tools=tools,
         cwd=cwd,
-        run_store=run_store,
+        history_store=InMemoryHistoryStore(),
+        run_store=run_store if run_store is not None else InMemoryRunStore(),
     )
     return runtime, provider
 
@@ -138,7 +139,8 @@ def _runtime_with_gated_streams(
             stream_fn=provider.fn,
             model="gpt-5.4",
             cwd=Path("."),
-            run_store=run_store,
+            history_store=InMemoryHistoryStore(),
+            run_store=run_store if run_store is not None else InMemoryRunStore(),
         ),
         provider,
     )
@@ -150,7 +152,13 @@ def _runtime_with_failing_provider(error: Exception) -> AgentRuntime:
     failing_mock = AsyncMock(side_effect=error)
     failing_mock.provider = TEST_PROVIDER
     failing_stream_fn = cast("StreamFn", failing_mock)
-    return AgentRuntime(stream_fn=failing_stream_fn, model="gpt-5.4", cwd=Path("."))
+    return AgentRuntime(
+        stream_fn=failing_stream_fn,
+        model="gpt-5.4",
+        cwd=Path("."),
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+    )
 
 
 def _runtime_with_interrupted_stream(
@@ -162,16 +170,13 @@ def _runtime_with_interrupted_stream(
     interrupted_mock = AsyncMock(return_value=async_stream(events, error=error))
     interrupted_mock.provider = TEST_PROVIDER
     stream_fn = cast("StreamFn", interrupted_mock)
-    return AgentRuntime(stream_fn=stream_fn, model="gpt-5.4", cwd=Path("."))
-
-
-class FalsyHistoryStore(InMemoryHistoryStore):
-    """History store that is falsey even when injected."""
-
-    def __bool__(self) -> bool:
-        """Return false to exercise explicit None defaulting."""
-
-        return False
+    return AgentRuntime(
+        stream_fn=stream_fn,
+        model="gpt-5.4",
+        cwd=Path("."),
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+    )
 
 
 class FailingHistoryStore(InMemoryHistoryStore):
@@ -286,6 +291,7 @@ def test_session_history_is_read_only_snapshot() -> None:
         stream_fn=ProviderStreamMock([]).fn,
         model="gpt-5.4",
         history_store=store,
+        run_store=InMemoryRunStore(),
         cwd=Path("."),
     )
     session = runtime.session(session_id="snapshot")
@@ -300,23 +306,6 @@ def test_session_history_is_read_only_snapshot() -> None:
     assert first_item.content == "hello"
     first_item.content = "mutated snapshot"
     assert store.get_history("snapshot") == (UserMessage(content="hello"),)
-
-
-def test_runtime_preserves_falsy_injected_history_store() -> None:
-    """Use an injected history store even when the store is falsey."""
-
-    store = FalsyHistoryStore()
-    runtime = AgentRuntime(
-        stream_fn=ProviderStreamMock([]).fn,
-        model="gpt-5.4",
-        history_store=store,
-        cwd=Path("."),
-    )
-
-    session = runtime.session(session_id="configured-store")
-
-    assert session.id == "configured-store"
-    assert store.get_session("configured-store").session_id == "configured-store"
 
 
 def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
@@ -412,6 +401,8 @@ def test_runtime_rejects_cwd_schema_property_on_injected_tool() -> None:
             model="gpt-5.4",
             tools=[bad_tool],
             cwd=Path("."),
+            history_store=InMemoryHistoryStore(),
+            run_store=InMemoryRunStore(),
         )
 
 
@@ -476,6 +467,7 @@ def test_runtime_persists_running_record_before_provider_execution() -> None:
     runtime = AgentRuntime(
         stream_fn=_ObservingStreamFn(),
         model="gpt-5.4",
+        history_store=InMemoryHistoryStore(),
         run_store=run_store,
         cwd=Path("."),
     )
@@ -706,6 +698,7 @@ def test_run_keeps_aborted_status_when_owner_release_fails() -> None:
             stream_fn=provider.fn,
             model="gpt-5.4",
             history_store=store,
+            run_store=InMemoryRunStore(),
             tools=[_weather_tool(_blocked_weather)],
             cwd=Path("."),
         )

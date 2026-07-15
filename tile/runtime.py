@@ -30,7 +30,7 @@ from tile.types.tools import (
 )
 from tile.tools.support.paths import normalize_cwd
 from tile.agent import run_agent
-from tile.history import HistoryStore, InMemoryHistoryStore, SessionRecord
+from tile.history import HistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
 from tile.result import (
     COMPLETE_TOOL_NAME,
@@ -44,7 +44,6 @@ from tile.result import (
     RunOutcome,
 )
 from tile.runs import (
-    InMemoryRunStore,
     RunFailure,
     RunFailureOrigin,
     RunRecord,
@@ -361,8 +360,8 @@ class AgentRuntime:
         stream_fn: StreamFn,
         model: str,
         cwd: Path | str,
-        history_store: HistoryStore | None = None,
-        run_store: RunStore | None = None,
+        history_store: HistoryStore,
+        run_store: RunStore,
         tools: Sequence[ToolDefinition] = (),
         instructions: str = DEFAULT_INSTRUCTIONS,
         auto_mode: bool = True,
@@ -371,17 +370,17 @@ class AgentRuntime:
 
         ``cwd`` is the runtime's single working directory: it is announced in
         the system prompt and injected into every tool whose function declares
-        a ``cwd`` parameter. Pass tools unbound; the runtime binds them.
+        a ``cwd`` parameter. Pass tools unbound; the runtime binds them. The
+        stores are required so the caller decides where records live; pass
+        the in-memory stores for process-lifetime state.
         """
 
         _reject_reserved_tool_names(tools)
         self._stream_fn = stream_fn
         self._model = model
         self._cwd = normalize_cwd(cwd)
-        self._history_store = (
-            history_store if history_store is not None else InMemoryHistoryStore()
-        )
-        self._run_store = run_store if run_store is not None else InMemoryRunStore()
+        self._history_store = history_store
+        self._run_store = run_store
         self._tool_executor = ToolExecutor(_bind_cwd_tools(tools, self._cwd))
         self._instructions = instructions
         self._auto_mode = auto_mode
