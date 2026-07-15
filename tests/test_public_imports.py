@@ -3,15 +3,19 @@
 import asyncio
 from pathlib import Path
 from collections.abc import AsyncIterator, Sequence
+from typing import get_args
 
 from tile import (
     AgentRuntime,
     HistoryStore,
     InMemoryHistoryStore,
     Run,
+    RunFailure,
+    RunFailureOrigin,
     Session,
     SessionBusyError,
     SessionNotFoundError,
+    TurnFailedError,
 )
 from tile.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
 from tile.providers.openai import create_stream_api
@@ -24,6 +28,7 @@ from tile.types import (
     StreamStartEvent,
     TextBlock,
     ToolDefinition,
+    ToolError,
     ToolInput,
     ToolInputValidationFailure,
     ToolInvocationFailure,
@@ -51,8 +56,12 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert len(session.history) == 2
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
+    assert issubclass(TurnFailedError, RuntimeError)
+    assert RunFailure.model_fields["origin"]
+    assert get_args(RunFailureOrigin) == ("turn", "execution", "finalization")
     assert ToolInputValidationFailure.model_fields["issues"]
     assert ToolInvocationFailure.model_fields["exception_type"]
+    assert issubclass(ToolError, RuntimeError)
     assert callable(create_stream_api)
 
 

@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, SerializeAsAny
 
 from tile.types.conversation import ToolResultTurn
-from tile.types.tools import ToolDetails, ToolResult
+from tile.types.tools import ToolDetails, ToolResult, ToolTextContent
 
 
 class ToolInputIssue(BaseModel):
@@ -55,8 +55,28 @@ class ToolExecutionOutcome(BaseModel):
                 call_id=call_id,
                 tool_name=tool_name,
                 content=result.content,
-                is_error=result.is_error,
             ),
             details=result.details,
             terminate=result.terminate,
+        )
+
+    @classmethod
+    def from_error(
+        cls,
+        *,
+        call_id: str,
+        tool_name: str,
+        message: str,
+        details: ToolDetails | None = None,
+    ) -> "ToolExecutionOutcome":
+        """Build a model-visible failed execution outcome."""
+
+        return cls(
+            tool_result_turn=ToolResultTurn(
+                call_id=call_id,
+                tool_name=tool_name,
+                content=[ToolTextContent(text=message)],
+                is_error=True,
+            ),
+            details=details,
         )

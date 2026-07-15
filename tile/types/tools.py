@@ -51,21 +51,28 @@ class ToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
 
+class ToolError(RuntimeError):
+    """Intentional model-visible failure raised by a tool implementation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        details: ToolDetails | None = None,
+    ) -> None:
+        """Create a handled tool failure with optional observer metadata."""
+
+        self.message = message
+        self.details = details
+        super().__init__(message)
+
+
 class ToolResult(BaseModel):
-    """Provider-neutral tool execution result."""
+    """Provider-neutral successful tool execution result."""
 
     content: list[ToolResultContent]
     details: SerializeAsAny[ToolDetails] | None = None
-    is_error: bool = False
     terminate: bool = False
-
-    @model_validator(mode="after")
-    def _reject_terminating_error(self) -> Self:
-        """Prevent an error result from terminating the agent run."""
-
-        if self.is_error and self.terminate:
-            raise ValueError("A tool error cannot terminate the run.")
-        return self
 
     @classmethod
     def text(
@@ -98,21 +105,6 @@ class ToolResult(BaseModel):
             content=[ToolTextContent(text=text), image],
             details=details,
             terminate=terminate,
-        )
-
-    @classmethod
-    def error(
-        cls,
-        text: str,
-        *,
-        details: ToolDetails | None = None,
-    ) -> ToolResult:
-        """Create a text error that the model may inspect and correct."""
-
-        return cls(
-            content=[ToolTextContent(text=text)],
-            details=details,
-            is_error=True,
         )
 
 

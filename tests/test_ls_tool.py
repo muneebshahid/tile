@@ -8,7 +8,7 @@ import pytest
 import tile.tools.ls as ls
 import tile.tools.support.truncation as truncation
 from tile.tools.ls import LsDetails
-from tile.types.tools import ToolResult
+from tile.types.tools import ToolError, ToolResult
 from tests.support.tool_results import tool_text
 
 
@@ -274,7 +274,7 @@ async def test_ls_reports_empty_directory(tmp_path: Path) -> None:
 async def test_ls_raises_when_path_does_not_exist(tmp_path: Path) -> None:
     """Raise filesystem errors so the agent can mark tool execution as failed."""
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ToolError):
         await ls.fn(
             ls.LsInput(path=str(tmp_path / "missing"), limit=10),
             cwd=Path.cwd(),
@@ -288,7 +288,7 @@ async def test_ls_raises_when_path_is_not_directory(tmp_path: Path) -> None:
     file_path = tmp_path / "file.txt"
     _create_file(file_path)
 
-    with pytest.raises(NotADirectoryError):
+    with pytest.raises(ToolError):
         await ls.fn(
             ls.LsInput(path=str(file_path), limit=10),
             cwd=Path.cwd(),

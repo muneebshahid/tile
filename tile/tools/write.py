@@ -7,7 +7,7 @@ from pathlib import Path
 
 from pydantic import Field
 
-from tile.types.tools import ToolDefinition, ToolInput, ToolResult
+from tile.types.tools import ToolDefinition, ToolError, ToolInput, ToolResult
 from tile.tools.support.paths import resolve_to_cwd
 
 
@@ -21,9 +21,12 @@ class WriteInput(ToolInput):
 async def fn(params: WriteInput, *, cwd: Path) -> ToolResult:
     """Write content to a file."""
 
-    resolved_path = _resolve_path(params.path, cwd)
-    bytes_written = await _execute(resolved_path, params.content)
-    return _build_result(bytes_written, resolved_path)
+    try:
+        resolved_path = _resolve_path(params.path, cwd)
+        bytes_written = await _execute(resolved_path, params.content)
+        return _build_result(bytes_written, resolved_path)
+    except (OSError, UnicodeError) as error:
+        raise ToolError(str(error)) from error
 
 
 async def _execute(path: Path, content: str) -> int:

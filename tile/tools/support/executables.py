@@ -6,6 +6,8 @@ from asyncio import StreamReader
 from collections.abc import Sequence
 from pathlib import Path
 
+from tile.types.tools import ToolError
+
 # Maximum stdout bytes collected before the subprocess is killed.
 STDOUT_BYTE_CAP: int = 16 * 1024 * 1024
 # Maximum stderr bytes kept for failure messages; the rest is drained.
@@ -17,7 +19,7 @@ def require_executable(command: str, display_name: str) -> str:
 
     executable = shutil.which(command)
     if executable is None:
-        raise RuntimeError(f"{display_name} is not available.")
+        raise ToolError(f"{display_name} is not available.")
     return executable
 
 
@@ -30,13 +32,16 @@ async def execute(
 ) -> str:
     """Run an executable asynchronously and return stdout capped in size."""
 
-    process = await asyncio.create_subprocess_exec(
-        executable,
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        cwd=cwd,
-    )
+    try:
+        process = await asyncio.create_subprocess_exec(
+            executable,
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=cwd,
+        )
+    except OSError as error:
+        raise ToolError(str(error)) from error
     stderr_task = asyncio.create_task(_read_capped_stderr(process.stderr))
     stdout_bytes, capped = await _read_capped_stdout(process.stdout)
     if capped:
@@ -51,7 +56,7 @@ async def execute(
             stderr_bytes.decode(errors="replace").strip()
             or f"{executable} exited with code {exit_code}"
         )
-        raise RuntimeError(error)
+        raise ToolError(error)
     return stdout_bytes.decode(errors="replace")
 
 
@@ -94,7 +99,7 @@ def _decode_complete_lines(data: bytes, executable: str) -> str:
 
     end = data.rfind(b"\n")
     if end == -1:
-        raise RuntimeError(
+        raise ToolError(
             f"{executable} output exceeded {STDOUT_BYTE_CAP} bytes "
             "without a complete line"
         )

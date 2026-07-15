@@ -6,7 +6,13 @@ from typing import Literal
 
 from pydantic import Field
 
-from tile.types.tools import ToolDefinition, ToolDetails, ToolInput, ToolResult
+from tile.types.tools import (
+    ToolDefinition,
+    ToolDetails,
+    ToolError,
+    ToolInput,
+    ToolResult,
+)
 
 from tile.tools.support.paths import resolve_to_cwd
 from tile.tools.support.truncation import (
@@ -42,10 +48,13 @@ class LsInput(ToolInput):
 async def fn(params: LsInput, *, cwd: Path) -> ToolResult:
     """List the contents of a directory."""
 
-    limit = max(1, params.limit)
-    resolved_path = _resolve_path(params.path, cwd)
-    entries = await _execute(resolved_path)
-    return _build_result(entries, limit)
+    try:
+        limit = max(1, params.limit)
+        resolved_path = _resolve_path(params.path, cwd)
+        entries = await _execute(resolved_path)
+        return _build_result(entries, limit)
+    except OSError as error:
+        raise ToolError(str(error)) from error
 
 
 async def _execute(path: Path) -> list[str]:

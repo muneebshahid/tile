@@ -9,7 +9,7 @@ import pytest
 import tile.tools.read as read
 import tile.tools.support.truncation as truncation
 from tile.tools.read import ReadDetails
-from tile.types.tools import ToolImageContent, ToolResult, ToolTextContent
+from tile.types.tools import ToolError, ToolImageContent, ToolResult, ToolTextContent
 from tests.support.tool_results import tool_text
 
 
@@ -215,7 +215,7 @@ async def test_read_returns_image_content_for_supported_image(tmp_path: Path) ->
 async def test_read_raises_when_path_does_not_exist(tmp_path: Path) -> None:
     """Raise filesystem errors so the agent can mark tool execution as failed."""
 
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ToolError):
         await read.fn(
             read.ReadInput(path=str(tmp_path / "missing.txt")),
             cwd=Path.cwd(),

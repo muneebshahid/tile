@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -56,6 +57,9 @@ from tile.events import (
 )
 
 RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
+RunFailureOrigin: TypeAlias = Literal["turn", "execution", "finalization"]
+
+logger = logging.getLogger(__name__)
 
 
 class SessionBusyError(RuntimeError):
@@ -64,6 +68,21 @@ class SessionBusyError(RuntimeError):
 
 class TurnFailedError(RuntimeError):
     """Raised when an agent run ends without a completed assistant turn."""
+
+    def __init__(self, turn: AssistantTurn | None) -> None:
+        """Preserve the failed turn while exposing a concise exception message."""
+
+        self.turn = turn
+        super().__init__(_turn_failure_message(turn))
+
+
+class RunFailure(BaseModel):
+    """Serializable diagnostics for a failed run execution."""
+
+    type: Literal["run_failure"] = "run_failure"
+    origin: RunFailureOrigin
+    exception_type: str
+    message: str
 
 
 @dataclass
@@ -108,7 +127,8 @@ class Run:
         self._session_id = session_id
         self._events: list[AgentEvent] = []
         self._status: RunStatus = "running"
-        self._error_message: str | None = None
+        self._failure: RunFailure | None = None
+        self._exception: BaseException | None = None
         self._changed = asyncio.Event()
         self._on_done = on_done
         self._task = asyncio.create_task(self._pump(events))
@@ -134,9 +154,23 @@ class Run:
 
     @property
     def error_message(self) -> str | None:
-        """Return the failure message when the run has failed."""
+        """Return the failure message when the run execution has failed."""
 
-        return self._error_message
+        if self._failure is None:
+            return None
+        return self._failure.message
+
+    @property
+    def failure(self) -> RunFailure | None:
+        """Return serializable execution failure diagnostics, when available."""
+
+        return self._failure
+
+    @property
+    def exception(self) -> BaseException | None:
+        """Return the original in-process exception for a failed run."""
+
+        return self._exception
 
     @property
     def output_text(self) -> str | None:
@@ -205,15 +239,43 @@ class Run:
             self._publish(event)
 
     def _finalize(self, task: asyncio.Task[None]) -> None:
-        """Notify the owner, then record the terminal run status."""
+        """Release owner state and record a terminal run status."""
 
-        self._on_done(self)
-        if task.cancelled():
+        task_error = _task_error(task)
+        finalization_error = self._notify_owner()
+
+        if task_error is not None:
+            if finalization_error is not None:
+                _log_secondary_finalization_error(finalization_error)
+            self._fail(task_error, origin=_execution_failure_origin(task_error))
+        elif finalization_error is not None:
+            self._fail(finalization_error, origin="finalization")
+        elif task.cancelled():
             self._finish("aborted")
-        elif (error := task.exception()) is not None:
-            self._finish("failed", error_message=str(error))
         else:
             self._finish("completed")
+
+    def _notify_owner(self) -> BaseException | None:
+        """Notify the owner, returning an escaped finalization failure."""
+
+        try:
+            self._on_done(self)
+        except BaseException as error:
+            return error
+        return None
+
+    def _fail(self, error: BaseException, *, origin: RunFailureOrigin) -> None:
+        """Record one failed execution with serializable and live diagnostics."""
+
+        self._finish(
+            "failed",
+            failure=RunFailure(
+                origin=origin,
+                exception_type=type(error).__name__,
+                message=str(error),
+            ),
+            exception=error,
+        )
 
     def _publish(self, event: AgentEvent) -> None:
         """Append one event to the run log and wake subscribers."""
@@ -221,11 +283,18 @@ class Run:
         self._events.append(event)
         self._changed.set()
 
-    def _finish(self, status: RunStatus, error_message: str | None = None) -> None:
+    def _finish(
+        self,
+        status: RunStatus,
+        *,
+        failure: RunFailure | None = None,
+        exception: BaseException | None = None,
+    ) -> None:
         """Record the terminal status and wake subscribers."""
 
         self._status = status
-        self._error_message = error_message
+        self._failure = failure
+        self._exception = exception
         self._changed.set()
 
 
@@ -428,9 +497,11 @@ class AgentRuntime:
     def _release_run(self, run: Run) -> None:
         """Heal unanswered tool calls, then release the session and the run."""
 
-        self._heal_unanswered_tool_calls(run)
-        self._finish_prompt(run.session_id)
-        self._active_runs.discard(run)
+        try:
+            self._heal_unanswered_tool_calls(run)
+        finally:
+            self._finish_prompt(run.session_id)
+            self._active_runs.discard(run)
 
     def _heal_unanswered_tool_calls(self, run: Run) -> None:
         """Persist error results for tool calls the run left unanswered."""
@@ -633,10 +704,43 @@ def _require_completed_turn(turn: AssistantTurn | None) -> AssistantTurn:
     """Return the run's final assistant turn, raising when it did not complete."""
 
     if turn is None:
-        raise TurnFailedError("The agent run ended without an assistant turn.")
+        raise TurnFailedError(turn)
     if turn.status != "completed":
-        raise TurnFailedError(turn.error_message or "The assistant turn failed.")
+        raise TurnFailedError(turn)
     return turn
+
+
+def _turn_failure_message(turn: AssistantTurn | None) -> str:
+    """Return the public message for an unsuccessful assistant turn."""
+
+    if turn is None:
+        return "The agent run ended without an assistant turn."
+    return turn.error_message or "The assistant turn failed."
+
+
+def _task_error(task: asyncio.Task[None]) -> BaseException | None:
+    """Return a task failure without treating cancellation as an exception."""
+
+    if task.cancelled():
+        return None
+    return task.exception()
+
+
+def _execution_failure_origin(error: BaseException) -> RunFailureOrigin:
+    """Classify a task failure at the most specific known runtime boundary."""
+
+    if isinstance(error, TurnFailedError):
+        return "turn"
+    return "execution"
+
+
+def _log_secondary_finalization_error(error: BaseException) -> None:
+    """Log finalization failure without replacing the primary task failure."""
+
+    logger.error(
+        "Run finalization also failed",
+        exc_info=(type(error), error, error.__traceback__),
+    )
 
 
 def _result_outcome(terminal_details: ToolDetails | None) -> RunOutcome | None:
