@@ -1,7 +1,7 @@
 """Tests for runtime-owned sessions, task-owned runs, and in-memory history."""
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -675,8 +675,8 @@ def _assert_terminal_run_records(completed: Run, failed: Run, aborted: Run) -> N
     )
 
 
-def test_run_records_finalization_failure_and_releases_session() -> None:
-    """Fail run finalization without stranding its session as active."""
+def test_run_keeps_aborted_status_when_owner_release_fails() -> None:
+    """Keep the execution status when post-run history healing fails."""
 
     async def _run() -> None:
         """Abort during a tool call while history healing is unavailable."""
@@ -719,14 +719,11 @@ def test_run_records_finalization_failure_and_releases_session() -> None:
         store.fail_appends = True
         run.abort()
 
-        assert await run.wait() == "failed"
-        assert run.failure == RunFailure(
-            origin="finalization",
-            exception_type="RuntimeError",
-            message="history unavailable",
-        )
-        assert isinstance(run.exception, RuntimeError)
-        assert run.error_message == "history unavailable"
+        assert await run.wait() == "aborted"
+        assert run.failure is None
+        assert run.exception is None
+        assert run.error_message is None
+        assert runtime.get_run(run.id).status == "aborted"
 
         store.fail_appends = False
         recovery = await session.prompt("recover")
@@ -735,17 +732,81 @@ def test_run_records_finalization_failure_and_releases_session() -> None:
     asyncio.run(_run())
 
 
-def test_run_does_not_retry_terminal_record_persistence() -> None:
-    """Attempt one terminal write and expose its failure on the run handle."""
+def test_runtime_keeps_live_truth_when_terminal_store_write_fails() -> None:
+    """Keep the live handle authoritative while the store retains stale state."""
+
+    run_store = FailingRunStore()
+    runtime, _ = _runtime_with_streams(
+        [final_text_stream("resp_one", "done")],
+        run_store=run_store,
+    )
+    session = runtime.session(session_id="stale-store")
+
+    async def _run() -> Run:
+        """Complete one run whose terminal store write fails."""
+
+        run_store.fail_updates = True
+        run = await session.prompt("hello")
+        assert await run.wait() == "completed"
+        return run
+
+    run = asyncio.run(_run())
+
+    assert run.outcome == Completed(value="done")
+    assert run.persistence_error is not None
+    assert runtime.get_run(run.id).status == "running"
+
+
+def test_run_outcome_available_while_run_still_running() -> None:
+    """Expose the published end-event outcome before the terminal status lands."""
+
+    async def _run() -> None:
+        """Read the outcome between the end event and run finalization."""
+
+        gate = asyncio.Event()
+
+        async def _events() -> AsyncIterator[AgentEvent]:
+            """Publish a final outcome, then hold the run open."""
+
+            yield AgentEndEvent(outcome=Completed(value="done"))
+            await gate.wait()
+
+        run = Run(
+            record=RunRecord(
+                run_id="mid-stream",
+                session_id="mid-stream",
+                status="running",
+                started_at=datetime.now(UTC),
+                model="gpt-5.4",
+            ),
+            events=_events(),
+            on_done=lambda _: None,
+            on_record=lambda _: None,
+        )
+
+        async for event in run.events():
+            if isinstance(event, AgentEndEvent):
+                break
+
+        assert run.status == "running"
+        assert run.outcome == Completed(value="done")
+
+        gate.set()
+        assert await run.wait() == "completed"
+        assert run.outcome == Completed(value="done")
+
+    asyncio.run(_run())
+
+
+def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
+    """Expose a failed terminal write without rewriting status or outcome."""
 
     async def _run() -> None:
         """Complete a run whose terminal record write fails."""
 
         error = RuntimeError("run store unavailable")
         attempted_records: list[RunRecord] = []
-
-        def release_owner(_: Run) -> None:
-            """Complete owner finalization successfully."""
+        released: list[Run] = []
 
         def reject_record(record: RunRecord) -> None:
             """Record the one write attempt before failing it."""
@@ -761,25 +822,24 @@ def test_run_does_not_retry_terminal_record_persistence() -> None:
                 started_at=datetime.now(UTC),
                 model="gpt-5.4",
             ),
-            events=async_stream([]),
-            on_done=release_owner,
+            events=async_stream([AgentEndEvent(outcome=Completed(value="done"))]),
+            on_done=released.append,
             on_record=reject_record,
         )
 
-        assert await run.wait() == "failed"
+        assert await run.wait() == "completed"
+        assert run.outcome == Completed(value="done")
+        assert run.failure is None
+        assert run.exception is None
+        assert run.persistence_error is error
         assert [record.status for record in attempted_records] == ["completed"]
-        assert run.failure == RunFailure(
-            origin="finalization",
-            exception_type="RuntimeError",
-            message="run store unavailable",
-        )
-        assert run.exception is error
+        assert released == [run]
 
     asyncio.run(_run())
 
 
-def test_run_reraises_finalization_control_exception_after_finishing() -> None:
-    """Preserve control flow after recording terminal run diagnostics."""
+def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
+    """Preserve control flow without rewriting the recorded terminal state."""
 
     class ControlSignal(BaseException):
         """Deterministic process-control signal for finalization testing."""
@@ -822,19 +882,16 @@ def test_run_reraises_finalization_control_exception_after_finishing() -> None:
                 on_done=interrupt,
                 on_record=persisted.append,
             )
-            assert await run.wait() == "failed"
+            assert await run.wait() == "completed"
             await asyncio.sleep(0)
         finally:
             loop.set_exception_handler(previous_handler)
 
         assert reported == [signal]
-        assert run.status == "failed"
-        assert run.failure == RunFailure(
-            origin="finalization",
-            exception_type="ControlSignal",
-            message="stop",
-        )
-        assert run.exception is signal
+        assert run.status == "completed"
+        assert run.failure is None
+        assert run.exception is None
+        assert run.persistence_error is None
         assert persisted == [run.record]
 
     asyncio.run(_run())

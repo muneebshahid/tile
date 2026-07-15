@@ -125,6 +125,7 @@ class Run:
         self._record = record
         self._events: list[AgentEvent] = []
         self._exception: BaseException | None = None
+        self._persistence_error: BaseException | None = None
         self._changed = asyncio.Event()
         self._on_done = on_done
         self._on_record = on_record
@@ -176,6 +177,16 @@ class Run:
         return self._exception
 
     @property
+    def persistence_error(self) -> BaseException | None:
+        """Return the error that left the durable terminal record unwritten.
+
+        A non-None value means the run's status and outcome are authoritative
+        on this handle, but the run store may still report the run as running.
+        """
+
+        return self._persistence_error
+
+    @property
     def output_text(self) -> str | None:
         """Return the text of the run's latest completed assistant message.
 
@@ -190,13 +201,16 @@ class Run:
 
     @property
     def outcome(self) -> RunOutcome | None:
-        """Return the terminal run outcome once the agent run has ended.
+        """Return the run outcome as soon as the agent run has ended.
 
-        Returns None while the run is in flight and for runs that ended
-        without a verdict (execution failure or abort); the run status and
-        error message carry that story.
+        Available from the moment the run's end event is published, before
+        the terminal status lands. Returns None before then and for runs
+        that ended without a verdict (execution failure or abort); the run
+        status and error message carry that story.
         """
 
+        if self._record.status == "running":
+            return _event_outcome(self._events)
         return self._record.outcome
 
     @property
@@ -239,65 +253,48 @@ class Run:
             self._publish(event)
 
     def _finalize(self, task: asyncio.Task[None]) -> None:
-        """Release owner state and record a terminal run status."""
+        """Record the terminal run state, then persist and release it.
+
+        The terminal status and outcome are derived only from the task's
+        execution result and written exactly once. Persistence and owner
+        release are bookkeeping: their failures are logged and exposed, but
+        never rewrite what the caller sees.
+        """
 
         task_error = _task_error(task)
-        try:
-            self._on_done(self)
-            if task_error is not None:
-                self._fail(task_error, origin=_execution_failure_origin(task_error))
-            elif task.cancelled():
-                self._abort()
-            else:
-                self._complete()
-        except Exception as finalization_error:
-            self._fail_from_finalization_error(task_error, finalization_error)
-        except BaseException as control_error:
-            self._fail_from_finalization_error(task_error, control_error)
-            self._persist_terminal_record_best_effort()
-            raise
-
-        self._persist_terminal_record()
-
-    def _fail_from_finalization_error(
-        self,
-        task_error: BaseException | None,
-        finalization_error: BaseException,
-    ) -> None:
-        """Preserve a task failure, or fail from the finalization error."""
-
         if task_error is not None:
-            _log_secondary_finalization_error(finalization_error)
             self._fail(task_error, origin=_execution_failure_origin(task_error))
-            return
-        self._fail(finalization_error, origin="finalization")
+        elif task.cancelled():
+            self._abort()
+        else:
+            self._complete()
+        try:
+            self._persist_terminal_record()
+        finally:
+            self._release_owner()
 
     def _persist_terminal_record(self) -> None:
-        """Persist terminal state and classify a store failure as finalization."""
-
-        try:
-            self._on_record(self._record)
-        except Exception as error:
-            self._record_persistence_failure(error)
-        except BaseException as control_error:
-            self._record_persistence_failure(control_error)
-            raise
-
-    def _persist_terminal_record_best_effort(self) -> None:
-        """Persist without replacing a primary owner control exception."""
+        """Persist the terminal record without touching the live run state."""
 
         try:
             self._on_record(self._record)
         except BaseException as persistence_error:
-            _log_secondary_finalization_error(persistence_error)
+            self._persistence_error = persistence_error
+            _log_run_bookkeeping_error(
+                "Terminal run record could not be persisted", persistence_error
+            )
+            if not isinstance(persistence_error, Exception):
+                raise
 
-    def _record_persistence_failure(self, error: BaseException) -> None:
-        """Keep a primary run failure or record a finalization failure."""
+    def _release_owner(self) -> None:
+        """Release owner state without touching the live run state."""
 
-        if self.status == "failed":
-            _log_secondary_finalization_error(error)
-            return
-        self._fail(error, origin="finalization")
+        try:
+            self._on_done(self)
+        except BaseException as release_error:
+            _log_run_bookkeeping_error("Run owner release failed", release_error)
+            if not isinstance(release_error, Exception):
+                raise
 
     def _complete(self) -> None:
         """Record successful run execution."""
@@ -335,12 +332,17 @@ class Run:
         failure: RunFailure | None = None,
         exception: BaseException | None = None,
     ) -> None:
-        """Set the terminal record state and wake subscribers."""
+        """Set the terminal record state and wake subscribers.
+
+        This transition must not raise: the end timestamp is clamped so a
+        backward clock step cannot trip the record's lifecycle validator and
+        strand the run in a running state.
+        """
 
         source = _latest_provider_source(self._events)
         self._record = self._record.finish(
             status=status,
-            ended_at=datetime.now(UTC),
+            ended_at=max(datetime.now(UTC), self._record.started_at),
             provider=source.provider if source is not None else None,
             model=source.model if source is not None else None,
             outcome=_event_outcome(self._events) if status == "completed" else None,
@@ -480,7 +482,7 @@ class AgentRuntime:
             self._run_store.update_run(
                 record.finish(
                     status="failed",
-                    ended_at=datetime.now(UTC),
+                    ended_at=max(datetime.now(UTC), record.started_at),
                     failure=RunFailure(
                         origin="submission",
                         exception_type=type(error).__name__,
@@ -489,7 +491,9 @@ class AgentRuntime:
                 )
             )
         except BaseException as abandonment_error:
-            _log_abandoned_record_error(abandonment_error)
+            _log_run_bookkeeping_error(
+                "Abandoned run record could not be persisted", abandonment_error
+            )
 
     def _create_run_record(self, session_id: str) -> RunRecord:
         """Persist one running summary before provider execution can start."""
@@ -854,22 +858,10 @@ def _execution_failure_origin(error: BaseException) -> RunFailureOrigin:
     return "execution"
 
 
-def _log_secondary_finalization_error(error: BaseException) -> None:
-    """Log finalization failure without replacing the primary task failure."""
+def _log_run_bookkeeping_error(message: str, error: BaseException) -> None:
+    """Log a bookkeeping failure that must not rewrite the run's terminal state."""
 
-    logger.error(
-        "Run finalization also failed",
-        exc_info=(type(error), error, error.__traceback__),
-    )
-
-
-def _log_abandoned_record_error(error: BaseException) -> None:
-    """Log an unpersisted submission abandonment without masking its cause."""
-
-    logger.error(
-        "Abandoned run record could not be persisted",
-        exc_info=(type(error), error, error.__traceback__),
-    )
+    logger.error(message, exc_info=(type(error), error, error.__traceback__))
 
 
 def _result_outcome(terminal_details: ToolDetails | None) -> RunOutcome | None:

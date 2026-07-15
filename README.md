@@ -169,9 +169,13 @@ version markers, even when they share one database file. A running record is
 written before the prompt enters history, so a rejected submission never
 leaves a user message without a run record; if submission fails after the
 record exists, the record is finished as `failed` with a `submission`-origin
-failure. The terminal state is written after runtime cleanup. A hard process
-death may therefore leave a record marked `running`; automatic interruption
-classification and recovery are outside this contract.
+failure. A run's terminal status and outcome are derived only from agent
+execution; the terminal store write is best-effort bookkeeping. When that
+write fails, the live `Run` handle keeps the true state and exposes the error
+as `run.persistence_error`, while the store retains its last written state
+and may report the run as `running`. A hard process death leaves the same
+stale `running` record; automatic interruption classification and recovery
+are outside this contract.
 
 ## Typed results
 
