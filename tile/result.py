@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, TypeAlias
 
-from pydantic import BaseModel, Field, SerializeAsAny
+from pydantic import BaseModel, ConfigDict, Field, SerializeAsAny
 
 from tile.types.tools import JsonObject
 
@@ -42,6 +42,8 @@ class Completed(BaseModel):
     its plain ``JsonObject`` form instead of the original model type.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     type: Literal["completed"] = "completed"
     value: str | JsonObject | SerializeAsAny[BaseModel] = Field(
         union_mode="left_to_right"
@@ -58,6 +60,8 @@ class AgentFailure(BaseModel):
     this cause records the model's own verdict that the task failed.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     type: Literal["agent_failure"] = "agent_failure"
     reason: str
 
@@ -69,6 +73,8 @@ class ExecutionFailure(BaseModel):
     in-process exception stays available on the run handle for local
     debugging; it is not part of the serialized contract.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     type: Literal["execution_failure"] = "execution_failure"
     origin: ExecutionFailureOrigin
@@ -86,12 +92,16 @@ class Failed(BaseModel):
     an execution failure instead of overloading optional fields.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     type: Literal["failed"] = "failed"
     cause: FailureCause = Field(discriminator="type")
 
 
 class Aborted(BaseModel):
     """Terminal outcome for a run cancelled before it reached a verdict."""
+
+    model_config = ConfigDict(frozen=True)
 
     type: Literal["aborted"] = "aborted"
 

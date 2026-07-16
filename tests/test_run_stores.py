@@ -98,6 +98,26 @@ def test_run_record_transitions_from_running_to_completed() -> None:
     )
 
 
+def test_terminal_outcome_models_reject_mutation() -> None:
+    """Keep a finished record's outcome frozen through every alias."""
+
+    cause = AgentFailure(reason="cannot deliver")
+    outcome = Failed(cause=cause)
+    record = _running_record().finish(outcome=outcome)
+
+    with pytest.raises(ValidationError):
+        cause.reason = "rewritten"
+    with pytest.raises(ValidationError):
+        outcome.cause = FAILURE
+    record_outcome = record.outcome
+    assert isinstance(record_outcome, Failed)
+    with pytest.raises(ValidationError):
+        record_outcome.cause = FAILURE
+
+    assert record.status == "completed"
+    assert record.outcome == Failed(cause=AgentFailure(reason="cannot deliver"))
+
+
 def test_run_record_finish_clamps_end_to_start() -> None:
     """Keep a finished record's end at or after its start on clock steps."""
 
