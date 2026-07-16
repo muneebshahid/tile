@@ -66,7 +66,7 @@ from tile.events import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-from tile.lifecycle import LifecycleLedger
+from tile.lifecycle import OpenScopeTracker
 from tile.types.stream_events import ProviderSource
 
 logger = logging.getLogger(__name__)
@@ -96,12 +96,11 @@ class _AgentRunObservation:
     def observe(self, event: AgentEvent) -> None:
         """Record the latest assistant turn and first terminating tool details."""
 
-        if isinstance(event, MessageEndEvent) and event.assistant_turn is not None:
+        if isinstance(event, MessageEndEvent):
             self.last_turn = event.assistant_turn
         if (
             self.terminal_details is None
             and isinstance(event, ToolExecutionEndEvent)
-            and event.outcome is not None
             and event.outcome.terminate
             and isinstance(event.outcome.details, CompleteDetails | FailDetails)
         ):
@@ -126,8 +125,10 @@ class Run:
     ) -> None:
         """Start a run that drives the given event source to completion.
 
-        ``on_event`` observes each event after it is published to the live
-        log; its failure fails the run but can never suppress the event.
+        The run publishes its own ``RunStartEvent`` before the event source
+        starts, so the log opens the run scope on every path. ``on_event``
+        observes each producer event after it is published to the live log;
+        its failure fails the run but can never suppress the event.
         """
 
         self._record = record
@@ -136,10 +137,11 @@ class Run:
         self._persistence_error: BaseException | None = None
         self._changed = asyncio.Event()
         self._finalized = asyncio.Event()
-        self._ledger = LifecycleLedger()
+        self._scopes = OpenScopeTracker()
         self._on_done = on_done
         self._on_record = on_record
         self._on_event = on_event
+        self._publish(RunStartEvent())
         self._task = asyncio.create_task(self._pump(events))
         self._task.add_done_callback(self._finalize)
 
@@ -210,7 +212,7 @@ class Run:
         """
 
         for event in reversed(self._events):
-            if isinstance(event, MessageEndEvent) and event.assistant_turn is not None:
+            if isinstance(event, MessageEndEvent):
                 return _assistant_text(event.assistant_turn)
         return None
 
@@ -225,7 +227,7 @@ class Run:
         """
 
         if self._record.status == "running":
-            return self._ledger.committed_outcome
+            return self._scopes.committed_outcome
         return self._record.outcome
 
     @property
@@ -263,12 +265,11 @@ class Run:
     def abort(self) -> None:
         """Request cancellation of the run task.
 
-        A no-op once the run end is committed: cancellation racing the
-        final tick cannot relabel a concluded run as aborted.
+        Cancellation after the run end is committed still stops the event
+        source, but finalization keeps the committed outcome, so a late
+        abort cannot relabel a concluded run as aborted.
         """
 
-        if self._ledger.committed_outcome is not None:
-            return
         if not self._task.done():
             self._task.cancel()
 
@@ -336,20 +337,12 @@ class Run:
         scopes closed, rather than as completed without a verdict.
         """
 
-        outcome = self._ledger.committed_outcome
-        if outcome is None:
-            outcome = _missing_run_end_failure()
-            self._close_open_scopes(outcome)
-        self._finish(outcome)
+        self._conclude(_missing_run_end_failure())
 
     def _abort(self) -> None:
         """Finish the run as aborted, keeping an already committed outcome."""
 
-        outcome = self._ledger.committed_outcome
-        if outcome is None:
-            outcome = Aborted()
-            self._close_open_scopes(outcome)
-        self._finish(outcome)
+        self._conclude(Aborted())
 
     def _fail(self, error: BaseException) -> None:
         """Finish the run with serializable and live execution diagnostics.
@@ -359,39 +352,45 @@ class Run:
         handle for local debugging.
         """
 
-        committed = self._ledger.committed_outcome
-        if committed is not None:
+        if self._scopes.committed_outcome is not None:
             _log_run_bookkeeping_error(
                 "Run event source failed after its run end was committed", error
             )
-            self._finish(committed, exception=error)
-            return
-        outcome = Failed(
+        fallback = Failed(
             cause=_execution_failure(error, _execution_failure_origin(error))
         )
-        self._close_open_scopes(outcome)
-        self._finish(outcome, exception=error)
+        self._conclude(fallback, exception=error)
 
-    def _close_open_scopes(self, outcome: RunOutcome) -> None:
-        """Append synthesized end events for scopes the producer left open.
+    def _conclude(
+        self, fallback: RunOutcome, *, exception: BaseException | None = None
+    ) -> None:
+        """Close the remaining scopes, then finish with the run's outcome.
 
-        Synthesized closures bypass the event observer: they carry no
-        history and finalization must not depend on an observer that may
-        be the reason the run is closing abnormally.
+        The committed outcome always wins over the fallback; interruptions
+        are synthesized exactly when scopes remain open. Synthesized events
+        bypass the event observer: they carry no history, and finalization
+        must not depend on an observer that may be the reason the run is
+        closing abnormally.
         """
 
-        self._events.extend(self._ledger.close(outcome))
-        self._changed.set()
+        outcome = self._scopes.committed_outcome
+        if outcome is None:
+            outcome = fallback
+        closing_events = self._scopes.close(outcome)
+        if closing_events:
+            self._events.extend(closing_events)
+            self._changed.set()
+        self._finish(outcome, exception=exception)
 
     def _publish(self, event: AgentEvent) -> None:
-        """Validate one event, publish it, then let the observer see it.
+        """Track one event, publish it, then let the observer see it.
 
-        Publication order is the contract: a validated event is in the
-        live log and visible to subscribers before observation, so an
-        observer failure fails the run but can never suppress the event.
+        Publication order is the contract: an event is in the live log and
+        visible to subscribers before observation, so an observer failure
+        fails the run but can never suppress the event.
         """
 
-        self._ledger.observe(event)
+        self._scopes.observe(event)
         self._events.append(event)
         self._changed.set()
         self._on_event(event)
@@ -580,7 +579,6 @@ class AgentRuntime:
     ) -> AsyncIterator[AgentEvent]:
         """Yield the lifecycle-paired event stream for one prompt run."""
 
-        yield RunStartEvent()
         events = (
             self._plain_prompt_events(session_id)
             if result is None
@@ -672,7 +670,13 @@ class AgentRuntime:
             self._active_runs.discard(run)
 
     def _heal_unanswered_tool_calls(self, run: Run) -> None:
-        """Persist error results for tool calls the run left unanswered."""
+        """Persist error results for tool calls durable history left unanswered.
+
+        Healing reads the history store, not the run's live event log: a
+        failed history observation can leave a tool result in the log that
+        never became durable, and it is durable history the next prompt
+        replays.
+        """
 
         results = [
             ToolResultTurn(
@@ -681,7 +685,9 @@ class AgentRuntime:
                 content=[ToolTextContent(text="Tool execution did not complete.")],
                 is_error=True,
             )
-            for call in _unanswered_tool_calls(run.conversation_items)
+            for call in _unanswered_tool_calls(
+                self._history_store.get_history(run.session_id)
+            )
         ]
         if results:
             self._history_store.append_history(run.session_id, results)
@@ -858,12 +864,10 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
     """
 
     if isinstance(event, MessageEndEvent):
-        if event.assistant_turn is None or event.assistant_turn.status != "completed":
+        if event.assistant_turn.status != "completed":
             return ()
         return (event.assistant_turn,)
     if isinstance(event, ToolExecutionEndEvent):
-        if event.outcome is None:
-            return ()
         return (event.outcome.tool_result_turn,)
     if isinstance(event, ResultFollowUpEvent):
         return (event.message,)
@@ -876,7 +880,7 @@ def _latest_provider_source(
     """Return the latest provider identity available from a finalized message."""
 
     for event in reversed(events):
-        if isinstance(event, MessageEndEvent) and event.assistant_turn is not None:
+        if isinstance(event, MessageEndEvent):
             return event.assistant_turn.source
     return None
 
@@ -940,7 +944,7 @@ def _missing_run_end_failure() -> Failed:
     return Failed(
         cause=ExecutionFailure(
             origin="execution",
-            exception_type="LifecycleProtocolError",
+            exception_type="RuntimeError",
             message="The run ended without a committed run end event.",
         )
     )

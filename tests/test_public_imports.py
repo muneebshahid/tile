@@ -16,7 +16,6 @@ from tile import (
     HistoryStore,
     InMemoryHistoryStore,
     InMemoryRunStore,
-    LifecycleProtocolError,
     Run,
     RunRecord,
     RunStore,
@@ -68,7 +67,6 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert len(run_records) == 1
     assert isinstance(run_records[0], RunRecord)
     assert run_records[0].status == "completed"
-    assert issubclass(LifecycleProtocolError, RuntimeError)
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
     assert issubclass(TurnFailedError, RuntimeError)

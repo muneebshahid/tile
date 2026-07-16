@@ -1,25 +1,28 @@
 """Agent run events and provider stream callable contracts.
 
-Lifecycle pairing contract: every published start event has exactly one
-matching end event, for every in-process termination path. End events carry
-a ``LifecycleTermination`` describing how their scope closed; a scope torn
-down by an exception or cancellation is closed with a synthesized end whose
-payload fields are ``None``. Scopes nest strictly:
-``run ⊃ agent attempt ⊃ turn ⊃ message / tool executions``, and end events
-close innermost-first, so ``RunEndEvent`` is always the final event of a
-run. Provider stream fragments (text, reasoning, and tool-call start/delta/
-end updates carried by ``MessageUpdateEvent``) are message content, not
-lifecycle scopes: their outstanding state is terminated by the containing
-``MessageEndEvent``. Hard process death is outside this contract — no
-process can publish an event after it has stopped.
+Lifecycle pairing contract: every published start event is followed by
+exactly one end event or interrupted event, for every in-process
+termination path. An end event is the producer finishing its scope and
+carries the scope's payload; an interrupted event is the runtime closing a
+scope that a failure or abort tore down, and carries no cause of its own —
+the run's ``RunEndEvent`` outcome names, exactly once, why anything was
+interrupted. Scopes nest strictly:
+``run ⊃ agent attempt ⊃ turn ⊃ message / tool executions``, interruptions
+close innermost-first, and ``RunEndEvent`` is the final event of every
+run. Provider stream fragments (text, reasoning, and tool-call
+start/delta/end updates carried by ``MessageUpdateEvent``) are message
+content, not lifecycle scopes: their outstanding state is terminated by
+the containing message's end or interruption. Hard process death is
+outside this contract — no process can publish an event after it has
+stopped.
 """
 
 from collections.abc import Awaitable, Sequence
-from typing import Literal, Protocol, Self, TypeAlias
+from typing import Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel
 
-from tile.result import ExecutionFailure, RunOutcome
+from tile.result import RunOutcome
 from tile.types.contracts import AsyncEventStream
 from tile.types.conversation import (
     AssistantTurn,
@@ -55,36 +58,6 @@ class StreamFn(Protocol):
     ) -> Awaitable[AsyncEventStream]: ...
 
 
-class LifecycleCompleted(BaseModel):
-    """A lifecycle scope closed normally by its own producer."""
-
-    model_config = ConfigDict(frozen=True)
-
-    type: Literal["lifecycle_completed"] = "lifecycle_completed"
-
-
-class LifecycleFailed(BaseModel):
-    """A lifecycle scope was torn down by an execution failure."""
-
-    model_config = ConfigDict(frozen=True)
-
-    type: Literal["lifecycle_failed"] = "lifecycle_failed"
-    cause: ExecutionFailure
-
-
-class LifecycleAborted(BaseModel):
-    """A lifecycle scope was torn down by cancellation."""
-
-    model_config = ConfigDict(frozen=True)
-
-    type: Literal["lifecycle_aborted"] = "lifecycle_aborted"
-
-
-LifecycleTermination: TypeAlias = (
-    LifecycleCompleted | LifecycleFailed | LifecycleAborted
-)
-
-
 class AgentEvent(BaseModel):
     """Base event emitted by the stateless agent runner."""
 
@@ -92,7 +65,11 @@ class AgentEvent(BaseModel):
 
 
 class RunStartEvent(AgentEvent):
-    """Marks the start of one prompt run."""
+    """Marks the start of one prompt run.
+
+    Published by the run itself before its event source starts, so every
+    run log begins with a run start on every path.
+    """
 
     type: Literal["run_start"] = "run_start"
 
@@ -102,8 +79,8 @@ class RunEndEvent(AgentEvent):
 
     Exactly one run end closes every run, as its final event. The outcome
     is the same discriminated value recorded on the durable run summary;
-    its variant implies how execution terminated, so there is no separate
-    termination field to deviate from it.
+    its variant implies how execution terminated and names the cause of
+    any interruptions in the log.
     """
 
     type: Literal["run_end"] = "run_end"
@@ -120,14 +97,19 @@ class AgentStartEvent(AgentEvent):
 class AgentEndEvent(AgentEvent):
     """Marks the end of one stateless agent attempt.
 
-    ``termination`` describes how the attempt scope closed, not whether the
-    task succeeded: an attempt whose turn errored in-band still closes
-    ``completed``, and the run-level verdict lives on ``RunEndEvent``.
+    An attempt whose turn errored in-band still ends normally; the
+    run-level verdict lives on ``RunEndEvent``.
     """
 
     type: Literal["agent_end"] = "agent_end"
     attempt: int = 0
-    termination: LifecycleTermination = LifecycleCompleted()
+
+
+class AgentInterruptedEvent(AgentEvent):
+    """Closes an agent attempt torn down by a failure or abort."""
+
+    type: Literal["agent_interrupted"] = "agent_interrupted"
+    attempt: int = 0
 
 
 class ResultFollowUpEvent(AgentEvent):
@@ -144,22 +126,23 @@ class TurnStartEvent(AgentEvent):
 
 
 class TurnEndEvent(AgentEvent):
-    """Marks the end of a single assistant turn.
-
-    ``assistant_turn`` is None only on a synthesized closure, when the turn
-    was torn down before its message finalized.
-    """
+    """Marks the end of a single assistant turn."""
 
     type: Literal["turn_end"] = "turn_end"
-    assistant_turn: AssistantTurn | None = None
-    tool_executions: list[ToolExecutionOutcome] = []
-    termination: LifecycleTermination = LifecycleCompleted()
+    assistant_turn: AssistantTurn
+    tool_executions: list[ToolExecutionOutcome]
 
     @property
     def tool_result_turns(self) -> list[ToolResultTurn]:
         """Return replayable tool result projections for this turn."""
 
         return [execution.tool_result_turn for execution in self.tool_executions]
+
+
+class TurnInterruptedEvent(AgentEvent):
+    """Closes a turn torn down by a failure or abort."""
+
+    type: Literal["turn_interrupted"] = "turn_interrupted"
 
 
 class MessageStartEvent(AgentEvent):
@@ -177,15 +160,16 @@ class MessageUpdateEvent(AgentEvent):
 
 
 class MessageEndEvent(AgentEvent):
-    """Marks the end of a message lifecycle event.
-
-    ``assistant_turn`` is None only on a synthesized closure, when the
-    message was torn down before the provider stream finalized it.
-    """
+    """Marks the end of a message lifecycle event."""
 
     type: Literal["message_end"] = "message_end"
-    assistant_turn: AssistantTurn | None = None
-    termination: LifecycleTermination = LifecycleCompleted()
+    assistant_turn: AssistantTurn
+
+
+class MessageInterruptedEvent(AgentEvent):
+    """Closes a message torn down before the provider stream finalized it."""
+
+    type: Literal["message_interrupted"] = "message_interrupted"
 
 
 class ToolExecutionStartEvent(AgentEvent):
@@ -198,27 +182,17 @@ class ToolExecutionStartEvent(AgentEvent):
 
 
 class ToolExecutionEndEvent(AgentEvent):
-    """Marks the end of a tool execution.
-
-    ``outcome`` is None only on a synthesized closure, when the execution
-    was torn down before the tool produced a result.
-    """
+    """Marks the end of a tool execution."""
 
     type: Literal["tool_execution_end"] = "tool_execution_end"
+    outcome: ToolExecutionOutcome
+
+
+class ToolExecutionInterruptedEvent(AgentEvent):
+    """Closes a tool execution torn down before the tool produced a result."""
+
+    type: Literal["tool_execution_interrupted"] = "tool_execution_interrupted"
     call_id: str
-    outcome: ToolExecutionOutcome | None = None
-    termination: LifecycleTermination = LifecycleCompleted()
-
-    @model_validator(mode="after")
-    def _validate_call_identity(self) -> Self:
-        """Reject an outcome recorded against a different tool call."""
-
-        if (
-            self.outcome is not None
-            and self.outcome.tool_result_turn.call_id != self.call_id
-        ):
-            raise ValueError("Tool execution outcome belongs to a different call.")
-        return self
 
 
 AgentRunEvent: TypeAlias = (
@@ -226,12 +200,16 @@ AgentRunEvent: TypeAlias = (
     | RunEndEvent
     | AgentStartEvent
     | AgentEndEvent
+    | AgentInterruptedEvent
     | TurnStartEvent
     | TurnEndEvent
+    | TurnInterruptedEvent
     | MessageStartEvent
     | MessageUpdateEvent
     | MessageEndEvent
+    | MessageInterruptedEvent
     | ToolExecutionStartEvent
     | ToolExecutionEndEvent
+    | ToolExecutionInterruptedEvent
     | ResultFollowUpEvent
 )

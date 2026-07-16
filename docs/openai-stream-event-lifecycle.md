@@ -298,31 +298,36 @@ sequenceDiagram
 
 ## Run Lifecycle Pairing
 
-Every published start event has exactly one matching end event, for every
-in-process termination path. Scopes nest strictly; the run's event log is
-validated as events are published, and finalization closes any scopes a
-failure or abort tore down before their ends were published. Hard process
+Every published start event is followed by exactly one end event or
+interrupted event, for every in-process termination path. An end event is
+the producer finishing its scope and carries the scope's payload; an
+interrupted event is the runtime closing a scope that a failure or abort
+tore down. Interrupted events carry no cause of their own: the run end's
+outcome names, exactly once, why anything was interrupted. Hard process
 death is outside this contract.
 
-| Scope | Start | End | Synthesized closure payload |
+| Scope | Start | Producer end | Interruption |
 | --- | --- | --- | --- |
-| run | `RunStartEvent` | `RunEndEvent(outcome)` | outcome = `Failed(ExecutionFailure)` or `Aborted` |
-| agent attempt | `AgentStartEvent(attempt)` | `AgentEndEvent(attempt, termination)` | no payload |
-| turn | `TurnStartEvent` | `TurnEndEvent(termination, ...)` | `assistant_turn=None`, `tool_executions=[]` |
-| message | `MessageStartEvent` | `MessageEndEvent(termination, ...)` | `assistant_turn=None` |
-| tool execution | `ToolExecutionStartEvent(call_id)` | `ToolExecutionEndEvent(call_id, termination, ...)` | `outcome=None` |
+| run | `RunStartEvent` | `RunEndEvent(outcome)` | `RunEndEvent(outcome)` synthesized |
+| agent attempt | `AgentStartEvent(attempt)` | `AgentEndEvent(attempt)` | `AgentInterruptedEvent(attempt)` |
+| turn | `TurnStartEvent` | `TurnEndEvent(assistant_turn, tool_executions)` | `TurnInterruptedEvent` |
+| message | `MessageStartEvent` | `MessageEndEvent(assistant_turn)` | `MessageInterruptedEvent` |
+| tool execution | `ToolExecutionStartEvent(call_id)` | `ToolExecutionEndEvent(outcome)` | `ToolExecutionInterruptedEvent(call_id)` |
 
 Rules:
 
+- The run publishes its own `RunStartEvent` before the event source
+  starts, so every run log begins with a run start on every path,
+  including an abort that lands before the first tick.
 - `RunEndEvent` is the final event of every run, exactly once, and commits
-  the run's terminal outcome. Its outcome variant implies how execution
-  terminated, so it carries no separate termination field.
-- Other end events carry a `LifecycleTermination`: `LifecycleCompleted`
-  when the producer closed the scope itself (including turns that errored
-  in-band), `LifecycleFailed(cause)` or `LifecycleAborted` when
-  finalization closed it.
-- Synthesized closures run innermost-first: tool execution, then turn,
-  then agent attempt, then the run end.
+  the run's terminal outcome — emitted by the producer on success,
+  synthesized at finalization otherwise. Its outcome variant implies how
+  execution terminated.
+- Interruptions close innermost-first: tool execution, then turn, then
+  agent attempt, then the run end.
+- An attempt whose turn errored in-band still ends normally with its
+  producer events; the failure story lives on the errored assistant turn
+  and the run end's outcome.
 - Typed-result runs close each agent attempt before the follow-up message
   or next attempt starts; the final `AgentEndEvent` precedes `RunEndEvent`.
 - Terminal record persistence happens after the run end is committed;
@@ -331,20 +336,19 @@ Rules:
 - Provider stream fragments (`TextStart/End`, `ReasoningStart/End`,
   `ToolCallStart/Delta/End`, and the provider `StreamStart/Done/Error`
   events) are message content, not lifecycle scopes; the containing
-  `MessageEndEvent` terminates their outstanding state.
-- An event that violates the pairing contract (duplicate end, mismatched
-  end, any event after the committed run end) raises
-  `LifecycleProtocolError`, failing the run without logging the offending
-  event. A producer that completes without committing a run end fails the
-  same way, delivered as a terminal state because there is nothing left
-  to raise into.
+  message's end or interruption terminates their outstanding state.
+- The guarantee is directional and unvalidated: producers are
+  runtime-internal and pinned by tests, so an end event without a matching
+  start is tolerated rather than rejected, and a producer that completes
+  without committing a run end fails the run with an explicit
+  "ended without a committed run end event" execution failure.
 
 Abort ordering during a tool call:
 
 ```text
-ToolExecutionEnd(aborted)
-TurnEnd(aborted)
-AgentEnd(aborted)
+ToolExecutionInterrupted(call_id)
+TurnInterrupted
+AgentInterrupted(attempt)
 RunEnd(outcome=Aborted)
 ```
 

@@ -120,17 +120,13 @@ async def _run_agent_loop(
             ):
                 if (
                     isinstance(agent_event, ToolExecutionEndEvent)
-                    and agent_event.outcome is not None
                     and agent_event.outcome.terminate
                 ):
                     should_terminate = True
                 if isinstance(agent_event, TurnEndEvent):
                     if agent_event.tool_executions:
                         has_tool_executions = True
-                    if (
-                        agent_event.assistant_turn is None
-                        or agent_event.assistant_turn.status != "completed"
-                    ):
+                    if agent_event.assistant_turn.status != "completed":
                         turn_errored = True
                 yield agent_event
 
@@ -189,12 +185,10 @@ async def _handle_stream_done_event(
             arguments=tool_call.arguments,
             tool_executor=tool_executor,
         ):
-            if (
-                isinstance(agent_event, ToolExecutionEndEvent)
-                and agent_event.outcome is not None
-            ):
-                run_history.append(agent_event.outcome.tool_result_turn)
-                tool_executions.append(agent_event.outcome)
+            if isinstance(agent_event, ToolExecutionEndEvent):
+                outcome = agent_event.outcome
+                run_history.append(outcome.tool_result_turn)
+                tool_executions.append(outcome)
 
             yield agent_event
 
@@ -234,7 +228,7 @@ async def _execute_tool(
         tool_name=tool_name,
         arguments=arguments,
     )
-    yield ToolExecutionEndEvent(call_id=call_id, outcome=outcome)
+    yield ToolExecutionEndEvent(outcome=outcome)
 
 
 def _collect_tool_calls(blocks: Sequence[AssistantBlock]) -> list[ToolCallBlock]:

@@ -58,7 +58,6 @@ from tile.types.tools import (
     ToolInput,
     ToolResult,
 )
-from tests.support.event_payloads import expect_outcome, expect_turn
 from tests.support.agent_streams import (
     ProviderStreamMock,
     empty_stream,
@@ -283,7 +282,7 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
     message_end = _expect_event_type(events[3], MessageEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
     assert history == [UserMessage(content="Hello, Tile")]
-    assert expect_turn(message_end.assistant_turn).response_id == "resp_done"
+    assert message_end.assistant_turn.response_id == "resp_done"
 
 
 def test_agent_run_yields_expected_event_sequence_for_tool_use_loop() -> None:
@@ -398,14 +397,14 @@ def test_agent_run_emits_tool_execution_outcome_for_tool_use_loop() -> None:
     tool_execution_start = _expect_event_type(events[10], ToolExecutionStartEvent)
     tool_execution_end = _expect_event_type(events[11], ToolExecutionEndEvent)
     first_turn_end = _expect_event_type(events[12], TurnEndEvent)
-    first_final_message = expect_turn(first_message_end.assistant_turn)
+    first_final_message = first_message_end.assistant_turn
 
     assert first_final_message.response_id == "resp_tool_call"
     assert first_final_message.stop_reason == "tool_use"
     assert tool_execution_start.call_id == "call_123"
     assert tool_execution_start.tool_name == "get_weather"
     assert tool_execution_start.arguments == {"city": "Munich"}
-    tool_execution_outcome = expect_outcome(tool_execution_end.outcome)
+    tool_execution_outcome = tool_execution_end.outcome
     tool_result_turn = tool_execution_outcome.tool_result_turn
     assert tool_result_turn.call_id == "call_123"
     assert tool_result_turn.tool_name == "get_weather"
@@ -413,10 +412,10 @@ def test_agent_run_emits_tool_execution_outcome_for_tool_use_loop() -> None:
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
     assert tool_result_turn.is_error is False
-    assert expect_turn(first_turn_end.assistant_turn).response_id == "resp_tool_call"
-    assert expect_turn(first_turn_end.assistant_turn).stop_reason == "tool_use"
-    assert expect_turn(first_turn_end.assistant_turn).status == "completed"
-    assert expect_turn(first_turn_end.assistant_turn).blocks == [run.tool_call_block]
+    assert first_turn_end.assistant_turn.response_id == "resp_tool_call"
+    assert first_turn_end.assistant_turn.stop_reason == "tool_use"
+    assert first_turn_end.assistant_turn.status == "completed"
+    assert first_turn_end.assistant_turn.blocks == [run.tool_call_block]
     first_turn_outcome = first_turn_end.tool_executions[0]
     assert first_turn_outcome.tool_result_turn.call_id == "call_123"
     assert first_turn_outcome.tool_result_turn.tool_name == "get_weather"
@@ -432,13 +431,13 @@ def test_agent_run_sends_tool_result_history_to_follow_up_turn() -> None:
 
     second_message_end = _expect_event_type(events[18], MessageEndEvent)
     second_turn_end = _expect_event_type(events[19], TurnEndEvent)
-    second_final_message = expect_turn(second_message_end.assistant_turn)
+    second_final_message = second_message_end.assistant_turn
 
     assert second_final_message.response_id == "resp_follow_up"
     assert second_final_message.stop_reason == "stop"
-    assert expect_turn(second_turn_end.assistant_turn).response_id == "resp_follow_up"
-    assert expect_turn(second_turn_end.assistant_turn).stop_reason == "stop"
-    assert expect_turn(second_turn_end.assistant_turn).blocks == [
+    assert second_turn_end.assistant_turn.response_id == "resp_follow_up"
+    assert second_turn_end.assistant_turn.stop_reason == "stop"
+    assert second_turn_end.assistant_turn.blocks == [
         TextBlock(text="It is sunny in Munich.")
     ]
     assert second_turn_end.tool_executions == []
@@ -487,10 +486,10 @@ def test_agent_run_executes_registered_tool_definition() -> None:
     )
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
-    assert tool_text(expect_outcome(tool_execution_end.outcome).tool_result_turn) == (
+    assert tool_text(tool_execution_end.outcome.tool_result_turn) == (
         '{"temperature_c": 18, "condition": "sunny", "city": "Munich"}'
     )
-    assert expect_outcome(tool_execution_end.outcome).tool_result_turn.is_error is False
+    assert tool_execution_end.outcome.tool_result_turn.is_error is False
 
 
 def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
@@ -532,7 +531,7 @@ def test_agent_run_exposes_tool_details_outside_replay_turn() -> None:
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     turn_end = _expect_event_type(events[6], TurnEndEvent)
-    outcome = expect_outcome(tool_execution_end.outcome)
+    outcome = tool_execution_end.outcome
     turn_outcome = turn_end.tool_executions[0]
     assert outcome.details == ReadDetails(output=_tool_output_details())
     assert turn_outcome.details == outcome.details
@@ -576,17 +575,10 @@ def test_agent_run_continues_after_tool_execution_error() -> None:
 
     tool_execution_end = _expect_event_type(events[5], ToolExecutionEndEvent)
     _expect_event_type(events[-1], AgentEndEvent)
-    assert expect_outcome(tool_execution_end.outcome).tool_result_turn.is_error is True
-    assert (
-        tool_text(expect_outcome(tool_execution_end.outcome).tool_result_turn) == "boom"
-    )
-    assert (
-        expect_outcome(tool_execution_end.outcome).tool_result_turn.tool_name
-        == "fail_weather"
-    )
-    assert isinstance(
-        expect_outcome(tool_execution_end.outcome).details, ToolInvocationFailure
-    )
+    assert tool_execution_end.outcome.tool_result_turn.is_error is True
+    assert tool_text(tool_execution_end.outcome.tool_result_turn) == "boom"
+    assert tool_execution_end.outcome.tool_result_turn.tool_name == "fail_weather"
+    assert isinstance(tool_execution_end.outcome.details, ToolInvocationFailure)
 
     follow_up_request_history = provider.history(1)
     tool_result = expect_tool_result_turn(follow_up_request_history[2])
@@ -632,19 +624,15 @@ def test_agent_allows_model_to_correct_invalid_tool_arguments() -> None:
 
     executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
     assert calls == ["Munich"]
-    assert [
-        expect_outcome(event.outcome).tool_result_turn.is_error for event in executions
-    ] == [
+    assert [event.outcome.tool_result_turn.is_error for event in executions] == [
         True,
         False,
     ]
-    assert isinstance(
-        expect_outcome(executions[0].outcome).details, ToolInputValidationFailure
-    )
+    assert isinstance(executions[0].outcome.details, ToolInputValidationFailure)
     retry_result = expect_tool_result_turn(provider.history(1)[-1])
     assert retry_result.is_error is True
     assert "Invalid arguments for tool 'get_weather'" in tool_text(
-        expect_outcome(executions[0].outcome).tool_result_turn
+        executions[0].outcome.tool_result_turn
     )
     corrected_result = expect_tool_result_turn(provider.history(2)[-1])
     assert corrected_result.is_error is False
@@ -796,17 +784,17 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     message_end = _expect_event_type(events[3], MessageEndEvent)
     turn_end = _expect_event_type(events[4], TurnEndEvent)
     _expect_event_type(events[5], AgentEndEvent)
-    final_message = expect_turn(message_end.assistant_turn)
+    final_message = message_end.assistant_turn
 
     assert isinstance(events[0], AgentStartEvent)
     assert isinstance(events[1], TurnStartEvent)
     assert message_start.response_id == "resp_error"
     assert final_message.response_id == "resp_error"
     assert final_message.status == "error"
-    assert expect_turn(turn_end.assistant_turn).response_id == "resp_error"
-    assert expect_turn(turn_end.assistant_turn).stop_reason == "error"
-    assert expect_turn(turn_end.assistant_turn).status == "error"
-    assert expect_turn(turn_end.assistant_turn).error_message == "Socket closed"
+    assert turn_end.assistant_turn.response_id == "resp_error"
+    assert turn_end.assistant_turn.stop_reason == "error"
+    assert turn_end.assistant_turn.status == "error"
+    assert turn_end.assistant_turn.error_message == "Socket closed"
     assert turn_end.tool_executions == []
 
     provider.assert_awaited_once()

@@ -46,7 +46,6 @@ from tile.types.tools import (
     ToolTextContent,
 )
 from tile.result import Aborted, Completed, ExecutionFailure, Failed
-from tests.support.event_payloads import expect_outcome
 from tests.support.agent_streams import (
     TEST_PROVIDER,
     GatedProviderStreamMock,
@@ -366,9 +365,7 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
         assert await run.wait() == "completed"
         events = [event async for event in run.events()]
         executions = [e for e in events if isinstance(e, ToolExecutionEndEvent)]
-        assert [
-            expect_outcome(e.outcome).tool_result_turn.is_error for e in executions
-        ] == [
+        assert [e.outcome.tool_result_turn.is_error for e in executions] == [
             False,
             False,
         ]
@@ -769,7 +766,6 @@ def test_run_outcome_available_while_run_still_running() -> None:
         async def _events() -> AsyncIterator[AgentEvent]:
             """Commit a final outcome, then hold the run open."""
 
-            yield RunStartEvent()
             yield RunEndEvent(outcome=Completed(value="done"))
             await gate.wait()
 
@@ -825,9 +821,7 @@ def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
                 started_at=datetime.now(UTC),
                 model="gpt-5.4",
             ),
-            events=async_stream(
-                [RunStartEvent(), RunEndEvent(outcome=Completed(value="done"))]
-            ),
+            events=async_stream([RunEndEvent(outcome=Completed(value="done"))]),
             on_done=released.append,
             on_record=reject_record,
             on_event=lambda _: None,
@@ -918,9 +912,7 @@ def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
                     started_at=datetime.now(UTC),
                     model="gpt-5.4",
                 ),
-                events=async_stream(
-                    [RunStartEvent(), RunEndEvent(outcome=Completed(value="done"))]
-                ),
+                events=async_stream([RunEndEvent(outcome=Completed(value="done"))]),
                 on_done=interrupt,
                 on_record=persisted.append,
                 on_event=lambda _: None,
@@ -1221,7 +1213,7 @@ def test_session_prompt_persists_tool_result_at_execution_end() -> None:
         async for event in run.events():
             if isinstance(event, ToolExecutionEndEvent):
                 observed_tool_end = True
-                assert expect_outcome(event.outcome).tool_result_turn in session.history
+                assert event.outcome.tool_result_turn in session.history
         await run.wait()
 
         assert observed_tool_end
@@ -1448,9 +1440,7 @@ def test_provider_death_converges_on_failed_run_state(
     assert isinstance(events[0], RunStartEvent)
     assert isinstance(events[1], AgentStartEvent)
     streamed_turns = [
-        event.assistant_turn
-        for event in events
-        if isinstance(event, MessageEndEvent) and event.assistant_turn is not None
+        event.assistant_turn for event in events if isinstance(event, MessageEndEvent)
     ]
     if errored_turn_streamed:
         assert [turn.status for turn in streamed_turns] == ["error"]
