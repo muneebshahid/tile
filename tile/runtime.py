@@ -39,17 +39,18 @@ from tile.result import (
     NO_RESULT_REASON,
     RESULT_CONTRACT,
     RESULT_FOLLOW_UP,
+    Aborted,
+    AgentFailure,
     Completed,
+    ExecutionFailure,
+    ExecutionFailureOrigin,
     Failed,
     RunOutcome,
 )
 from tile.runs import (
-    RunFailure,
-    RunFailureOrigin,
     RunRecord,
     RunStatus,
     RunStore,
-    TerminalRunStatus,
 )
 from tile.tool_executor import ToolExecutor
 from tile.tools.complete import tool as complete_tool
@@ -159,15 +160,19 @@ class Run:
     def error_message(self) -> str | None:
         """Return the failure message when the run execution has failed."""
 
-        if self._record.failure is None:
+        failure = self.failure
+        if failure is None:
             return None
-        return self._record.failure.message
+        return failure.message
 
     @property
-    def failure(self) -> RunFailure | None:
+    def failure(self) -> ExecutionFailure | None:
         """Return serializable execution failure diagnostics, when available."""
 
-        return self._record.failure
+        outcome = self._record.outcome
+        if isinstance(outcome, Failed) and isinstance(outcome.cause, ExecutionFailure):
+            return outcome.cause
+        return None
 
     @property
     def exception(self) -> BaseException | None:
@@ -203,9 +208,9 @@ class Run:
         """Return the run outcome as soon as the agent run has ended.
 
         Available from the moment the run's end event is published, before
-        the terminal status lands. Returns None before then and for runs
-        that ended without a verdict (execution failure or abort); the run
-        status and error message carry that story.
+        the terminal status lands. Returns None only before then: every
+        terminal run carries an outcome, with execution failures and aborts
+        appearing as ``Failed(cause=ExecutionFailure(...))`` and ``Aborted``.
         """
 
         if self._record.status == "running":
@@ -252,27 +257,26 @@ class Run:
             self._publish(event)
 
     def _finalize(self, task: asyncio.Task[None]) -> None:
-        """Record the terminal run state, then persist and release it.
+        """Finish the run from its task result, then release its owner.
 
-        The terminal status and outcome are derived only from the task's
-        execution result and written exactly once. Persistence and owner
-        release are bookkeeping: their failures are logged and exposed, but
-        never rewrite what the caller sees.
+        The terminal outcome is derived only from the task's execution
+        result and recorded exactly once. Persistence and owner release are
+        bookkeeping: their failures are logged and exposed, but never
+        rewrite what the caller sees.
         """
 
         task_error = _task_error(task)
-        if task_error is not None:
-            self._fail(task_error, origin=_execution_failure_origin(task_error))
-        elif task.cancelled():
-            self._abort()
-        else:
-            self._complete()
         try:
-            self._persist_terminal_record()
+            if task_error is not None:
+                self._fail(task_error)
+            elif task.cancelled():
+                self._abort()
+            else:
+                self._complete()
         finally:
             self._release_owner()
 
-    def _persist_terminal_record(self) -> None:
+    def _persist_record(self) -> None:
         """Persist the terminal record without touching the live run state."""
 
         try:
@@ -296,25 +300,24 @@ class Run:
                 raise
 
     def _complete(self) -> None:
-        """Record successful run execution."""
+        """Finish the run with its published outcome."""
 
-        self._set_terminal_state("completed")
+        outcome = _event_outcome(self._events)
+        if outcome is None:
+            outcome = _missing_outcome_failure()
+        self._finish(outcome)
 
     def _abort(self) -> None:
-        """Record an aborted run execution."""
+        """Finish the run as aborted."""
 
-        self._set_terminal_state("aborted")
+        self._finish(Aborted())
 
-    def _fail(self, error: BaseException, *, origin: RunFailureOrigin) -> None:
-        """Record one failed execution with serializable and live diagnostics."""
+    def _fail(self, error: BaseException) -> None:
+        """Finish the run with serializable and live execution diagnostics."""
 
-        self._set_terminal_state(
-            "failed",
-            failure=RunFailure(
-                origin=origin,
-                exception_type=type(error).__name__,
-                message=str(error),
-            ),
+        origin = _execution_failure_origin(error)
+        self._finish(
+            Failed(cause=_execution_failure(error, origin)),
             exception=error,
         )
 
@@ -324,31 +327,28 @@ class Run:
         self._events.append(event)
         self._changed.set()
 
-    def _set_terminal_state(
+    def _finish(
         self,
-        status: TerminalRunStatus,
+        outcome: RunOutcome,
         *,
-        failure: RunFailure | None = None,
         exception: BaseException | None = None,
     ) -> None:
-        """Set the terminal record state and wake subscribers.
+        """Record the terminal outcome, wake subscribers, then persist.
 
-        This transition must not raise: the end timestamp is clamped so a
-        backward clock step cannot trip the record's lifecycle validator and
-        strand the run in a running state.
+        The local transition must not raise and always happens first, so a
+        failed store write can only ever leave the store stale — never
+        rewrite what this handle reports.
         """
 
         source = _latest_provider_source(self._events)
         self._record = self._record.finish(
-            status=status,
-            ended_at=max(datetime.now(UTC), self._record.started_at),
+            outcome=outcome,
             provider=source.provider if source is not None else None,
             model=source.model if source is not None else None,
-            outcome=_event_outcome(self._events) if status == "completed" else None,
-            failure=failure,
         )
         self._exception = exception
         self._changed.set()
+        self._persist_record()
 
 
 class AgentRuntime:
@@ -480,13 +480,7 @@ class AgentRuntime:
         try:
             self._run_store.update_run(
                 record.finish(
-                    status="failed",
-                    ended_at=max(datetime.now(UTC), record.started_at),
-                    failure=RunFailure(
-                        origin="submission",
-                        exception_type=type(error).__name__,
-                        message=str(error),
-                    ),
+                    outcome=Failed(cause=_execution_failure(error, "submission")),
                 )
             )
         except BaseException as abandonment_error:
@@ -572,7 +566,9 @@ class AgentRuntime:
                 yield AgentEndEvent(outcome=outcome)
                 return
             if follow_ups == MAX_RESULT_FOLLOW_UPS:
-                yield AgentEndEvent(outcome=Failed(reason=NO_RESULT_REASON))
+                yield AgentEndEvent(
+                    outcome=Failed(cause=AgentFailure(reason=NO_RESULT_REASON))
+                )
                 return
             yield AgentEndEvent()
             yield ResultFollowUpEvent(message=UserMessage(content=RESULT_FOLLOW_UP))
@@ -849,12 +845,42 @@ def _task_error(task: asyncio.Task[None]) -> BaseException | None:
     return task.exception()
 
 
-def _execution_failure_origin(error: BaseException) -> RunFailureOrigin:
+def _execution_failure_origin(error: BaseException) -> ExecutionFailureOrigin:
     """Classify a task failure at the most specific known runtime boundary."""
 
     if isinstance(error, TurnFailedError):
         return "turn"
     return "execution"
+
+
+def _execution_failure(
+    error: BaseException,
+    origin: ExecutionFailureOrigin,
+) -> ExecutionFailure:
+    """Serialize one execution failure cause from an in-process exception."""
+
+    return ExecutionFailure(
+        origin=origin,
+        exception_type=type(error).__name__,
+        message=str(error),
+    )
+
+
+def _missing_outcome_failure() -> Failed:
+    """Return the failure cause for a run that ended without a verdict.
+
+    Reaching this means the event pipeline broke its own contract of ending
+    every successful run with an outcome-bearing end event; the terminal
+    transition must still not raise.
+    """
+
+    return Failed(
+        cause=ExecutionFailure(
+            origin="execution",
+            exception_type="RuntimeError",
+            message="The run ended without a published outcome.",
+        )
+    )
 
 
 def _log_run_bookkeeping_error(message: str, error: BaseException) -> None:
@@ -869,7 +895,7 @@ def _result_outcome(terminal_details: ToolDetails | None) -> RunOutcome | None:
     if isinstance(terminal_details, CompleteDetails):
         return Completed(value=terminal_details.value)
     if isinstance(terminal_details, FailDetails):
-        return Failed(reason=terminal_details.reason)
+        return Failed(cause=AgentFailure(reason=terminal_details.reason))
     return None
 
 

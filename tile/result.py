@@ -48,11 +48,52 @@ class Completed(BaseModel):
     )
 
 
-class Failed(BaseModel):
-    """Terminal outcome for a run that could not deliver its result."""
+ExecutionFailureOrigin: TypeAlias = Literal["submission", "turn", "execution"]
 
-    type: Literal["failed"] = "failed"
+
+class AgentFailure(BaseModel):
+    """The agent declared it could not deliver the requested result.
+
+    Execution finished normally, so the run's status stays ``completed``;
+    this cause records the model's own verdict that the task failed.
+    """
+
+    type: Literal["agent_failure"] = "agent_failure"
     reason: str
 
 
-RunOutcome: TypeAlias = Completed | Failed
+class ExecutionFailure(BaseModel):
+    """Serializable diagnostics for a run whose execution failed.
+
+    ``origin`` names the runtime boundary that failed. The original
+    in-process exception stays available on the run handle for local
+    debugging; it is not part of the serialized contract.
+    """
+
+    type: Literal["execution_failure"] = "execution_failure"
+    origin: ExecutionFailureOrigin
+    exception_type: str
+    message: str
+
+
+FailureCause: TypeAlias = AgentFailure | ExecutionFailure
+
+
+class Failed(BaseModel):
+    """Terminal outcome for a run that could not deliver its result.
+
+    The structured ``cause`` distinguishes an agent-declared failure from
+    an execution failure instead of overloading optional fields.
+    """
+
+    type: Literal["failed"] = "failed"
+    cause: FailureCause = Field(discriminator="type")
+
+
+class Aborted(BaseModel):
+    """Terminal outcome for a run cancelled before it reached a verdict."""
+
+    type: Literal["aborted"] = "aborted"
+
+
+RunOutcome: TypeAlias = Completed | Failed | Aborted

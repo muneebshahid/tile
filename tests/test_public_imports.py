@@ -6,13 +6,17 @@ from collections.abc import AsyncIterator, Sequence
 from typing import get_args
 
 from tile import (
+    Aborted,
+    AgentFailure,
     AgentRuntime,
+    ExecutionFailure,
+    ExecutionFailureOrigin,
+    Failed,
+    FailureCause,
     HistoryStore,
     InMemoryHistoryStore,
     InMemoryRunStore,
     Run,
-    RunFailure,
-    RunFailureOrigin,
     RunRecord,
     RunStore,
     Session,
@@ -66,8 +70,11 @@ def test_documented_public_imports_run_fake_prompt() -> None:
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
     assert issubclass(TurnFailedError, RuntimeError)
-    assert RunFailure.model_fields["origin"]
-    assert get_args(RunFailureOrigin) == ("submission", "turn", "execution")
+    assert ExecutionFailure.model_fields["origin"]
+    assert get_args(ExecutionFailureOrigin) == ("submission", "turn", "execution")
+    assert get_args(FailureCause) == (AgentFailure, ExecutionFailure)
+    assert Failed.model_fields["cause"]
+    assert Aborted().type == "aborted"
     assert ToolInputValidationFailure.model_fields["issues"]
     assert ToolInvocationFailure.model_fields["exception_type"]
     assert issubclass(ToolError, RuntimeError)

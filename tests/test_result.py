@@ -15,6 +15,7 @@ from tile.result import (
     NO_RESULT_REASON,
     RESULT_CONTRACT,
     RESULT_FOLLOW_UP,
+    AgentFailure,
     Completed,
     Failed,
 )
@@ -342,7 +343,7 @@ def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
     outcome = asyncio.run(_run())
 
     assert provider.await_count == 1
-    assert outcome == Failed(reason="The city is ambiguous.")
+    assert outcome == Failed(cause=AgentFailure(reason="The city is ambiguous."))
 
 
 def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
@@ -449,7 +450,7 @@ def test_runtime_fails_after_follow_up_cap() -> None:
     outcome = asyncio.run(_run())
 
     assert provider.await_count == MAX_RESULT_FOLLOW_UPS + 1
-    assert outcome == Failed(reason=NO_RESULT_REASON)
+    assert outcome == Failed(cause=AgentFailure(reason=NO_RESULT_REASON))
 
 
 def test_runtime_without_contract_completes_with_text() -> None:
@@ -510,7 +511,9 @@ def test_runtime_fails_when_nudge_attempt_hits_stream_error() -> None:
         )
         assert await run.wait() == "failed"
         assert run.error_message == "boom"
-        assert run.outcome is None
+        failure = run.failure
+        assert failure is not None
+        assert run.outcome == Failed(cause=failure)
 
     asyncio.run(_run())
 

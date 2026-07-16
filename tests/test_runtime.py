@@ -18,7 +18,6 @@ from tile.runs import InMemoryRunStore, RunRecord, RunStore, SQLiteRunStore
 from tile.runtime import (
     AgentRuntime,
     Run,
-    RunFailure,
     SessionBusyError,
     TurnFailedError,
 )
@@ -44,7 +43,7 @@ from tile.types.tools import (
     ToolResult,
     ToolTextContent,
 )
-from tile.result import Completed
+from tile.result import Aborted, Completed, ExecutionFailure, Failed
 from tests.support.agent_streams import (
     TEST_PROVIDER,
     GatedProviderStreamMock,
@@ -543,10 +542,12 @@ def test_prompt_abandons_run_record_when_history_append_fails() -> None:
         assert records[0].status == "failed"
         assert records[0].ended_at is not None
         assert records[0].provider == TEST_PROVIDER
-        assert records[0].failure == RunFailure(
-            origin="submission",
-            exception_type="RuntimeError",
-            message="history unavailable",
+        assert records[0].outcome == Failed(
+            cause=ExecutionFailure(
+                origin="submission",
+                exception_type="RuntimeError",
+                message="history unavailable",
+            )
         )
 
         history_store.fail_appends = False
@@ -652,13 +653,15 @@ def _assert_terminal_run_records(completed: Run, failed: Run, aborted: Run) -> N
     ]
     assert completed.record.outcome == Completed(value="done")
     assert completed.record.provider == TEST_PROVIDER
-    assert failed.record.failure == RunFailure(
-        origin="turn",
-        exception_type="TurnFailedError",
-        message="provider failed",
+    assert failed.record.outcome == Failed(
+        cause=ExecutionFailure(
+            origin="turn",
+            exception_type="TurnFailedError",
+            message="provider failed",
+        )
     )
     assert failed.record.provider == TEST_PROVIDER
-    assert aborted.record.failure is None
+    assert aborted.record.outcome == Aborted()
     assert aborted.record.provider == TEST_PROVIDER
     assert all(record.ended_at is not None for record in records)
     assert all(
@@ -831,6 +834,39 @@ def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
     asyncio.run(_run())
 
 
+def test_run_fails_when_event_pipeline_ends_without_outcome() -> None:
+    """Fail a run whose event source ends without publishing a verdict."""
+
+    async def _run() -> None:
+        """Drain an outcome-less event source and read the terminal record."""
+
+        persisted: list[RunRecord] = []
+        run = Run(
+            record=RunRecord(
+                run_id="missing-outcome",
+                session_id="missing-outcome",
+                status="running",
+                started_at=datetime.now(UTC),
+                model="gpt-5.4",
+            ),
+            events=async_stream([]),
+            on_done=lambda _: None,
+            on_record=persisted.append,
+        )
+
+        assert await run.wait() == "failed"
+        assert run.status == "failed"
+        failure = run.failure
+        assert failure is not None
+        assert failure.origin == "execution"
+        assert failure.message == "The run ended without a published outcome."
+        assert run.outcome == Failed(cause=failure)
+        assert run.exception is None
+        assert persisted == [run.record]
+
+    asyncio.run(_run())
+
+
 def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
     """Preserve control flow without rewriting the recorded terminal state."""
 
@@ -871,7 +907,7 @@ def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
                     started_at=datetime.now(UTC),
                     model="gpt-5.4",
                 ),
-                events=async_stream([]),
+                events=async_stream([AgentEndEvent(outcome=Completed(value="done"))]),
                 on_done=interrupt,
                 on_record=persisted.append,
             )
@@ -974,7 +1010,7 @@ def test_run_abort_marks_run_aborted_and_frees_session() -> None:
 
         assert await run.wait() == "aborted"
         assert run.status == "aborted"
-        assert run.outcome is None
+        assert run.outcome == Aborted()
 
         second = await session.prompt("second")
         releases[1].set()
@@ -1351,7 +1387,7 @@ def _raise_mid_stream_runtime() -> AgentRuntime:
         ),
     ],
 )
-def test_provider_death_fails_run_without_outcome_or_history(
+def test_provider_death_converges_on_failed_run_state(
     make_runtime: Callable[[], AgentRuntime],
     expected_error: str,
     expected_origin: Literal["turn", "execution"],
@@ -1359,9 +1395,9 @@ def test_provider_death_fails_run_without_outcome_or_history(
 ) -> None:
     """Converge every provider death channel on the same failed-run state.
 
-    The run fails with the provider's message and no outcome, anything
-    streamed before the death stays visible on the run's event log, and
-    session history keeps only the last stable state.
+    The run fails with an execution-failure outcome carrying the provider's
+    message, anything streamed before the death stays visible on the run's
+    event log, and session history keeps only the last stable state.
     """
 
     runtime = make_runtime()
@@ -1373,14 +1409,15 @@ def test_provider_death_fails_run_without_outcome_or_history(
         run = await session.prompt("hello")
         assert await run.wait() == "failed"
         assert run.error_message == expected_error
-        assert run.failure == RunFailure(
+        expected_failure = ExecutionFailure(
             origin=expected_origin,
             exception_type=(
                 "TurnFailedError" if expected_origin == "turn" else "ConnectionError"
             ),
             message=expected_error,
         )
-        assert run.outcome is None
+        assert run.failure == expected_failure
+        assert run.outcome == Failed(cause=expected_failure)
         if expected_origin == "turn":
             error = run.exception
             assert isinstance(error, TurnFailedError)

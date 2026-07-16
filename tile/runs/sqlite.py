@@ -18,7 +18,6 @@ from tile._sqlite import (
 from tile.result import RunOutcome
 from tile.runs.base import (
     RunAlreadyExistsError,
-    RunFailure,
     RunNotFoundError,
     RunRecord,
     RunStatus,
@@ -36,7 +35,6 @@ _RUN_COLUMNS = (
     "model",
     "provider",
     "outcome_json",
-    "failure_json",
 )
 _INSERT_RUN_SQL = f"""
     INSERT INTO run_records ({", ".join(_RUN_COLUMNS)})
@@ -56,7 +54,6 @@ _RunRow: TypeAlias = tuple[
     str,
     str | None,
     str,
-    str | None,
     str | None,
     str | None,
 ]
@@ -159,8 +156,7 @@ class SQLiteRunStore:
                 ended_at TEXT,
                 model TEXT NOT NULL,
                 provider TEXT,
-                outcome_json TEXT,
-                failure_json TEXT
+                outcome_json TEXT
             )
             """
         )
@@ -184,7 +180,6 @@ def _record_values(record: RunRecord) -> _RunRow:
         record.model,
         record.provider,
         _dump_outcome(record.outcome),
-        record.failure.model_dump_json() if record.failure is not None else None,
     )
 
 
@@ -200,7 +195,6 @@ def _record_from_row(row: _RunRow) -> RunRecord:
         model,
         provider,
         outcome_json,
-        failure_json,
     ) = row
     return RunRecord(
         run_id=run_id,
@@ -211,11 +205,6 @@ def _record_from_row(row: _RunRow) -> RunRecord:
         model=model,
         provider=provider,
         outcome=_load_outcome(outcome_json),
-        failure=(
-            RunFailure.model_validate_json(failure_json)
-            if failure_json is not None
-            else None
-        ),
     )
 
 

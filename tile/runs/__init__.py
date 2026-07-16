@@ -2,8 +2,6 @@
 
 from tile.runs.base import (
     RunAlreadyExistsError,
-    RunFailure,
-    RunFailureOrigin,
     RunNotFoundError,
     RunRecord,
     RunStatus,
@@ -16,8 +14,6 @@ from tile.runs.sqlite import SQLiteRunStore, SQLiteRunStoreSchemaError
 __all__ = [
     "InMemoryRunStore",
     "RunAlreadyExistsError",
-    "RunFailure",
-    "RunFailureOrigin",
     "RunNotFoundError",
     "RunRecord",
     "RunStatus",

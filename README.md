@@ -132,8 +132,9 @@ not current capabilities.
 
 `HistoryStore` owns only model-visible conversation items. `RunStore` separately
 owns one summary per submitted prompt: stable run and session IDs, execution
-status, UTC start/end timestamps, configured model, provider identity, typed
-outcome, and structured execution failure. Provider identity comes from the
+status, UTC start/end timestamps, configured model, provider identity, and one
+typed terminal outcome carrying any structured failure cause. Provider identity
+comes from the
 stream function's declared `provider` attribute at submission; when a message
 finalizes, the identity observed on the provider stream replaces it.
 
@@ -169,7 +170,7 @@ The SQLite stores are separate contracts and use separate tables and schema
 version markers, even when they share one database file. A running record is
 written before the prompt enters history, so a rejected submission never
 leaves a user message without a run record; if submission fails after the
-record exists, the record is finished as `failed` with a `submission`-origin
+record exists, the record is finished with a `submission`-origin execution
 failure. A run's terminal status and outcome are derived only from agent
 execution; the terminal store write is best-effort bookkeeping. When that
 write fails, the live `Run` handle keeps the true state and exposes the error
@@ -186,7 +187,7 @@ parse:
 ```python
 from pydantic import BaseModel
 
-from tile import Completed, Failed
+from tile import AgentFailure, Completed, Failed
 
 
 class WeatherReport(BaseModel):
@@ -200,7 +201,7 @@ await run.wait()
 match run.outcome:
     case Completed(value=report):
         print(report.city, report.temp_c)   # a WeatherReport instance
-    case Failed(reason=reason):
+    case Failed(cause=AgentFailure(reason=reason)):
         print("model declared failure:", reason)
 ```
 
@@ -225,19 +226,27 @@ whole session history at full price on each flip.
 ## Status and outcome
 
 `run.status` says whether the run *executed*; `run.outcome` says what the task
-*concluded*. `outcome` is non-`None` exactly when `status == "completed"`.
-When execution fails, `run.failure` provides serializable diagnostics and
-`run.exception` retains the original in-process exception. `run.error_message`
-remains as the failure message shorthand.
+*concluded*. `outcome` is `None` only while the run is still running: every
+terminal run carries exactly one outcome — `Completed`, `Failed`, or
+`Aborted` — and a `Failed` outcome names its structured cause. An
+`AgentFailure` cause is the model's own verdict that it could not deliver
+(execution finished normally), while an `ExecutionFailure` cause means a
+runtime boundary broke, with an explicit `origin` (`submission`, `turn`, or
+`execution`), the exception type, and the message. The terminal status is
+derived from the outcome variant, so the two can never contradict each other.
+`run.failure` is shorthand for the `ExecutionFailure` cause when there is one,
+`run.error_message` for its message, and `run.exception` retains the original
+in-process exception for local debugging — it is not part of the serialized
+contract.
 
 | Run ending | `status` | `outcome` |
 |---|---|---|
 | Plain prompt, text answer | `completed` | `Completed(value=text)` |
 | `complete` validates | `completed` | `Completed(value=model instance)` |
-| `fail(reason)` | `completed` | `Failed(reason)` |
-| Reminder cap exhausted | `completed` | `Failed(reason=...)` |
-| Provider dies (stream error or raise) | `failed` | `None` — see `run.failure` |
-| Aborted | `aborted` | `None` |
+| `fail(reason)` | `completed` | `Failed(cause=AgentFailure(...))` |
+| Reminder cap exhausted | `completed` | `Failed(cause=AgentFailure(...))` |
+| Provider dies (stream error or raise) | `failed` | `Failed(cause=ExecutionFailure(...))` |
+| Aborted | `aborted` | `Aborted()` |
 
 A provider death never corrupts the session: partial turns are dropped, history
 ends at the last stable item, unanswered tool calls are healed, and the session
@@ -247,7 +256,7 @@ recovery unit above that is re-prompting the session.
 
 Run events are the replayable prefix of facts emitted before termination. An
 exception may therefore end a run after a start event without a matching end
-event; `run.status` and `run.failure` are the authoritative terminal state.
+event; `run.status` and `run.outcome` are the authoritative terminal state.
 
 ## Public API
 
@@ -256,13 +265,15 @@ and may move as Tile grows.
 
 ```python
 from tile import (
+    Aborted,
+    AgentFailure,
     AgentRuntime,
     Completed,
+    ExecutionFailure,
     Failed,
     InMemoryHistoryStore,
     InMemoryRunStore,
     Run,
-    RunFailure,
     RunRecord,
     SQLiteHistoryStore,
     SQLiteRunStore,
