@@ -644,6 +644,97 @@ def test_typed_result_attempts_each_close_before_the_next_starts() -> None:
     assert isinstance(events[-1], RunEndEvent)
 
 
+def test_tool_loop_prompt_yields_the_full_expected_event_order() -> None:
+    """Pin the complete runtime event order for a tool-use prompt."""
+
+    provider = ProviderStreamMock(
+        [
+            tool_call_stream(
+                response_id="resp_1",
+                call_id="call_1",
+                tool_name="get_weather",
+                arguments={"city": "Munich"},
+            ),
+            final_text_stream("resp_2", "It is sunny in Munich."),
+        ]
+    )
+    runtime = _runtime(provider.fn, tools=[_weather_tool(_quick_weather)])
+    session = runtime.session(session_id="full-order")
+
+    async def _run() -> list[AgentEvent]:
+        """Complete one tool-loop prompt and collect its full log."""
+
+        run = await session.prompt("check weather")
+        assert await run.wait() == "completed"
+        return [event async for event in run.events()]
+
+    events = asyncio.run(_run())
+
+    assert [event.type for event in events] == [
+        "run_start",
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_end",
+        "turn_end",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "agent_end",
+        "run_end",
+    ]
+
+
+def test_typed_result_prompt_yields_the_full_expected_event_order() -> None:
+    """Pin the complete runtime event order across a nudged typed run."""
+
+    provider = ProviderStreamMock(
+        [
+            final_text_stream("resp_1", "Still thinking."),
+            tool_call_stream(
+                response_id="resp_2",
+                call_id="call_1",
+                tool_name="complete",
+                arguments={"city": "Munich", "temp_c": 21.0},
+            ),
+        ]
+    )
+    runtime = _runtime(provider.fn)
+    session = runtime.session(session_id="typed-full-order")
+
+    async def _run() -> list[AgentEvent]:
+        """Complete the typed result on the nudged second attempt."""
+
+        run = await session.prompt("Weather?", result=WeatherReport)
+        assert await run.wait() == "completed"
+        return [event async for event in run.events()]
+
+    events = asyncio.run(_run())
+
+    assert [event.type for event in events] == [
+        "run_start",
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "turn_end",
+        "agent_end",
+        "result_follow_up",
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_end",
+        "turn_end",
+        "agent_end",
+        "run_end",
+    ]
+
+
 def _runtime(
     stream_fn: StreamFn,
     *,
