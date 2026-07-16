@@ -385,12 +385,15 @@ class Run:
     def _publish(self, event: AgentEvent) -> None:
         """Track one event, publish it, then let the observer see it.
 
-        Publication order is the contract: an event is in the live log and
-        visible to subscribers before observation, so an observer failure
-        fails the run but can never suppress the event.
+        Interruptions the event implies for scopes abandoned inside it are
+        published first, keeping the log properly nested; like all
+        synthesized events, they bypass the observer. Publication order is
+        the contract: an event is in the live log and visible to
+        subscribers before observation, so an observer failure fails the
+        run but can never suppress the event.
         """
 
-        self._scopes.observe(event)
+        self._events.extend(self._scopes.observe(event))
         self._events.append(event)
         self._changed.set()
         self._on_event(event)

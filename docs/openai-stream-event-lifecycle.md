@@ -325,6 +325,11 @@ Rules:
   execution terminated.
 - Interruptions close innermost-first: tool execution, then turn, then
   agent attempt, then the run end.
+- An end event implies the death of scopes still open *inside* the scope
+  it closes: their interruptions are published immediately before it, so
+  the log stays properly nested on every path. Sibling scopes at the same
+  depth — parallel tool executions — are unaffected; tool ends match
+  their own call id only.
 - An attempt whose turn errored in-band still ends normally with its
   producer events; the failure story lives on the errored assistant turn
   and the run end's outcome.

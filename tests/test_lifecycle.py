@@ -23,6 +23,7 @@ from tile.events import (
     ToolExecutionEndEvent,
     ToolExecutionInterruptedEvent,
     ToolExecutionStartEvent,
+    TurnEndEvent,
     TurnInterruptedEvent,
     TurnStartEvent,
 )
@@ -31,8 +32,9 @@ from tile.lifecycle import OpenScopeTracker
 from tile.result import Aborted, Completed, ExecutionFailure, Failed
 from tile.runs import InMemoryRunStore, RunRecord
 from tile.runtime import AgentRuntime, Run
-from tile.types.conversation import ConversationItem, ToolResultTurn
+from tile.types.conversation import AssistantTurn, ConversationItem, ToolResultTurn
 from tile.types.stream_events import ProviderStreamEvent
+from tile.types.tool_execution import ToolExecutionOutcome
 from tile.types.tools import ToolDefinition, ToolFunction, ToolResult
 from tests.support.agent_streams import (
     TEST_PROVIDER,
@@ -142,6 +144,75 @@ def test_tracker_tolerates_an_unmatched_end() -> None:
     assert tracker.close(Aborted()) == (RunEndEvent(outcome=Aborted()),)
 
 
+def test_tracker_end_of_outer_scope_interrupts_its_open_children() -> None:
+    """Imply interruptions for scopes abandoned inside an ending scope."""
+
+    tracker = OpenScopeTracker()
+    tracker.observe(AgentStartEvent(attempt=1))
+    tracker.observe(TurnStartEvent())
+    tracker.observe(MessageStartEvent())
+
+    implied = tracker.observe(AgentEndEvent(attempt=1))
+
+    assert implied == (MessageInterruptedEvent(), TurnInterruptedEvent())
+    assert tracker.close(Aborted()) == (RunEndEvent(outcome=Aborted()),)
+
+
+def test_tracker_turn_end_interrupts_all_open_parallel_tools() -> None:
+    """Consider every tool of an ending turn dead, innermost first."""
+
+    tracker = OpenScopeTracker()
+    tracker.observe(AgentStartEvent())
+    tracker.observe(TurnStartEvent())
+    for call_id in ("call_1", "call_2", "call_3"):
+        tracker.observe(
+            ToolExecutionStartEvent(call_id=call_id, tool_name="read", arguments={})
+        )
+
+    implied = tracker.observe(_turn_end_placeholder())
+
+    assert implied == (
+        ToolExecutionInterruptedEvent(call_id="call_3"),
+        ToolExecutionInterruptedEvent(call_id="call_2"),
+        ToolExecutionInterruptedEvent(call_id="call_1"),
+    )
+
+
+def test_tracker_tool_end_leaves_parallel_siblings_open() -> None:
+    """Pop only the matching call; sibling tools at the same depth survive."""
+
+    tracker = OpenScopeTracker()
+    tracker.observe(AgentStartEvent())
+    tracker.observe(TurnStartEvent())
+    for call_id in ("call_1", "call_2", "call_3"):
+        tracker.observe(
+            ToolExecutionStartEvent(call_id=call_id, tool_name="read", arguments={})
+        )
+
+    implied = tracker.observe(_tool_end("call_1"))
+
+    assert implied == ()
+    closing = tracker.close(Aborted())
+    assert closing[:2] == (
+        ToolExecutionInterruptedEvent(call_id="call_3"),
+        ToolExecutionInterruptedEvent(call_id="call_2"),
+    )
+
+
+def test_tracker_run_end_drains_every_open_scope() -> None:
+    """Close everything still open when the run end commits."""
+
+    tracker = OpenScopeTracker()
+    tracker.observe(AgentStartEvent())
+    tracker.observe(TurnStartEvent())
+
+    implied = tracker.observe(RunEndEvent(outcome=Completed(value="done")))
+
+    assert implied == (TurnInterruptedEvent(), AgentInterruptedEvent(attempt=0))
+    assert tracker.close(Aborted()) == ()
+    assert tracker.committed_outcome == Completed(value="done")
+
+
 def test_tracker_leaves_a_mismatched_tool_call_open_for_closure() -> None:
     """Sweep a tool scope whose end named a different call."""
 
@@ -151,10 +222,11 @@ def test_tracker_leaves_a_mismatched_tool_call_open_for_closure() -> None:
     tracker.observe(
         ToolExecutionStartEvent(call_id="call_1", tool_name="read", arguments={})
     )
-    tracker.observe(AgentEndEvent())
 
+    implied = tracker.observe(_tool_end("call_2"))
+
+    assert implied == ()
     closing = tracker.close(Aborted())
-
     assert ToolExecutionInterruptedEvent(call_id="call_1") in closing
     assert TurnInterruptedEvent() in closing
 
@@ -231,6 +303,41 @@ def test_provider_raise_mid_stream_interrupts_message_and_turn() -> None:
             )
         ),
     ]
+
+
+def test_stream_exhausted_without_terminal_event_keeps_a_nested_log() -> None:
+    """Interrupt the abandoned message and turn before the agent's own end."""
+
+    quiet_mock = AsyncMock(return_value=async_stream([stream_start("resp_1")]))
+    quiet_mock.provider = TEST_PROVIDER
+    runtime = _runtime(cast("StreamFn", quiet_mock))
+    session = runtime.session(session_id="quiet-stream-death")
+
+    async def _run() -> tuple[list[AgentEvent], str | None]:
+        """Fail the run on a stream that ends without a terminal event."""
+
+        run = await session.prompt("hello")
+        assert await run.wait() == "failed"
+        return [event async for event in run.events()], run.error_message
+
+    events, error_message = asyncio.run(_run())
+
+    assert_paired_lifecycle(events)
+    assert [event.type for event in events] == [
+        "run_start",
+        "agent_start",
+        "turn_start",
+        "message_start",
+        "message_interrupted",
+        "turn_interrupted",
+        "agent_end",
+        "run_end",
+    ]
+    run_outcome = _single(events, RunEndEvent).outcome
+    assert isinstance(run_outcome, Failed)
+    assert isinstance(run_outcome.cause, ExecutionFailure)
+    assert run_outcome.cause.origin == "turn"
+    assert error_message == "The agent run ended without an assistant turn."
 
 
 def test_in_band_stream_error_keeps_producer_ends_and_fails_the_run() -> None:
@@ -580,6 +687,26 @@ def _weather_tool(fn: ToolFunction) -> ToolDefinition:
     """Build the deterministic weather tool around one implementation."""
 
     return city_tool("get_weather", "Return a deterministic weather report.", fn)
+
+
+def _turn_end_placeholder() -> TurnEndEvent:
+    """Build a minimal producer turn end for tracker unit tests."""
+
+    return TurnEndEvent(assistant_turn=AssistantTurn(), tool_executions=[])
+
+
+def _tool_end(call_id: str) -> ToolExecutionEndEvent:
+    """Build a minimal producer tool end for one call id."""
+
+    return ToolExecutionEndEvent(
+        outcome=ToolExecutionOutcome(
+            tool_result_turn=ToolResultTurn(
+                call_id=call_id,
+                tool_name="read",
+                content=[],
+            )
+        )
+    )
 
 
 async def _quick_weather(params: CityInput) -> ToolResult:
