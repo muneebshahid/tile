@@ -16,6 +16,7 @@ from tile import (
     HistoryStore,
     InMemoryHistoryStore,
     InMemoryRunStore,
+    LifecycleProtocolError,
     Run,
     RunRecord,
     RunStore,
@@ -24,7 +25,7 @@ from tile import (
     SessionNotFoundError,
     TurnFailedError,
 )
-from tile.events import AgentEndEvent, AgentEvent, MessageEndEvent, StreamFn
+from tile.events import AgentEvent, MessageEndEvent, RunEndEvent, StreamFn
 from tile.providers.openai import create_stream_api
 from tile.types import (
     AsyncEventStream,
@@ -60,13 +61,14 @@ def test_documented_public_imports_run_fake_prompt() -> None:
 
     events = asyncio.run(_collect_prompt_events(session))
 
-    assert isinstance(events[-1], AgentEndEvent)
+    assert isinstance(events[-1], RunEndEvent)
     assert any(isinstance(event, MessageEndEvent) for event in events)
     assert len(session.history) == 2
     run_records = runtime.runs_for(session.id)
     assert len(run_records) == 1
     assert isinstance(run_records[0], RunRecord)
     assert run_records[0].status == "completed"
+    assert issubclass(LifecycleProtocolError, RuntimeError)
     assert issubclass(SessionBusyError, RuntimeError)
     assert issubclass(SessionNotFoundError, KeyError)
     assert issubclass(TurnFailedError, RuntimeError)

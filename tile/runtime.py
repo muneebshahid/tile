@@ -58,13 +58,15 @@ from tile.tools.complete import CompleteDetails
 from tile.tools.fail import tool as fail_tool
 from tile.tools.fail import FailDetails
 from tile.events import (
-    AgentEndEvent,
     AgentEvent,
     MessageEndEvent,
     ResultFollowUpEvent,
+    RunEndEvent,
+    RunStartEvent,
     StreamFn,
     ToolExecutionEndEvent,
 )
+from tile.lifecycle import LifecycleLedger
 from tile.types.stream_events import ProviderSource
 
 logger = logging.getLogger(__name__)
@@ -94,11 +96,12 @@ class _AgentRunObservation:
     def observe(self, event: AgentEvent) -> None:
         """Record the latest assistant turn and first terminating tool details."""
 
-        if isinstance(event, MessageEndEvent):
+        if isinstance(event, MessageEndEvent) and event.assistant_turn is not None:
             self.last_turn = event.assistant_turn
         if (
             self.terminal_details is None
             and isinstance(event, ToolExecutionEndEvent)
+            and event.outcome is not None
             and event.outcome.terminate
             and isinstance(event.outcome.details, CompleteDetails | FailDetails)
         ):
@@ -119,16 +122,24 @@ class Run:
         events: AsyncIterator[AgentEvent],
         on_done: Callable[[Run], None],
         on_record: Callable[[RunRecord], None],
+        on_event: Callable[[AgentEvent], None],
     ) -> None:
-        """Start a run that drives the given event source to completion."""
+        """Start a run that drives the given event source to completion.
+
+        ``on_event`` observes each event after it is published to the live
+        log; its failure fails the run but can never suppress the event.
+        """
 
         self._record = record
         self._events: list[AgentEvent] = []
         self._exception: BaseException | None = None
         self._persistence_error: BaseException | None = None
         self._changed = asyncio.Event()
+        self._finalized = asyncio.Event()
+        self._ledger = LifecycleLedger()
         self._on_done = on_done
         self._on_record = on_record
+        self._on_event = on_event
         self._task = asyncio.create_task(self._pump(events))
         self._task.add_done_callback(self._finalize)
 
@@ -199,22 +210,22 @@ class Run:
         """
 
         for event in reversed(self._events):
-            if isinstance(event, MessageEndEvent):
+            if isinstance(event, MessageEndEvent) and event.assistant_turn is not None:
                 return _assistant_text(event.assistant_turn)
         return None
 
     @property
     def outcome(self) -> RunOutcome | None:
-        """Return the run outcome as soon as the agent run has ended.
+        """Return the run outcome as soon as it is committed.
 
-        Available from the moment the run's end event is published, before
+        Available from the moment the run end event is committed, before
         the terminal status lands. Returns None only before then: every
         terminal run carries an outcome, with execution failures and aborts
         appearing as ``Failed(cause=ExecutionFailure(...))`` and ``Aborted``.
         """
 
         if self._record.status == "running":
-            return _event_outcome(self._events)
+            return self._ledger.committed_outcome
         return self._record.outcome
 
     @property
@@ -239,14 +250,25 @@ class Run:
             await self._changed.wait()
 
     async def wait(self) -> RunStatus:
-        """Wait until the run reaches a terminal status and return it."""
+        """Wait until the run is fully finalized and return its status.
 
-        await asyncio.wait({self._task})
+        Returning only after finalization guarantees the event log is
+        complete — every start paired with an end — and that terminal
+        persistence and owner release have been attempted.
+        """
+
+        await self._finalized.wait()
         return self.status
 
     def abort(self) -> None:
-        """Request cancellation of the run task."""
+        """Request cancellation of the run task.
 
+        A no-op once the run end is committed: cancellation racing the
+        final tick cannot relabel a concluded run as aborted.
+        """
+
+        if self._ledger.committed_outcome is not None:
+            return
         if not self._task.done():
             self._task.cancel()
 
@@ -259,10 +281,14 @@ class Run:
     def _finalize(self, task: asyncio.Task[None]) -> None:
         """Finish the run from its task result, then release its owner.
 
-        The terminal outcome is derived only from the task's execution
-        result and recorded exactly once. Persistence and owner release are
-        bookkeeping: their failures are logged and exposed, but never
-        rewrite what the caller sees.
+        This is the single abnormal-closure site: scopes a producer left
+        open are closed here, innermost first, before the terminal record
+        lands. The terminal outcome is derived from the committed run end
+        or the task's execution result and recorded exactly once.
+        Persistence and owner release are bookkeeping: their failures are
+        logged and exposed, but never rewrite what the caller sees. The
+        finalized flag is set unconditionally last so waiters can never
+        hang on a re-raised bookkeeping error.
         """
 
         task_error = _task_error(task)
@@ -274,7 +300,10 @@ class Run:
             else:
                 self._complete()
         finally:
-            self._release_owner()
+            try:
+                self._release_owner()
+            finally:
+                self._finalized.set()
 
     def _persist_record(self) -> None:
         """Persist the terminal record without touching the live run state."""
@@ -300,32 +329,72 @@ class Run:
                 raise
 
     def _complete(self) -> None:
-        """Finish the run with its published outcome."""
+        """Finish the run with its committed outcome.
 
-        outcome = _event_outcome(self._events)
+        A clean event source that never committed a run end broke the
+        lifecycle contract; the run lands as failed, with the missing
+        scopes closed, rather than as completed without a verdict.
+        """
+
+        outcome = self._ledger.committed_outcome
         if outcome is None:
-            outcome = _missing_outcome_failure()
+            outcome = _missing_run_end_failure()
+            self._close_open_scopes(outcome)
         self._finish(outcome)
 
     def _abort(self) -> None:
-        """Finish the run as aborted."""
+        """Finish the run as aborted, keeping an already committed outcome."""
 
-        self._finish(Aborted())
+        outcome = self._ledger.committed_outcome
+        if outcome is None:
+            outcome = Aborted()
+            self._close_open_scopes(outcome)
+        self._finish(outcome)
 
     def _fail(self, error: BaseException) -> None:
-        """Finish the run with serializable and live execution diagnostics."""
+        """Finish the run with serializable and live execution diagnostics.
 
-        origin = _execution_failure_origin(error)
-        self._finish(
-            Failed(cause=_execution_failure(error, origin)),
-            exception=error,
+        A failure after the run end was committed cannot rewrite the
+        concluded outcome; it is logged as bookkeeping and kept on the
+        handle for local debugging.
+        """
+
+        committed = self._ledger.committed_outcome
+        if committed is not None:
+            _log_run_bookkeeping_error(
+                "Run event source failed after its run end was committed", error
+            )
+            self._finish(committed, exception=error)
+            return
+        outcome = Failed(
+            cause=_execution_failure(error, _execution_failure_origin(error))
         )
+        self._close_open_scopes(outcome)
+        self._finish(outcome, exception=error)
+
+    def _close_open_scopes(self, outcome: RunOutcome) -> None:
+        """Append synthesized end events for scopes the producer left open.
+
+        Synthesized closures bypass the event observer: they carry no
+        history and finalization must not depend on an observer that may
+        be the reason the run is closing abnormally.
+        """
+
+        self._events.extend(self._ledger.close(outcome))
+        self._changed.set()
 
     def _publish(self, event: AgentEvent) -> None:
-        """Append one event to the run log and wake subscribers."""
+        """Validate one event, publish it, then let the observer see it.
 
+        Publication order is the contract: a validated event is in the
+        live log and visible to subscribers before observation, so an
+        observer failure fails the run but can never suppress the event.
+        """
+
+        self._ledger.observe(event)
         self._events.append(event)
         self._changed.set()
+        self._on_event(event)
 
     def _finish(
         self,
@@ -462,9 +531,10 @@ class AgentRuntime:
             self._append_user_message(session_id, content)
             run = Run(
                 record=record,
-                events=self._run_events(session_id, result=result),
+                events=self._prompt_events(session_id, result=result),
                 on_done=self._release_run,
                 on_record=self._run_store.update_run,
+                on_event=partial(self._persist_stable_event, session_id),
             )
         except BaseException as submission_error:
             if record is not None:
@@ -502,28 +572,28 @@ class AgentRuntime:
         self._run_store.create_run(record)
         return record
 
-    async def _run_events(
+    async def _prompt_events(
         self,
         session_id: str,
         *,
         result: type[BaseModel] | None = None,
     ) -> AsyncIterator[AgentEvent]:
-        """Yield agent events for one prompt run, persisting stable history."""
+        """Yield the lifecycle-paired event stream for one prompt run."""
 
+        yield RunStartEvent()
         events = (
             self._plain_prompt_events(session_id)
             if result is None
             else self._result_prompt_events(session_id, result)
         )
         async for event in events:
-            self._persist_stable_event(session_id, event)
             yield event
 
     async def _plain_prompt_events(
         self,
         session_id: str,
     ) -> AsyncIterator[AgentEvent]:
-        """Run one plain agent invocation and attach its text outcome."""
+        """Run one plain agent invocation and commit its text outcome."""
 
         observation = _AgentRunObservation()
         async for event in self._agent_events(
@@ -532,45 +602,42 @@ class AgentRuntime:
             instructions=self._instructions,
         ):
             observation.observe(event)
-            if isinstance(event, AgentEndEvent):
-                turn = _require_completed_turn(observation.last_turn)
-                yield AgentEndEvent(outcome=Completed(value=_assistant_text(turn)))
-            else:
-                yield event
+            yield event
+        turn = _require_completed_turn(observation.last_turn)
+        yield RunEndEvent(outcome=Completed(value=_assistant_text(turn)))
 
     async def _result_prompt_events(
         self,
         session_id: str,
         result: type[BaseModel],
     ) -> AsyncIterator[AgentEvent]:
-        """Run agent invocations until the required result is produced or exhausted."""
+        """Run agent attempts until the required result is produced or exhausted."""
 
         tool_executor = ToolExecutor(
             (*self._tool_executor.tools, complete_tool(result), fail_tool)
         )
         instructions = f"{self._instructions}\n\n{RESULT_CONTRACT}"
-        for follow_ups in range(MAX_RESULT_FOLLOW_UPS + 1):
+        for attempt in range(MAX_RESULT_FOLLOW_UPS + 1):
             observation = _AgentRunObservation()
             async for event in self._agent_events(
                 session_id,
                 tool_executor=tool_executor,
                 instructions=instructions,
+                attempt=attempt,
             ):
                 observation.observe(event)
-                if not isinstance(event, AgentEndEvent):
-                    yield event
+                yield event
 
             _require_completed_turn(observation.last_turn)
             outcome = _result_outcome(observation.terminal_details)
             if outcome is not None:
-                yield AgentEndEvent(outcome=outcome)
+                yield RunEndEvent(outcome=outcome)
                 return
-            if follow_ups == MAX_RESULT_FOLLOW_UPS:
-                yield AgentEndEvent(
+            if attempt == MAX_RESULT_FOLLOW_UPS:
+                yield RunEndEvent(
                     outcome=Failed(cause=AgentFailure(reason=NO_RESULT_REASON))
                 )
                 return
-            yield AgentEndEvent()
             yield ResultFollowUpEvent(message=UserMessage(content=RESULT_FOLLOW_UP))
 
     async def _agent_events(
@@ -579,8 +646,9 @@ class AgentRuntime:
         *,
         tool_executor: ToolExecutor,
         instructions: str,
+        attempt: int = 0,
     ) -> AsyncIterator[AgentEvent]:
-        """Yield one stateless agent run over the session's current history."""
+        """Yield one stateless agent attempt over the session's current history."""
 
         async for event in run_agent(
             self._history_store.get_history(session_id),
@@ -590,6 +658,7 @@ class AgentRuntime:
             instructions=instructions,
             auto_mode=self._auto_mode,
             cwd=self._cwd,
+            attempt=attempt,
         ):
             yield event
 
@@ -789,23 +858,16 @@ def _conversation_items_for(event: AgentEvent) -> tuple[ConversationItem, ...]:
     """
 
     if isinstance(event, MessageEndEvent):
-        if event.assistant_turn.status != "completed":
+        if event.assistant_turn is None or event.assistant_turn.status != "completed":
             return ()
         return (event.assistant_turn,)
     if isinstance(event, ToolExecutionEndEvent):
+        if event.outcome is None:
+            return ()
         return (event.outcome.tool_result_turn,)
     if isinstance(event, ResultFollowUpEvent):
         return (event.message,)
     return ()
-
-
-def _event_outcome(events: Sequence[AgentEvent]) -> RunOutcome | None:
-    """Return the last prompt-level outcome emitted by a run."""
-
-    for event in reversed(events):
-        if isinstance(event, AgentEndEvent):
-            return event.outcome
-    return None
 
 
 def _latest_provider_source(
@@ -814,7 +876,7 @@ def _latest_provider_source(
     """Return the latest provider identity available from a finalized message."""
 
     for event in reversed(events):
-        if isinstance(event, MessageEndEvent):
+        if isinstance(event, MessageEndEvent) and event.assistant_turn is not None:
             return event.assistant_turn.source
     return None
 
@@ -866,19 +928,20 @@ def _execution_failure(
     )
 
 
-def _missing_outcome_failure() -> Failed:
-    """Return the failure cause for a run that ended without a verdict.
+def _missing_run_end_failure() -> Failed:
+    """Return the failure cause for a run that ended without a committed end.
 
-    Reaching this means the event pipeline broke its own contract of ending
-    every successful run with an outcome-bearing end event; the terminal
-    transition must still not raise.
+    Reaching this means the event pipeline broke the lifecycle contract of
+    committing a run end on every clean completion. There is nothing left
+    to raise into — the task already finished — so the violation is
+    delivered as a terminal state, the only channel that cannot be lost.
     """
 
     return Failed(
         cause=ExecutionFailure(
             origin="execution",
-            exception_type="RuntimeError",
-            message="The run ended without a published outcome.",
+            exception_type="LifecycleProtocolError",
+            message="The run ended without a committed run end event.",
         )
     )
 

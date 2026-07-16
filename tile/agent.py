@@ -61,12 +61,15 @@ async def run_agent(
     cwd: Path,
     instructions: str = DEFAULT_INSTRUCTIONS,
     auto_mode: bool = True,
+    attempt: int = 0,
 ) -> AsyncIterator[AgentEvent]:
     """Run one stateless agent turn from supplied model-visible history.
 
     A successful tool result with ``terminate=True`` ends the loop after the
     current tool batch without another provider call. ``cwd`` is announced
     in the system prompt verbatim; the caller owns its resolution.
+    ``attempt`` labels this attempt's lifecycle events when a caller runs
+    the agent repeatedly for one prompt.
     """
 
     run_history = list(history)
@@ -76,7 +79,7 @@ async def run_agent(
         auto_mode=auto_mode,
     )
 
-    yield AgentStartEvent()
+    yield AgentStartEvent(attempt=attempt)
     async for event in _run_agent_loop(
         run_history=run_history,
         stream_fn=stream_fn,
@@ -85,7 +88,7 @@ async def run_agent(
         tool_executor=tool_executor,
     ):
         yield event
-    yield AgentEndEvent()
+    yield AgentEndEvent(attempt=attempt)
 
 
 async def _run_agent_loop(
@@ -117,13 +120,17 @@ async def _run_agent_loop(
             ):
                 if (
                     isinstance(agent_event, ToolExecutionEndEvent)
+                    and agent_event.outcome is not None
                     and agent_event.outcome.terminate
                 ):
                     should_terminate = True
                 if isinstance(agent_event, TurnEndEvent):
                     if agent_event.tool_executions:
                         has_tool_executions = True
-                    if agent_event.assistant_turn.status != "completed":
+                    if (
+                        agent_event.assistant_turn is None
+                        or agent_event.assistant_turn.status != "completed"
+                    ):
                         turn_errored = True
                 yield agent_event
 
@@ -182,10 +189,12 @@ async def _handle_stream_done_event(
             arguments=tool_call.arguments,
             tool_executor=tool_executor,
         ):
-            if isinstance(agent_event, ToolExecutionEndEvent):
-                outcome = agent_event.outcome
-                run_history.append(outcome.tool_result_turn)
-                tool_executions.append(outcome)
+            if (
+                isinstance(agent_event, ToolExecutionEndEvent)
+                and agent_event.outcome is not None
+            ):
+                run_history.append(agent_event.outcome.tool_result_turn)
+                tool_executions.append(agent_event.outcome)
 
             yield agent_event
 
@@ -225,7 +234,7 @@ async def _execute_tool(
         tool_name=tool_name,
         arguments=arguments,
     )
-    yield ToolExecutionEndEvent(outcome=outcome)
+    yield ToolExecutionEndEvent(call_id=call_id, outcome=outcome)
 
 
 def _collect_tool_calls(blocks: Sequence[AssistantBlock]) -> list[ToolCallBlock]:

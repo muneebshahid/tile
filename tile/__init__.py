@@ -9,6 +9,7 @@ from tile.history import (
     SessionNotFoundError,
     SessionRecord,
 )
+from tile.lifecycle import LifecycleProtocolError
 from tile.result import (
     Aborted,
     AgentFailure,
@@ -50,6 +51,7 @@ __all__ = [
     "HistoryStore",
     "InMemoryHistoryStore",
     "InMemoryRunStore",
+    "LifecycleProtocolError",
     "Run",
     "RunAlreadyExistsError",
     "RunNotFoundError",

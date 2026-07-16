@@ -27,12 +27,14 @@ from tile.events import (
     AgentEndEvent,
     AgentEvent,
     AgentStartEvent,
+    LifecycleCompleted,
     ResultFollowUpEvent,
     ToolExecutionEndEvent,
 )
 from tile.types.conversation import AssistantTurn, ToolResultTurn, UserMessage
 from tile.types.stream_events import TextBlock
 from tile.types.tools import ToolDefinition, ToolResult
+from tests.support.event_payloads import expect_outcome
 from tests.support.agent_streams import (
     ProviderStreamMock,
     error_stream,
@@ -287,8 +289,8 @@ def test_agent_stops_after_terminating_tool_batch(tmp_path: Path) -> None:
     assert provider.await_count == 1
     executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
     assert len(executions) == 1
-    assert executions[0].outcome.terminate
-    assert _agent_end_event(events).outcome is None
+    assert expect_outcome(executions[0].outcome).terminate
+    assert _agent_end_event(events).termination == LifecycleCompleted()
 
 
 def test_agent_does_not_enforce_result_tool_usage(tmp_path: Path) -> None:
@@ -307,7 +309,7 @@ def test_agent_does_not_enforce_result_tool_usage(tmp_path: Path) -> None:
 
     assert provider.await_count == 1
     assert not any(isinstance(event, ResultFollowUpEvent) for event in events)
-    assert _agent_end_event(events).outcome is None
+    assert _agent_end_event(events).termination == LifecycleCompleted()
 
 
 def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
@@ -371,9 +373,9 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
     assert isinstance(error_result, ToolResultTurn)
     assert error_result.is_error
     executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
-    assert not executions[0].outcome.terminate
-    assert executions[1].outcome.terminate
-    assert _agent_end_event(events).outcome is None
+    assert not expect_outcome(executions[0].outcome).terminate
+    assert expect_outcome(executions[1].outcome).terminate
+    assert _agent_end_event(events).termination == LifecycleCompleted()
 
 
 def test_runtime_nudges_text_only_agent_run_toward_result() -> None:
@@ -563,9 +565,9 @@ def test_agent_finishes_tool_batch_after_terminating_result(tmp_path: Path) -> N
 
     executions = [e for e in events if isinstance(e, ToolExecutionEndEvent)]
     assert len(executions) == 2
-    assert executions[0].outcome.terminate
-    assert not executions[1].outcome.tool_result_turn.is_error
-    assert not executions[1].outcome.terminate
+    assert expect_outcome(executions[0].outcome).terminate
+    assert not expect_outcome(executions[1].outcome).tool_result_turn.is_error
+    assert not expect_outcome(executions[1].outcome).terminate
     assert provider.await_count == 1
 
 

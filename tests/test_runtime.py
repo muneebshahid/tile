@@ -26,6 +26,8 @@ from tile.events import (
     AgentEvent,
     AgentStartEvent,
     MessageEndEvent,
+    RunEndEvent,
+    RunStartEvent,
     StreamFn,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -44,6 +46,7 @@ from tile.types.tools import (
     ToolTextContent,
 )
 from tile.result import Aborted, Completed, ExecutionFailure, Failed
+from tests.support.event_payloads import expect_outcome
 from tests.support.agent_streams import (
     TEST_PROVIDER,
     GatedProviderStreamMock,
@@ -363,7 +366,9 @@ def test_runtime_binds_cwd_into_declaring_tools(tmp_path: Path) -> None:
         assert await run.wait() == "completed"
         events = [event async for event in run.events()]
         executions = [e for e in events if isinstance(e, ToolExecutionEndEvent)]
-        assert [e.outcome.tool_result_turn.is_error for e in executions] == [
+        assert [
+            expect_outcome(e.outcome).tool_result_turn.is_error for e in executions
+        ] == [
             False,
             False,
         ]
@@ -762,9 +767,10 @@ def test_run_outcome_available_while_run_still_running() -> None:
         gate = asyncio.Event()
 
         async def _events() -> AsyncIterator[AgentEvent]:
-            """Publish a final outcome, then hold the run open."""
+            """Commit a final outcome, then hold the run open."""
 
-            yield AgentEndEvent(outcome=Completed(value="done"))
+            yield RunStartEvent()
+            yield RunEndEvent(outcome=Completed(value="done"))
             await gate.wait()
 
         run = Run(
@@ -778,10 +784,11 @@ def test_run_outcome_available_while_run_still_running() -> None:
             events=_events(),
             on_done=lambda _: None,
             on_record=lambda _: None,
+            on_event=lambda _: None,
         )
 
         async for event in run.events():
-            if isinstance(event, AgentEndEvent):
+            if isinstance(event, RunEndEvent):
                 break
 
         assert run.status == "running"
@@ -818,9 +825,12 @@ def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
                 started_at=datetime.now(UTC),
                 model="gpt-5.4",
             ),
-            events=async_stream([AgentEndEvent(outcome=Completed(value="done"))]),
+            events=async_stream(
+                [RunStartEvent(), RunEndEvent(outcome=Completed(value="done"))]
+            ),
             on_done=released.append,
             on_record=reject_record,
+            on_event=lambda _: None,
         )
 
         assert await run.wait() == "completed"
@@ -852,6 +862,7 @@ def test_run_fails_when_event_pipeline_ends_without_outcome() -> None:
             events=async_stream([]),
             on_done=lambda _: None,
             on_record=persisted.append,
+            on_event=lambda _: None,
         )
 
         assert await run.wait() == "failed"
@@ -859,7 +870,7 @@ def test_run_fails_when_event_pipeline_ends_without_outcome() -> None:
         failure = run.failure
         assert failure is not None
         assert failure.origin == "execution"
-        assert failure.message == "The run ended without a published outcome."
+        assert failure.message == "The run ended without a committed run end event."
         assert run.outcome == Failed(cause=failure)
         assert run.exception is None
         assert persisted == [run.record]
@@ -907,9 +918,12 @@ def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
                     started_at=datetime.now(UTC),
                     model="gpt-5.4",
                 ),
-                events=async_stream([AgentEndEvent(outcome=Completed(value="done"))]),
+                events=async_stream(
+                    [RunStartEvent(), RunEndEvent(outcome=Completed(value="done"))]
+                ),
                 on_done=interrupt,
                 on_record=persisted.append,
+                on_event=lambda _: None,
             )
             assert await run.wait() == "completed"
             await asyncio.sleep(0)
@@ -941,8 +955,10 @@ def test_run_events_replay_from_start_for_late_subscribers() -> None:
         await run.wait()
         events = await _collect_run_events(run)
 
-        assert isinstance(events[0], AgentStartEvent)
-        assert isinstance(events[-1], AgentEndEvent)
+        assert isinstance(events[0], RunStartEvent)
+        assert isinstance(events[1], AgentStartEvent)
+        assert isinstance(events[-2], AgentEndEvent)
+        assert isinstance(events[-1], RunEndEvent)
         assert any(isinstance(event, MessageEndEvent) for event in events)
 
     asyncio.run(_run())
@@ -966,7 +982,7 @@ def test_run_events_supports_multiple_subscribers() -> None:
         )
 
         assert first == second
-        assert isinstance(first[-1], AgentEndEvent)
+        assert isinstance(first[-1], RunEndEvent)
 
     asyncio.run(_run())
 
@@ -1205,7 +1221,7 @@ def test_session_prompt_persists_tool_result_at_execution_end() -> None:
         async for event in run.events():
             if isinstance(event, ToolExecutionEndEvent):
                 observed_tool_end = True
-                assert event.outcome.tool_result_turn in session.history
+                assert expect_outcome(event.outcome).tool_result_turn in session.history
         await run.wait()
 
         assert observed_tool_end
@@ -1429,9 +1445,12 @@ def test_provider_death_converges_on_failed_run_state(
 
     events = asyncio.run(_run())
 
-    assert isinstance(events[0], AgentStartEvent)
+    assert isinstance(events[0], RunStartEvent)
+    assert isinstance(events[1], AgentStartEvent)
     streamed_turns = [
-        event.assistant_turn for event in events if isinstance(event, MessageEndEvent)
+        event.assistant_turn
+        for event in events
+        if isinstance(event, MessageEndEvent) and event.assistant_turn is not None
     ]
     if errored_turn_streamed:
         assert [turn.status for turn in streamed_turns] == ["error"]
