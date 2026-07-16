@@ -8,20 +8,26 @@ from typing import Literal, Protocol, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
-from tile.result import RunOutcome
+from tile.result import Aborted, AgentFailure, Completed, RunOutcome
 
 RunStatus: TypeAlias = Literal["running", "completed", "failed", "aborted"]
-RunFailureOrigin: TypeAlias = Literal["submission", "turn", "execution"]
 TerminalRunStatus: TypeAlias = Literal["completed", "failed", "aborted"]
 
 
-class RunFailure(BaseModel):
-    """Serializable diagnostics for a failed run execution."""
+def _terminal_status_for(outcome: RunOutcome) -> TerminalRunStatus:
+    """Return the execution status implied by one terminal outcome.
 
-    type: Literal["run_failure"] = "run_failure"
-    origin: RunFailureOrigin
-    exception_type: str
-    message: str
+    An agent-declared failure still executed normally, so it keeps
+    ``completed``; only an execution-failure cause means ``failed``.
+    """
+
+    if isinstance(outcome, Completed):
+        return "completed"
+    if isinstance(outcome, Aborted):
+        return "aborted"
+    if isinstance(outcome.cause, AgentFailure):
+        return "completed"
+    return "failed"
 
 
 class RunRecord(BaseModel):
@@ -37,30 +43,31 @@ class RunRecord(BaseModel):
     model: str
     provider: str | None = None
     outcome: RunOutcome | None = None
-    failure: RunFailure | None = None
 
     def finish(
         self,
         *,
-        status: TerminalRunStatus,
-        ended_at: datetime,
+        outcome: RunOutcome,
         provider: str | None = None,
         model: str | None = None,
-        outcome: RunOutcome | None = None,
-        failure: RunFailure | None = None,
     ) -> RunRecord:
-        """Return a terminal form of this record."""
+        """Return a terminal form of this record ending now.
+
+        The terminal status is derived from the outcome variant, so the two
+        fields cannot deviate. The end timestamp is stamped internally and
+        clamped to the start, so a backward clock step cannot produce a
+        record that ends before it starts.
+        """
 
         return RunRecord(
             run_id=self.run_id,
             session_id=self.session_id,
-            status=status,
+            status=_terminal_status_for(outcome),
             started_at=self.started_at,
-            ended_at=ended_at,
+            ended_at=max(datetime.now(UTC), self.started_at),
             model=model if model is not None else self.model,
             provider=provider if provider is not None else self.provider,
             outcome=outcome,
-            failure=failure,
         )
 
     @field_validator("started_at", "ended_at")
@@ -81,20 +88,20 @@ class RunRecord(BaseModel):
         if self.status == "running":
             if self.ended_at is not None or self.outcome is not None:
                 raise ValueError("A running run cannot have terminal data.")
-            if self.failure is not None:
-                raise ValueError("A running run cannot have a failure.")
             return self
 
         if self.ended_at is None:
             raise ValueError("A terminal run must have an end timestamp.")
         if self.ended_at < self.started_at:
             raise ValueError("A run cannot end before it starts.")
-        if self.status == "failed" and self.failure is None:
-            raise ValueError("A failed run must have failure diagnostics.")
-        if self.status != "failed" and self.failure is not None:
-            raise ValueError("Only a failed run can have failure diagnostics.")
-        if self.status != "completed" and self.outcome is not None:
-            raise ValueError("Only a completed run can have an outcome.")
+        if self.outcome is None:
+            raise ValueError("A terminal run must have an outcome.")
+        implied_status = _terminal_status_for(self.outcome)
+        if self.status != implied_status:
+            raise ValueError(
+                f"Status {self.status!r} contradicts the terminal outcome, "
+                f"which implies {implied_status!r}."
+            )
         return self
 
 

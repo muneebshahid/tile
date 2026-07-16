@@ -9,12 +9,19 @@ from tile.history import (
     SessionNotFoundError,
     SessionRecord,
 )
-from tile.result import Completed, Failed, RunOutcome
+from tile.result import (
+    Aborted,
+    AgentFailure,
+    Completed,
+    ExecutionFailure,
+    ExecutionFailureOrigin,
+    Failed,
+    FailureCause,
+    RunOutcome,
+)
 from tile.runs import (
     InMemoryRunStore,
     RunAlreadyExistsError,
-    RunFailure,
-    RunFailureOrigin,
     RunNotFoundError,
     RunRecord,
     RunStatus,
@@ -32,16 +39,19 @@ from tile.runtime import (
 from tile.tool_executor import ToolExecutor
 
 __all__ = [
+    "Aborted",
+    "AgentFailure",
     "AgentRuntime",
     "Completed",
+    "ExecutionFailure",
+    "ExecutionFailureOrigin",
     "Failed",
+    "FailureCause",
     "HistoryStore",
     "InMemoryHistoryStore",
     "InMemoryRunStore",
     "Run",
     "RunAlreadyExistsError",
-    "RunFailure",
-    "RunFailureOrigin",
     "RunNotFoundError",
     "RunOutcome",
     "RunRecord",

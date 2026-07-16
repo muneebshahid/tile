@@ -10,11 +10,17 @@ import pytest
 from pydantic import ValidationError
 
 from tile.history import SQLiteHistoryStore
-from tile.result import Completed
+from tile.result import (
+    Aborted,
+    AgentFailure,
+    Completed,
+    ExecutionFailure,
+    Failed,
+    RunOutcome,
+)
 from tile.runs import (
     InMemoryRunStore,
     RunAlreadyExistsError,
-    RunFailure,
     RunNotFoundError,
     RunRecord,
     RunStore,
@@ -25,7 +31,7 @@ from tile.types.conversation import UserMessage
 
 STARTED_AT = datetime(2026, 7, 15, 9, 30, tzinfo=UTC)
 ENDED_AT = STARTED_AT + timedelta(seconds=2)
-FAILURE = RunFailure(
+FAILURE = ExecutionFailure(
     origin="execution",
     exception_type="ConnectionError",
     message="connection failed",
@@ -75,22 +81,83 @@ def test_run_record_transitions_from_running_to_completed() -> None:
     running = _running_record()
 
     completed = running.finish(
-        status="completed",
-        ended_at=ENDED_AT,
         provider="test",
         outcome=Completed(value="done"),
     )
 
+    assert completed.ended_at is not None
     assert completed == RunRecord(
         run_id="run-1",
         session_id="session-1",
         status="completed",
         started_at=STARTED_AT,
-        ended_at=ENDED_AT,
+        ended_at=completed.ended_at,
         model="gpt-5.4",
         provider="test",
         outcome=Completed(value="done"),
     )
+
+
+def test_terminal_outcome_models_reject_mutation() -> None:
+    """Keep a finished record's outcome frozen through every alias."""
+
+    cause = AgentFailure(reason="cannot deliver")
+    outcome = Failed(cause=cause)
+    record = _running_record().finish(outcome=outcome)
+
+    with pytest.raises(ValidationError):
+        cause.reason = "rewritten"
+    with pytest.raises(ValidationError):
+        outcome.cause = FAILURE
+    record_outcome = record.outcome
+    assert isinstance(record_outcome, Failed)
+    with pytest.raises(ValidationError):
+        record_outcome.cause = FAILURE
+
+    assert record.status == "completed"
+    assert record.outcome == Failed(cause=AgentFailure(reason="cannot deliver"))
+
+
+def test_run_record_finish_clamps_end_to_start() -> None:
+    """Keep a finished record's end at or after its start on clock steps."""
+
+    future_start = datetime.now(UTC) + timedelta(hours=1)
+    running = RunRecord(
+        run_id="run-1",
+        session_id="session-1",
+        status="running",
+        started_at=future_start,
+        model="gpt-5.4",
+    )
+
+    finished = running.finish(outcome=Completed(value="done"))
+
+    assert finished.ended_at == future_start
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_status"),
+    [
+        pytest.param(Completed(value="done"), "completed", id="completed"),
+        pytest.param(
+            Failed(cause=AgentFailure(reason="cannot deliver")),
+            "completed",
+            id="agent_failure_keeps_completed_status",
+        ),
+        pytest.param(Failed(cause=FAILURE), "failed", id="execution_failure"),
+        pytest.param(Aborted(), "aborted", id="aborted"),
+    ],
+)
+def test_run_record_finish_derives_status_from_outcome(
+    outcome: RunOutcome,
+    expected_status: str,
+) -> None:
+    """Derive the terminal status from the outcome so the two cannot deviate."""
+
+    finished = _running_record().finish(outcome=outcome)
+
+    assert finished.status == expected_status
+    assert finished.outcome == outcome
 
 
 @pytest.mark.parametrize(
@@ -101,17 +168,26 @@ def test_run_record_transitions_from_running_to_completed() -> None:
             id="running_with_end_time",
         ),
         pytest.param(
-            {"status": "completed", "ended_at": None},
+            {"status": "running", "outcome": Completed(value="done")},
+            id="running_with_outcome",
+        ),
+        pytest.param(
+            {
+                "status": "completed",
+                "ended_at": None,
+                "outcome": Completed(value="done"),
+            },
             id="terminal_without_end_time",
         ),
         pytest.param(
-            {"status": "failed", "ended_at": ENDED_AT},
-            id="failed_without_diagnostics",
+            {"status": "completed", "ended_at": ENDED_AT},
+            id="terminal_without_outcome",
         ),
         pytest.param(
             {
                 "status": "completed",
                 "ended_at": STARTED_AT - timedelta(seconds=1),
+                "outcome": Completed(value="done"),
             },
             id="end_before_start",
         ),
@@ -124,16 +200,32 @@ def test_run_record_transitions_from_running_to_completed() -> None:
         ),
         pytest.param(
             {
+                "status": "completed",
+                "ended_at": ENDED_AT,
+                "outcome": Failed(cause=FAILURE),
+            },
+            id="completed_with_execution_failure",
+        ),
+        pytest.param(
+            {
+                "status": "failed",
+                "ended_at": ENDED_AT,
+                "outcome": Failed(cause=AgentFailure(reason="cannot deliver")),
+            },
+            id="failed_with_agent_failure",
+        ),
+        pytest.param(
+            {
                 "status": "aborted",
                 "ended_at": ENDED_AT,
-                "failure": FAILURE,
+                "outcome": Completed(value="done"),
             },
-            id="aborted_with_failure",
+            id="aborted_with_completion",
         ),
     ],
 )
 def test_run_record_rejects_invalid_lifecycle_combinations(
-    values: dict[str, str | datetime | RunFailure | None],
+    values: dict[str, str | datetime | RunOutcome | None],
 ) -> None:
     """Keep persisted status and terminal fields internally consistent."""
 
@@ -162,7 +254,7 @@ def test_run_store_creates_updates_and_lists_records(
     store.create_run(first)
     store.create_run(second)
     store.create_run(other)
-    completed = first.finish(status="completed", ended_at=ENDED_AT)
+    completed = first.finish(outcome=Completed(value="done"))
     store.update_run(completed)
 
     assert store.get_run("run-1") == completed
@@ -178,8 +270,6 @@ def test_run_store_returns_defensive_snapshots(
 
     store = store_factory(tmp_path)
     completed = _running_record().finish(
-        status="completed",
-        ended_at=ENDED_AT,
         outcome=Completed(value={"answer": "original"}),
     )
     store.create_run(completed)
@@ -213,38 +303,34 @@ def test_run_store_rejects_duplicate_and_unknown_records(
 def test_sqlite_run_store_round_trips_terminal_records_after_restart(
     tmp_path: Path,
 ) -> None:
-    """Persist typed outcomes and structured failures across store restarts."""
+    """Persist every outcome variant and its failure cause across restarts."""
 
     database_path = tmp_path / "runs.db"
     store = SQLiteRunStore(database_path)
-    completed = _running_record(run_id="completed")
-    failed = _running_record(run_id="failed")
-    store.create_run(completed)
-    store.create_run(failed)
-    store.update_run(
-        completed.finish(
-            status="completed",
-            ended_at=ENDED_AT,
-            provider="test",
-            outcome=Completed(value={"answer": "done"}),
-        )
-    )
-    store.update_run(
-        failed.finish(
-            status="failed",
-            ended_at=ENDED_AT,
-            provider="test",
-            failure=FAILURE,
-        )
-    )
+    outcomes: dict[str, RunOutcome] = {
+        "completed": Completed(value={"answer": "done"}),
+        "declined": Failed(cause=AgentFailure(reason="ambiguous task")),
+        "failed": Failed(cause=FAILURE),
+        "aborted": Aborted(),
+    }
+    for run_id, outcome in outcomes.items():
+        record = _running_record(run_id=run_id)
+        store.create_run(record)
+        store.update_run(record.finish(provider="test", outcome=outcome))
     expected = store.list_runs("session-1")
     store.close()
 
     reopened = SQLiteRunStore(database_path)
     try:
         assert reopened.list_runs("session-1") == expected
-        assert reopened.get_run("completed") == expected[0]
-        assert reopened.get_run("failed") == expected[1]
+        for run_id, outcome in outcomes.items():
+            assert reopened.get_run(run_id).outcome == outcome
+        assert tuple(record.status for record in expected) == (
+            "completed",
+            "completed",
+            "failed",
+            "aborted",
+        )
     finally:
         reopened.close()
 
@@ -261,7 +347,7 @@ def test_sqlite_run_and_history_stores_share_one_database_file(
     history_store.append_history("shared", [UserMessage(content="hello")])
     record = _running_record(session_id="shared")
     run_store.create_run(record)
-    run_store.update_run(record.finish(status="aborted", ended_at=ENDED_AT))
+    run_store.update_run(record.finish(outcome=Aborted()))
     history_store.close()
     run_store.close()
 
