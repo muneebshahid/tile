@@ -309,7 +309,7 @@ death is outside this contract.
 | Scope | Start | Producer end | Interruption |
 | --- | --- | --- | --- |
 | run | `RunStartEvent` | `RunEndEvent(outcome)` | `RunEndEvent(outcome)` synthesized |
-| agent attempt | `AgentStartEvent(attempt)` | `AgentEndEvent(attempt)` | `AgentInterruptedEvent(attempt)` |
+| agent attempt | `AgentStartEvent` | `AgentEndEvent` | `AgentInterruptedEvent` |
 | turn | `TurnStartEvent` | `TurnEndEvent(assistant_turn, tool_executions)` | `TurnInterruptedEvent` |
 | message | `MessageStartEvent` | `MessageEndEvent(assistant_turn)` | `MessageInterruptedEvent` |
 | tool execution | `ToolExecutionStartEvent(call_id)` | `ToolExecutionEndEvent(outcome)` | `ToolExecutionInterruptedEvent(call_id)` |
@@ -322,7 +322,9 @@ Rules:
 - `RunEndEvent` is the final event of every run, exactly once, and commits
   the run's terminal outcome — emitted by the producer on success,
   synthesized at finalization otherwise. Its outcome variant implies how
-  execution terminated.
+  execution terminated. The commit is structural: the run stops pumping
+  its event source at the first run end and closes it, so nothing a
+  producer yields afterwards can reach the log or rewrite the outcome.
 - Interruptions close innermost-first: tool execution, then turn, then
   agent attempt, then the run end.
 - An end event implies the death of scopes still open *inside* the scope
@@ -335,6 +337,9 @@ Rules:
   and the run end's outcome.
 - Typed-result runs close each agent attempt before the follow-up message
   or next attempt starts; the final `AgentEndEvent` precedes `RunEndEvent`.
+  Agent events carry no attempt label: attempts are strictly sequential,
+  so position in the log identifies them, with `ResultFollowUpEvent`
+  separating retries.
 - Terminal record persistence happens after the run end is committed;
   `Run.wait()` returns only after finalization, so waiters always observe
   a complete log.
@@ -353,7 +358,7 @@ Abort ordering during a tool call:
 ```text
 ToolExecutionInterrupted(call_id)
 TurnInterrupted
-AgentInterrupted(attempt)
+AgentInterrupted
 RunEnd(outcome=Aborted)
 ```
 
@@ -361,12 +366,12 @@ Typed-result follow-up ordering:
 
 ```text
 RunStart
-  AgentStart(attempt=0)
+  AgentStart
     ...
-  AgentEnd(attempt=0)
+  AgentEnd
   ResultFollowUp
-  AgentStart(attempt=1)
+  AgentStart
     ...
-  AgentEnd(attempt=1)
+  AgentEnd
 RunEnd(outcome)
 ```

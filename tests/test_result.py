@@ -284,7 +284,7 @@ def test_agent_stops_after_terminating_tool_batch(tmp_path: Path) -> None:
     executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
     assert len(executions) == 1
     assert executions[0].outcome.terminate
-    assert _agent_end_event(events).attempt == 0
+    _agent_end_event(events)
 
 
 def test_agent_does_not_enforce_result_tool_usage(tmp_path: Path) -> None:
@@ -302,7 +302,7 @@ def test_agent_does_not_enforce_result_tool_usage(tmp_path: Path) -> None:
 
     assert provider.await_count == 1
     assert not any(isinstance(event, ResultFollowUpEvent) for event in events)
-    assert _agent_end_event(events).attempt == 0
+    _agent_end_event(events)
 
 
 def test_runtime_maps_fail_tool_to_failed_outcome() -> None:
@@ -367,7 +367,7 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
     executions = [event for event in events if isinstance(event, ToolExecutionEndEvent)]
     assert not executions[0].outcome.terminate
     assert executions[1].outcome.terminate
-    assert _agent_end_event(events).attempt == 0
+    _agent_end_event(events)
 
 
 def test_runtime_nudges_text_only_agent_run_toward_result() -> None:

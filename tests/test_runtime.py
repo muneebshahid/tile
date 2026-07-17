@@ -1,7 +1,7 @@
 """Tests for runtime-owned sessions, task-owned runs, and in-memory history."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -762,13 +762,10 @@ def test_run_outcome_available_while_run_still_running() -> None:
     async def _run() -> None:
         """Read the outcome between the end event and run finalization."""
 
-        gate = asyncio.Event()
-
-        async def _events() -> AsyncIterator[AgentEvent]:
-            """Commit a final outcome, then hold the run open."""
+        async def _events() -> AsyncGenerator[AgentEvent, None]:
+            """Commit a final outcome."""
 
             yield RunEndEvent(outcome=Completed(value="done"))
-            await gate.wait()
 
         run = Run(
             record=RunRecord(
@@ -791,7 +788,6 @@ def test_run_outcome_available_while_run_still_running() -> None:
         assert run.status == "running"
         assert run.outcome == Completed(value="done")
 
-        gate.set()
         assert await run.wait() == "completed"
         assert run.outcome == Completed(value="done")
 

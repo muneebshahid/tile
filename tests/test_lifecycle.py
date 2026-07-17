@@ -1,7 +1,7 @@
 """Tests for guaranteed lifecycle pairing across failures and aborts."""
 
 import asyncio
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypeVar, cast
@@ -105,8 +105,8 @@ def test_tracker_commits_a_fully_paired_run_and_closes_nothing() -> None:
     tracker = OpenScopeTracker()
     outcome = Completed(value="done")
 
-    tracker.observe(AgentStartEvent(attempt=0))
-    tracker.observe(AgentEndEvent(attempt=0))
+    tracker.observe(AgentStartEvent())
+    tracker.observe(AgentEndEvent())
     tracker.observe(RunEndEvent(outcome=outcome))
 
     assert tracker.committed_outcome == outcome
@@ -118,7 +118,7 @@ def test_tracker_closes_open_scopes_innermost_first() -> None:
 
     tracker = OpenScopeTracker()
     for event in (
-        AgentStartEvent(attempt=2),
+        AgentStartEvent(),
         TurnStartEvent(),
         ToolExecutionStartEvent(call_id="call_9", tool_name="read", arguments={}),
     ):
@@ -129,7 +129,7 @@ def test_tracker_closes_open_scopes_innermost_first() -> None:
     assert closing == (
         ToolExecutionInterruptedEvent(call_id="call_9"),
         TurnInterruptedEvent(),
-        AgentInterruptedEvent(attempt=2),
+        AgentInterruptedEvent(),
         RunEndEvent(outcome=Aborted()),
     )
     assert tracker.committed_outcome == Aborted()
@@ -148,11 +148,11 @@ def test_tracker_end_of_outer_scope_interrupts_its_open_children() -> None:
     """Imply interruptions for scopes abandoned inside an ending scope."""
 
     tracker = OpenScopeTracker()
-    tracker.observe(AgentStartEvent(attempt=1))
+    tracker.observe(AgentStartEvent())
     tracker.observe(TurnStartEvent())
     tracker.observe(MessageStartEvent())
 
-    implied = tracker.observe(AgentEndEvent(attempt=1))
+    implied = tracker.observe(AgentEndEvent())
 
     assert implied == (MessageInterruptedEvent(), TurnInterruptedEvent())
     assert tracker.close(Aborted()) == (RunEndEvent(outcome=Aborted()),)
@@ -208,7 +208,7 @@ def test_tracker_run_end_drains_every_open_scope() -> None:
 
     implied = tracker.observe(RunEndEvent(outcome=Completed(value="done")))
 
-    assert implied == (TurnInterruptedEvent(), AgentInterruptedEvent(attempt=0))
+    assert implied == (TurnInterruptedEvent(), AgentInterruptedEvent())
     assert tracker.close(Aborted()) == ()
     assert tracker.committed_outcome == Completed(value="done")
 
@@ -260,7 +260,7 @@ def test_provider_raise_before_stream_interrupts_the_attempt() -> None:
     events = asyncio.run(_run())
 
     assert_paired_lifecycle(events)
-    assert _single(events, AgentInterruptedEvent) == AgentInterruptedEvent(attempt=0)
+    assert _single(events, AgentInterruptedEvent) == AgentInterruptedEvent()
     run_outcome = _single(events, RunEndEvent).outcome
     assert isinstance(run_outcome, Failed)
     assert isinstance(run_outcome.cause, ExecutionFailure)
@@ -292,7 +292,7 @@ def test_provider_raise_mid_stream_interrupts_message_and_turn() -> None:
     assert events[-4:] == [
         MessageInterruptedEvent(),
         TurnInterruptedEvent(),
-        AgentInterruptedEvent(attempt=0),
+        AgentInterruptedEvent(),
         RunEndEvent(
             outcome=Failed(
                 cause=ExecutionFailure(
@@ -404,7 +404,7 @@ def test_abort_during_tool_execution_interrupts_tool_turn_agent_and_run() -> Non
     assert events[-4:] == [
         ToolExecutionInterruptedEvent(call_id="call_1"),
         TurnInterruptedEvent(),
-        AgentInterruptedEvent(attempt=0),
+        AgentInterruptedEvent(),
         RunEndEvent(outcome=Aborted()),
     ]
 
@@ -464,29 +464,60 @@ def test_abort_before_first_tick_still_yields_a_paired_log() -> None:
     assert events == [RunStartEvent(), RunEndEvent(outcome=Aborted())]
 
 
-def test_abort_after_committed_run_end_reclaims_a_stalled_source() -> None:
-    """Cancel a stalled source after commit without relabeling the outcome."""
+def test_committed_run_end_stops_the_pump_and_closes_a_stalled_source() -> None:
+    """Finish at the commit point without pumping a source that never returns."""
 
     async def _run() -> None:
-        """Commit a run end, stall, then abort and read the terminal state."""
+        """Commit a run end from a source that would stall forever after it."""
 
-        async def _events() -> AsyncIterator[AgentEvent]:
+        closed = False
+
+        async def _events() -> AsyncGenerator[AgentEvent, None]:
             """Commit the outcome, then hold the run open forever."""
 
-            yield RunEndEvent(outcome=Completed(value="done"))
-            await asyncio.Event().wait()
+            nonlocal closed
+            try:
+                yield RunEndEvent(outcome=Completed(value="done"))
+                await asyncio.Event().wait()
+            finally:
+                closed = True
 
         persisted: list[RunRecord] = []
         run = _bare_run(_events(), persisted=persisted)
-        async for event in run.events():
-            if isinstance(event, RunEndEvent):
-                break
-
-        run.abort()
 
         assert await run.wait() == "completed"
+        assert closed
         assert run.outcome == Completed(value="done")
         assert persisted == [run.record]
+
+    asyncio.run(_run())
+
+
+def test_events_after_the_committed_run_end_never_reach_the_log() -> None:
+    """Stop pumping at the first run end so a later one cannot rewrite it."""
+
+    async def _run() -> None:
+        """Feed a source that misbehaves after committing its outcome."""
+
+        persisted: list[RunRecord] = []
+        run = _bare_run(
+            async_stream(
+                [
+                    RunEndEvent(outcome=Completed(value="first")),
+                    AgentStartEvent(),
+                    RunEndEvent(outcome=Completed(value="second")),
+                ]
+            ),
+            persisted=persisted,
+        )
+
+        assert await run.wait() == "completed"
+        events = [event async for event in run.events()]
+        assert events == [
+            RunStartEvent(),
+            RunEndEvent(outcome=Completed(value="first")),
+        ]
+        assert run.outcome == Completed(value="first")
 
     asyncio.run(_run())
 
@@ -609,7 +640,7 @@ def test_clean_completion_without_run_end_fails_with_a_paired_log() -> None:
 
 
 def test_typed_result_attempts_each_close_before_the_next_starts() -> None:
-    """Label and pair every typed-result attempt around the follow-up."""
+    """Pair every typed-result attempt sequentially around the follow-up."""
 
     provider = ProviderStreamMock(
         [
@@ -636,11 +667,17 @@ def test_typed_result_attempts_each_close_before_the_next_starts() -> None:
     events = asyncio.run(_run())
 
     assert_paired_lifecycle(events)
-    starts = [event for event in events if isinstance(event, AgentStartEvent)]
-    ends = [event for event in events if isinstance(event, AgentEndEvent)]
-    assert [event.attempt for event in starts] == [0, 1]
-    assert [event.attempt for event in ends] == [0, 1]
-    assert events.index(ends[0]) < events.index(starts[1])
+    start_indices = [
+        index
+        for index, event in enumerate(events)
+        if isinstance(event, AgentStartEvent)
+    ]
+    end_indices = [
+        index for index, event in enumerate(events) if isinstance(event, AgentEndEvent)
+    ]
+    assert len(start_indices) == 2
+    assert len(end_indices) == 2
+    assert end_indices[0] < start_indices[1]
     assert isinstance(events[-1], RunEndEvent)
 
 
@@ -753,7 +790,7 @@ def _runtime(
 
 
 def _bare_run(
-    events: AsyncIterator[AgentEvent],
+    events: AsyncGenerator[AgentEvent, None],
     *,
     persisted: list[RunRecord],
 ) -> Run:

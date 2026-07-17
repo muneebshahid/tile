@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
@@ -118,17 +118,18 @@ class Run:
         self,
         *,
         record: RunRecord,
-        events: AsyncIterator[AgentEvent],
+        events: AsyncGenerator[AgentEvent, None],
         on_done: Callable[[Run], None],
         on_record: Callable[[RunRecord], None],
         on_event: Callable[[AgentEvent], None],
     ) -> None:
         """Start a run that drives the given event source to completion.
 
-        The run publishes its own ``RunStartEvent`` before the event source
-        starts, so the log opens the run scope on every path. ``on_event``
-        observes each producer event after it is published to the live log;
-        its failure fails the run but can never suppress the event.
+        The run owns the event source, including closing it. It publishes
+        its own ``RunStartEvent`` before the event source starts, so the
+        log opens the run scope on every path. ``on_event`` observes each
+        producer event after it is published to the live log; its failure
+        fails the run but can never suppress the event.
         """
 
         self._record = record
@@ -265,19 +266,32 @@ class Run:
     def abort(self) -> None:
         """Request cancellation of the run task.
 
-        Cancellation after the run end is committed still stops the event
-        source, but finalization keeps the committed outcome, so a late
-        abort cannot relabel a concluded run as aborted.
+        The pump stops at the committed run end, so a late abort usually
+        finds the task already done and does nothing; when it does land,
+        finalization keeps the committed outcome, so a late abort cannot
+        relabel a concluded run as aborted.
         """
 
         if not self._task.done():
             self._task.cancel()
 
-    async def _pump(self, events: AsyncIterator[AgentEvent]) -> None:
-        """Drive the event source to completion, recording each event."""
+    async def _pump(self, events: AsyncGenerator[AgentEvent, None]) -> None:
+        """Drive the event source to its run end, recording each event.
 
-        async for event in events:
-            self._publish(event)
+        The first run end event is the commit point: pumping stops there,
+        so nothing a producer yields afterwards can reach the log or
+        rewrite the committed outcome. The source is closed on every exit,
+        running producer cleanup before finalization instead of leaving it
+        to garbage collection.
+        """
+
+        try:
+            async for event in events:
+                self._publish(event)
+                if isinstance(event, RunEndEvent):
+                    return
+        finally:
+            await events.aclose()
 
     def _finalize(self, task: asyncio.Task[None]) -> None:
         """Finish the run from its task result, then release its owner.
@@ -579,7 +593,7 @@ class AgentRuntime:
         session_id: str,
         *,
         result: type[BaseModel] | None = None,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """Yield the lifecycle-paired event stream for one prompt run."""
 
         events = (
