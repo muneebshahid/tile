@@ -88,10 +88,14 @@ class RunEndEvent(AgentEvent):
 
 
 class AgentStartEvent(AgentEvent):
-    """Marks the start of one stateless agent attempt."""
+    """Marks the start of one stateless agent attempt.
+
+    Attempts within one run are strictly sequential, so events carry no
+    attempt label: position in the log identifies the attempt, with
+    ``ResultFollowUpEvent`` separating typed-result retries.
+    """
 
     type: Literal["agent_start"] = "agent_start"
-    attempt: int = 0
 
 
 class AgentEndEvent(AgentEvent):
@@ -102,14 +106,12 @@ class AgentEndEvent(AgentEvent):
     """
 
     type: Literal["agent_end"] = "agent_end"
-    attempt: int = 0
 
 
 class AgentInterruptedEvent(AgentEvent):
     """Closes an agent attempt torn down by a failure or abort."""
 
     type: Literal["agent_interrupted"] = "agent_interrupted"
-    attempt: int = 0
 
 
 class ResultFollowUpEvent(AgentEvent):

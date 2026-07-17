@@ -31,7 +31,6 @@ class _OpenScope:
     """One start event awaiting its end or interruption."""
 
     kind: _ScopeKind
-    attempt: int = 0
     call_id: str = ""
 
 
@@ -71,7 +70,7 @@ class OpenScopeTracker:
 
         match event:
             case AgentStartEvent():
-                self._stack.append(_OpenScope(kind="agent", attempt=event.attempt))
+                self._stack.append(_OpenScope(kind="agent"))
             case TurnStartEvent():
                 self._stack.append(_OpenScope(kind="turn"))
             case MessageStartEvent():
@@ -163,7 +162,7 @@ def _interruption(scope: _OpenScope) -> AgentEvent:
 
     match scope.kind:
         case "agent":
-            return AgentInterruptedEvent(attempt=scope.attempt)
+            return AgentInterruptedEvent()
         case "turn":
             return TurnInterruptedEvent()
         case "message":

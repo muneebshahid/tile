@@ -624,7 +624,6 @@ class AgentRuntime:
                 session_id,
                 tool_executor=tool_executor,
                 instructions=instructions,
-                attempt=attempt,
             ):
                 observation.observe(event)
                 yield event
@@ -647,7 +646,6 @@ class AgentRuntime:
         *,
         tool_executor: ToolExecutor,
         instructions: str,
-        attempt: int = 0,
     ) -> AsyncIterator[AgentEvent]:
         """Yield one stateless agent attempt over the session's current history.
 
@@ -666,7 +664,6 @@ class AgentRuntime:
                 self._cwd,
                 auto_mode=self._auto_mode,
             ),
-            attempt=attempt,
         ):
             yield event
 

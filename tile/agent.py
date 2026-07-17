@@ -57,20 +57,18 @@ async def run_agent(
     model: str,
     tool_executor: ToolExecutor,
     instructions: str,
-    attempt: int = 0,
 ) -> AsyncIterator[AgentEvent]:
     """Run one stateless agent turn from supplied model-visible history.
 
     A successful tool result with ``terminate=True`` ends the loop after the
     current tool batch without another provider call. ``instructions`` is the
     complete system prompt, sent to the provider verbatim; the caller owns
-    its composition. ``attempt`` labels this attempt's lifecycle events when
-    a caller runs the agent repeatedly for one prompt.
+    its composition.
     """
 
     run_history = list(history)
 
-    yield AgentStartEvent(attempt=attempt)
+    yield AgentStartEvent()
     async for event in _run_agent_loop(
         run_history=run_history,
         stream_fn=stream_fn,
@@ -79,7 +77,7 @@ async def run_agent(
         tool_executor=tool_executor,
     ):
         yield event
-    yield AgentEndEvent(attempt=attempt)
+    yield AgentEndEvent()
 
 
 async def _run_agent_loop(
