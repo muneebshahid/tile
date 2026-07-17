@@ -130,9 +130,7 @@ async def _run_agent_loop(
                         turn_errored = True
                 yield agent_event
 
-        if should_terminate or turn_errored:
-            return
-        if not has_tool_executions:
+        if should_terminate or turn_errored or not has_tool_executions:
             return
 
 
