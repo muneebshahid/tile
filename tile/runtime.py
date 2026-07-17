@@ -31,7 +31,7 @@ from tile.types.tools import (
 from tile.tools.support.paths import normalize_cwd
 from tile.agent import run_agent
 from tile.history import HistoryStore, SessionRecord
-from tile.prompt import DEFAULT_INSTRUCTIONS
+from tile.prompt import DEFAULT_INSTRUCTIONS, build_system_prompt
 from tile.result import (
     COMPLETE_TOOL_NAME,
     FAIL_TOOL_NAME,
@@ -649,16 +649,23 @@ class AgentRuntime:
         instructions: str,
         attempt: int = 0,
     ) -> AsyncIterator[AgentEvent]:
-        """Yield one stateless agent attempt over the session's current history."""
+        """Yield one stateless agent attempt over the session's current history.
+
+        The system prompt is composed here, per attempt, so project context
+        and the environment lines stay current across attempts; the agent
+        receives it fully resolved.
+        """
 
         async for event in run_agent(
             self._history_store.get_history(session_id),
             stream_fn=self._stream_fn,
             model=self._model,
             tool_executor=tool_executor,
-            instructions=instructions,
-            auto_mode=self._auto_mode,
-            cwd=self._cwd,
+            instructions=build_system_prompt(
+                instructions,
+                self._cwd,
+                auto_mode=self._auto_mode,
+            ),
             attempt=attempt,
         ):
             yield event

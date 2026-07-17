@@ -68,7 +68,6 @@ def _collect_run_events(
     history: Sequence[UserMessage],
     *,
     stream_fn,
-    cwd: Path,
     tools: Sequence[ToolDefinition] = (),
 ) -> list[AgentEvent]:
     """Collect all events emitted by one stateless agent run."""
@@ -84,8 +83,6 @@ def _collect_run_events(
                 model="gpt-5.4",
                 tool_executor=ToolExecutor(tools),
                 instructions="Base prompt.",
-                auto_mode=False,
-                cwd=cwd,
             )
         ]
 
@@ -280,7 +277,6 @@ def test_agent_stops_after_terminating_tool_batch(tmp_path: Path) -> None:
     events = _collect_run_events(
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
-        cwd=tmp_path,
         tools=_result_tools(),
     )
 
@@ -301,7 +297,6 @@ def test_agent_does_not_enforce_result_tool_usage(tmp_path: Path) -> None:
     events = _collect_run_events(
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
-        cwd=tmp_path,
         tools=_result_tools(),
     )
 
@@ -361,7 +356,6 @@ def test_agent_retries_complete_after_validation_error(tmp_path: Path) -> None:
     events = _collect_run_events(
         [UserMessage(content="Weather in Munich?")],
         stream_fn=provider.fn,
-        cwd=tmp_path,
         tools=_result_tools(),
     )
 
@@ -557,7 +551,6 @@ def test_agent_finishes_tool_batch_after_terminating_result(tmp_path: Path) -> N
     events = _collect_run_events(
         [UserMessage(content="Weather?")],
         stream_fn=provider.fn,
-        cwd=tmp_path,
         tools=[*_result_tools(), city_tool("get_weather", "Get weather.", _weather)],
     )
 

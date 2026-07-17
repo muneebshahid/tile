@@ -10,12 +10,9 @@ import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date
-from pathlib import Path
 from typing import TypeVar
 
 from tile.agent import run_agent
-from tile.prompt import AUTO_MODE
 from tile.tool_executor import ToolExecutor
 from tile.events import (
     AgentEndEvent,
@@ -99,8 +96,6 @@ def _collect_run_events(
     model: str = "gpt-5.4",
     tools: Sequence[ToolDefinition] = (),
     instructions: str = "Base prompt.",
-    auto_mode: bool = False,
-    cwd: Path = Path("."),
 ) -> list[AgentEvent]:
     """Collect all events emitted by one stateless agent run."""
 
@@ -115,8 +110,6 @@ def _collect_run_events(
                 model=model,
                 tool_executor=ToolExecutor(tools),
                 instructions=instructions,
-                auto_mode=auto_mode,
-                cwd=cwd,
             )
         ]
 
@@ -688,8 +681,8 @@ def test_agent_run_handles_multiple_tool_use_turns() -> None:
     assert expect_tool_result_turn(final_request_history[4]).call_id == "call_2"
 
 
-def test_agent_appends_environment_to_instructions(tmp_path: Path) -> None:
-    """Append the date and working directory after the instructions."""
+def test_agent_sends_instructions_to_the_provider_verbatim() -> None:
+    """Pass the caller's resolved system prompt through without composition."""
 
     provider = ProviderStreamMock(
         [
@@ -701,62 +694,10 @@ def test_agent_appends_environment_to_instructions(tmp_path: Path) -> None:
     _collect_run_events(
         history,
         stream_fn=provider.fn,
-        instructions="Base prompt.",
-        cwd=tmp_path,
+        instructions="Resolved system prompt.",
     )
 
-    assert provider.instructions() == (
-        f"Base prompt.\n\n"
-        f"Current date: {date.today().isoformat()}\n"
-        f"Current working directory: {tmp_path}"
-    )
-
-
-def test_agent_prepends_auto_mode_to_instructions(tmp_path: Path) -> None:
-    """Place the auto-mode block before the instructions when enabled."""
-
-    provider = ProviderStreamMock(
-        [
-            empty_stream("resp_done"),
-        ]
-    )
-    history = [UserMessage(content="Hello")]
-
-    _collect_run_events(
-        history,
-        stream_fn=provider.fn,
-        instructions="Base prompt.",
-        auto_mode=True,
-        cwd=tmp_path,
-    )
-
-    assert provider.instructions().startswith(f"{AUTO_MODE}\n\nBase prompt.")
-
-
-def test_agent_includes_project_context_from_cwd(tmp_path: Path) -> None:
-    """Inject discovered project context between instructions and environment."""
-
-    (tmp_path / "AGENTS.md").write_text("Project rules.", encoding="utf-8")
-    provider = ProviderStreamMock(
-        [
-            empty_stream("resp_done"),
-        ]
-    )
-    history = [UserMessage(content="Hello")]
-
-    _collect_run_events(
-        history,
-        stream_fn=provider.fn,
-        instructions="Base prompt.",
-        cwd=tmp_path,
-    )
-
-    assert provider.instructions() == (
-        f"Base prompt.\n\n"
-        f"Project rules.\n\n"
-        f"Current date: {date.today().isoformat()}\n"
-        f"Current working directory: {tmp_path}"
-    )
+    assert provider.instructions() == "Resolved system prompt."
 
 
 def test_agent_run_yields_error_turn_end_for_stream_error() -> None:

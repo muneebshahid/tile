@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
 from unittest.mock import AsyncMock
@@ -45,6 +45,7 @@ from tile.types.tools import (
     ToolResult,
     ToolTextContent,
 )
+from tile.prompt import AUTO_MODE
 from tile.result import Aborted, Completed, ExecutionFailure, Failed
 from tests.support.agent_streams import (
     TEST_PROVIDER,
@@ -1681,3 +1682,37 @@ def test_tool_execution_start_precedes_persisted_result() -> None:
         assert expect_tool_result_turn(session.history[2]).call_id == "call_weather"
 
     asyncio.run(_run())
+
+
+def test_runtime_sends_the_composed_system_prompt_to_the_provider(
+    tmp_path: Path,
+) -> None:
+    """Compose auto mode, instructions, project context, and environment lines."""
+
+    (tmp_path / "AGENTS.md").write_text("Project rules.", encoding="utf-8")
+    provider = ProviderStreamMock([final_text_stream("resp_1", "hello back")])
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        cwd=tmp_path,
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+        instructions="Base prompt.",
+    )
+    session = runtime.session(session_id="composed-prompt")
+
+    async def _run() -> None:
+        """Drive one prompt to completion."""
+
+        run = await session.prompt("hello")
+        assert await run.wait() == "completed"
+
+    asyncio.run(_run())
+
+    assert provider.instructions() == (
+        f"{AUTO_MODE}\n\n"
+        f"Base prompt.\n\n"
+        f"Project rules.\n\n"
+        f"Current date: {date.today().isoformat()}\n"
+        f"Current working directory: {tmp_path.resolve()}"
+    )
