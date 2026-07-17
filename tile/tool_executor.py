@@ -49,6 +49,11 @@ class ToolExecutor:
 
         try:
             result = await self._call_tool(tool_name, arguments)
+            return ToolExecutionOutcome.from_result(
+                call_id=call_id,
+                tool_name=tool_name,
+                result=result,
+            )
         except ToolError as error:
             return ToolExecutionOutcome.from_error(
                 call_id=call_id,
@@ -68,12 +73,6 @@ class ToolExecutor:
                     message=str(error),
                 ),
             )
-
-        return ToolExecutionOutcome.from_result(
-            call_id=call_id,
-            tool_name=tool_name,
-            result=result,
-        )
 
     async def _call_tool(
         self,
