@@ -1,6 +1,6 @@
 """Stateless agent run loop for provider streams and tool execution."""
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 
 from tile.types.conversation import AssistantTurn, ConversationItem
 from tile.types.stream_events import (
@@ -57,7 +57,7 @@ async def run_agent(
     model: str,
     tool_executor: ToolExecutor,
     instructions: str,
-) -> AsyncIterator[AgentEvent]:
+) -> AsyncGenerator[AgentEvent, None]:
     """Run one stateless agent turn from supplied model-visible history.
 
     A successful tool result with ``terminate=True`` ends the loop after the
