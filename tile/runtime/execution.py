@@ -2,9 +2,11 @@
 
 Execution pushes inner events through the run's publish callable and
 returns the ``RunOutcome``. It never publishes run lifecycle events and
-never touches the run store: the run turns the returned outcome — or the
-exception or cancellation that replaces it — into the terminal run end
-event, so a duplicated or missing run end is unrepresentable here.
+never touches the run store — its dependency contract carries no run
+store, so the boundary is structural: the run turns the returned outcome
+— or the exception or cancellation that replaces it — into the terminal
+run end event, so a duplicated or missing run end is unrepresentable
+here.
 """
 
 from __future__ import annotations
@@ -12,15 +14,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import aclosing
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from pydantic import BaseModel
 
 from tile.agent import run_agent
+from tile.history import HistoryStore
 from tile.events import (
     AgentEvent,
     MessageEndEvent,
     ResultFollowUpEvent,
+    StreamFn,
     ToolExecutionEndEvent,
 )
 from tile.prompt import build_system_prompt
@@ -43,10 +47,25 @@ from tile.types.conversation import AssistantTurn, UserMessage
 from tile.types.stream_events import TextBlock
 from tile.types.tools import ToolDetails
 
-if TYPE_CHECKING:
-    from tile.runtime.run import _RunDependencies, _RunSpec
-
 PublishFn = Callable[[AgentEvent], None]
+
+
+@dataclass(frozen=True)
+class _ExecutionDependencies:
+    """Caller-constructed dependencies a prompt program may touch.
+
+    Deliberately excludes the run store: execution reads history and
+    drives the provider and tools; run-scoped persistence belongs to the
+    run.
+    """
+
+    stream_fn: StreamFn
+    model: str
+    instructions: str
+    cwd: Path
+    auto_mode: bool
+    tool_executor: ToolExecutor
+    history_store: HistoryStore
 
 
 class TurnFailedError(RuntimeError):
@@ -62,21 +81,24 @@ class TurnFailedError(RuntimeError):
 async def execute_prompt(
     publish: PublishFn,
     *,
-    spec: _RunSpec,
-    deps: _RunDependencies,
+    deps: _ExecutionDependencies,
+    session_id: str,
+    result: type[BaseModel] | None,
 ) -> RunOutcome:
     """Run one prompt program, publishing inner events, and return its outcome."""
 
-    if spec.result is None:
-        return await _execute_plain(publish, spec=spec, deps=deps)
-    return await _execute_typed(publish, spec=spec, deps=deps, result=spec.result)
+    if result is None:
+        return await _execute_plain(publish, deps=deps, session_id=session_id)
+    return await _execute_typed(
+        publish, deps=deps, session_id=session_id, result=result
+    )
 
 
 async def _execute_plain(
     publish: PublishFn,
     *,
-    spec: _RunSpec,
-    deps: _RunDependencies,
+    deps: _ExecutionDependencies,
+    session_id: str,
 ) -> RunOutcome:
     """Run one plain agent invocation and conclude with its text outcome."""
 
@@ -84,8 +106,8 @@ async def _execute_plain(
     await _run_attempt(
         publish,
         observation,
-        spec=spec,
         deps=deps,
+        session_id=session_id,
         tool_executor=deps.tool_executor,
         instructions=deps.instructions,
     )
@@ -96,8 +118,8 @@ async def _execute_plain(
 async def _execute_typed(
     publish: PublishFn,
     *,
-    spec: _RunSpec,
-    deps: _RunDependencies,
+    deps: _ExecutionDependencies,
+    session_id: str,
     result: type[BaseModel],
 ) -> RunOutcome:
     """Run agent attempts until the required result is produced or exhausted."""
@@ -111,8 +133,8 @@ async def _execute_typed(
         await _run_attempt(
             publish,
             observation,
-            spec=spec,
             deps=deps,
+            session_id=session_id,
             tool_executor=tool_executor,
             instructions=instructions,
         )
@@ -129,8 +151,8 @@ async def _run_attempt(
     publish: PublishFn,
     observation: _AgentRunObservation,
     *,
-    spec: _RunSpec,
-    deps: _RunDependencies,
+    deps: _ExecutionDependencies,
+    session_id: str,
     tool_executor: ToolExecutor,
     instructions: str,
 ) -> None:
@@ -144,7 +166,7 @@ async def _run_attempt(
     """
 
     events = run_agent(
-        deps.history_store.get_history(spec.session_id),
+        deps.history_store.get_history(session_id),
         stream_fn=deps.stream_fn,
         model=deps.model,
         tool_executor=tool_executor,

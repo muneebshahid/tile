@@ -1,9 +1,10 @@
 """OpenAI provider entrypoint for the API streaming transport."""
 
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncStream
+from openai.types.responses import ResponseStreamEvent
 from openai.types.responses.response_create_params import ResponseCreateParamsStreaming
 
 from tile.events import StreamFn
@@ -66,9 +67,25 @@ class _StreamApi:
         )
         raw_stream = await self._client.responses.create(**request_params)
         return assemble_stream(
-            normalize_sdk_events(raw_stream),
+            normalize_sdk_events(_sdk_stream_events(raw_stream)),
             source=ProviderSource(provider=self.provider, model=model),
         )
+
+
+async def _sdk_stream_events(
+    raw_stream: AsyncStream[ResponseStreamEvent],
+) -> AsyncGenerator[ResponseStreamEvent, None]:
+    """Yield SDK events, closing the transport stream on every exit.
+
+    The SDK stream owns a live HTTP response; wrapping it in a generator
+    lets the adapter chain above forward closure down to the transport.
+    """
+
+    try:
+        async for event in raw_stream:
+            yield event
+    finally:
+        await raw_stream.close()
 
 
 def _build_stream_request_params(

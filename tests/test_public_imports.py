@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from typing import get_args
 
 from tile import (
@@ -126,7 +126,7 @@ def _assistant_response() -> tuple[ProviderStreamEvent, ...]:
 
 async def _stream_events(
     events: Sequence[ProviderStreamEvent],
-) -> AsyncIterator[ProviderStreamEvent]:
+) -> AsyncGenerator[ProviderStreamEvent, None]:
     """Yield fake provider events."""
 
     for event in events:

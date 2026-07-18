@@ -1,6 +1,6 @@
 """Raw OpenAI response event factories for provider-boundary tests."""
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from dataclasses import dataclass
 from unittest.mock import AsyncMock
 
@@ -48,15 +48,39 @@ def build_fake_openai_client(
 
     return FakeOpenAIClient(
         responses=FakeResponsesEndpoint(
-            create=AsyncMock(return_value=raw_response_stream(events))
+            create=AsyncMock(return_value=FakeRawResponseStream(events))
         )
     )
 
 
+class FakeRawResponseStream:
+    """Fake SDK response stream exposing the ``AsyncStream`` contract.
+
+    Tracks closure so provider tests can assert the transport is released.
+    """
+
+    def __init__(self, events: Sequence[ResponseStreamEvent]) -> None:
+        """Wrap static raw events behind the SDK stream surface."""
+
+        self._events = async_stream(events)
+        self.closed = False
+
+    def __aiter__(self) -> AsyncIterator[ResponseStreamEvent]:
+        """Iterate the wrapped raw events."""
+
+        return self._events
+
+    async def close(self) -> None:
+        """Record closure and release the wrapped event source."""
+
+        self.closed = True
+        await self._events.aclose()
+
+
 def raw_response_stream(
     events: Sequence[ResponseStreamEvent],
-) -> AsyncIterator[ResponseStreamEvent]:
-    """Yield raw OpenAI response events through an async iterator."""
+) -> AsyncGenerator[ResponseStreamEvent, None]:
+    """Yield raw OpenAI response events as the provider's wrapper does."""
 
     return async_stream(events)
 

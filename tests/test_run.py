@@ -1,14 +1,17 @@
 """Tests for run-owned mechanics: submission, finalization, and release."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+from tile.events import StreamFn
 from tile.history import InMemoryHistoryStore
 from tile.result import Completed, Failed
 from tile.runs import InMemoryRunStore, RunRecord
+from tile.runtime.execution import _ExecutionDependencies
 from tile.runtime.run import Run, _RunDependencies, _RunSpec
 from tile.tool_executor import ToolExecutor
 from tile.types.conversation import ConversationItem
@@ -55,20 +58,109 @@ def _deps(
 ) -> _RunDependencies:
     """Build run dependencies over fake stores with the session prepared."""
 
+    return _deps_for_stream_fn(
+        ProviderStreamMock(streams).fn,
+        session_id=session_id,
+        history_store=history_store,
+        run_store=run_store,
+    )
+
+
+def _deps_for_stream_fn(
+    stream_fn: StreamFn,
+    *,
+    session_id: str,
+    history_store: InMemoryHistoryStore | None = None,
+    run_store: InMemoryRunStore | None = None,
+) -> _RunDependencies:
+    """Build run dependencies around one stream function."""
+
     history_store = (
         history_store if history_store is not None else InMemoryHistoryStore()
     )
     history_store.ensure_session(session_id=session_id)
     return _RunDependencies(
-        stream_fn=ProviderStreamMock(streams).fn,
-        model="gpt-5.4",
-        instructions="Base prompt.",
-        cwd=Path("."),
-        auto_mode=False,
-        tool_executor=ToolExecutor(()),
+        execution=_ExecutionDependencies(
+            stream_fn=stream_fn,
+            model="gpt-5.4",
+            instructions="Base prompt.",
+            cwd=Path("."),
+            auto_mode=False,
+            tool_executor=ToolExecutor(()),
+            history_store=history_store,
+        ),
         history_store=history_store,
         run_store=run_store if run_store is not None else InMemoryRunStore(),
     )
+
+
+class _TrackingStreamFn:
+    """Stream function whose provider streams record their closure."""
+
+    provider = "test-provider"
+
+    def __init__(self, events: Sequence[ProviderStreamEvent]) -> None:
+        """Serve one provider stream over the given events."""
+
+        self._events = tuple(events)
+        self.closed = False
+
+    async def __call__(
+        self,
+        history: object,
+        model: str,
+        *,
+        instructions: str,
+        tools: object,
+    ) -> AsyncGenerator[ProviderStreamEvent, None]:
+        """Return a stream that flags this instance when closed."""
+
+        _ = history, model, instructions, tools
+        return self._stream()
+
+    async def _stream(self) -> AsyncGenerator[ProviderStreamEvent, None]:
+        """Yield the configured events, recording closure on every exit."""
+
+        try:
+            for event in self._events:
+                yield event
+        finally:
+            self.closed = True
+
+
+def test_run_closes_the_provider_stream_when_projection_fails() -> None:
+    """Release the provider transport when a history write fails the run.
+
+    Closure does not cascade through generator chains on its own; this
+    pins the explicit forwarding from the run's execution down to the
+    provider stream.
+    """
+
+    async def _run() -> None:
+        """Fail projection mid-run and observe the stream's cleanup."""
+
+        history_store = _FailingHistoryStore()
+        stream_fn = _TrackingStreamFn(final_text_stream("resp_1", "hello back"))
+        deps = _deps_for_stream_fn(
+            stream_fn,
+            session_id="stream-cleanup",
+            history_store=history_store,
+        )
+
+        run = Run(
+            spec=_RunSpec(session_id="stream-cleanup", content="hello", result=None),
+            deps=deps,
+            on_finished=lambda _: None,
+        )
+        history_store.fail_appends = True
+
+        assert await run.wait() == "failed"
+        assert stream_fn.closed
+        failure = run.failure
+        assert failure is not None
+        assert failure.message == "history unavailable"
+
+    asyncio.run(_run())
 
 
 def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
@@ -135,32 +227,48 @@ def test_run_abandons_its_record_when_the_user_message_write_fails() -> None:
     asyncio.run(_run())
 
 
+class _ControlSignal(BaseException):
+    """Deterministic process-control signal for finalization testing."""
+
+
+@contextmanager
+def _capturing_loop_exceptions(
+    reported: list[BaseException],
+) -> Iterator[None]:
+    """Collect exceptions escaping event-loop callbacks into ``reported``."""
+
+    def capture_exception(
+        _: asyncio.AbstractEventLoop,
+        context: dict[str, object],
+    ) -> None:
+        """Capture a control exception re-raised by a done callback."""
+
+        error = context.get("exception")
+        if isinstance(error, BaseException):
+            reported.append(error)
+
+    loop = asyncio.get_running_loop()
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(capture_exception)
+    try:
+        yield
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+
 def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
     """Preserve control flow without rewriting the recorded terminal state."""
-
-    class ControlSignal(BaseException):
-        """Deterministic process-control signal for finalization testing."""
 
     async def _run() -> None:
         """Observe an interrupted owner callback through the event loop."""
 
-        signal = ControlSignal("stop")
+        signal = _ControlSignal("stop")
         reported: list[BaseException] = []
 
         def interrupt(_: Run) -> None:
             """Interrupt owner notification with a control exception."""
 
             raise signal
-
-        def capture_exception(
-            _: asyncio.AbstractEventLoop,
-            context: dict[str, object],
-        ) -> None:
-            """Capture a control exception re-raised by a done callback."""
-
-            error = context.get("exception")
-            if isinstance(error, BaseException):
-                reported.append(error)
 
         run_store = InMemoryRunStore()
         deps = _deps(
@@ -169,10 +277,7 @@ def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
             run_store=run_store,
         )
 
-        loop = asyncio.get_running_loop()
-        previous_handler = loop.get_exception_handler()
-        loop.set_exception_handler(capture_exception)
-        try:
+        with _capturing_loop_exceptions(reported):
             run = Run(
                 spec=_RunSpec(
                     session_id="control-signal", content="hello", result=None
@@ -182,8 +287,6 @@ def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
             )
             assert await run.wait() == "completed"
             await asyncio.sleep(0)
-        finally:
-            loop.set_exception_handler(previous_handler)
 
         assert reported == [signal]
         assert run.status == "completed"

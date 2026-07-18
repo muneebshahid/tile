@@ -155,3 +155,24 @@ def test_stream_passes_serialized_tools_when_provided() -> None:
             }
         ],
     )
+
+
+def test_stream_closes_the_sdk_transport_when_the_stream_ends() -> None:
+    """Forward closure through the adapter chain down to the SDK stream."""
+
+    raw_events = [
+        response_created_event(1, "resp_close"),
+        message_added_event(2, "msg_close", output_index=0),
+        message_done_event(
+            3,
+            "msg_close",
+            [{"type": "output_text", "text": "Hello", "annotations": []}],
+            output_index=0,
+        ),
+        response_completed_event(4, "resp_close"),
+    ]
+    client = build_fake_openai_client(raw_events)
+
+    _collect_events(client)
+
+    assert client.responses.create.return_value.closed

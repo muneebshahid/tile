@@ -15,7 +15,6 @@ import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -26,7 +25,6 @@ from tile.events import (
     ResultFollowUpEvent,
     RunEndEvent,
     RunStartEvent,
-    StreamFn,
     ToolExecutionEndEvent,
 )
 from tile.history import HistoryStore
@@ -41,9 +39,9 @@ from tile.runs import RunRecord, RunStatus, RunStore
 from tile.runtime.execution import (
     TurnFailedError,
     _assistant_text,
+    _ExecutionDependencies,
     execute_prompt,
 )
-from tile.tool_executor import ToolExecutor
 from tile.types.conversation import (
     AssistantTurn,
     ConversationItem,
@@ -67,14 +65,14 @@ class _RunSpec:
 
 @dataclass(frozen=True)
 class _RunDependencies:
-    """Caller-constructed dependencies shared by every run of a runtime."""
+    """Caller-constructed dependencies shared by every run of a runtime.
 
-    stream_fn: StreamFn
-    model: str
-    instructions: str
-    cwd: Path
-    auto_mode: bool
-    tool_executor: ToolExecutor
+    The execution contract is composed rather than flattened so the
+    prompt program receives only what it may touch; the stores name the
+    run's own mutation capabilities.
+    """
+
+    execution: _ExecutionDependencies
     history_store: HistoryStore
     run_store: RunStore
 
@@ -114,12 +112,21 @@ class Run:
         self._changed = asyncio.Event()
         self._finalized = asyncio.Event()
         self._record = self._create_run_record()
-        self._append_user_message()
-        self._publish(RunStartEvent())
-        self._task = asyncio.create_task(
-            execute_prompt(self._publish, spec=spec, deps=deps)
-        )
-        self._task.add_done_callback(self._finalize)
+        try:
+            self._append_user_message()
+            self._publish(RunStartEvent())
+            self._task = asyncio.create_task(
+                execute_prompt(
+                    self._publish,
+                    deps=deps.execution,
+                    session_id=spec.session_id,
+                    result=spec.result,
+                )
+            )
+            self._task.add_done_callback(self._finalize)
+        except BaseException as submission_error:
+            self._abandon_record(submission_error)
+            raise
 
     @property
     def id(self) -> str:
@@ -256,28 +263,19 @@ class Run:
             session_id=self._spec.session_id,
             status="running",
             started_at=datetime.now(UTC),
-            model=self._deps.model,
-            provider=self._deps.stream_fn.provider,
+            model=self._deps.execution.model,
+            provider=self._deps.execution.stream_fn.provider,
         )
         self._deps.run_store.create_run(record)
         return record
 
     def _append_user_message(self) -> None:
-        """Persist the prompt's user message before execution can start.
+        """Persist the prompt's user message before execution can start."""
 
-        On failure the already-created running record is abandoned as
-        failed — best effort — and the submission error is re-raised to
-        the caller; no task was created, so nothing else needs unwinding.
-        """
-
-        try:
-            self._deps.history_store.append_history(
-                self._spec.session_id,
-                [UserMessage(content=self._spec.content)],
-            )
-        except BaseException as submission_error:
-            self._abandon_record(submission_error)
-            raise
+        self._deps.history_store.append_history(
+            self._spec.session_id,
+            [UserMessage(content=self._spec.content)],
+        )
 
     def _abandon_record(self, error: BaseException) -> None:
         """Best-effort fail the running record of a submission that never ran."""

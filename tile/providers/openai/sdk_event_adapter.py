@@ -1,5 +1,6 @@
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
+from contextlib import aclosing
 from typing import cast
 
 from openai.types.responses import (
@@ -40,14 +41,19 @@ from tile.types.tools import JsonObject
 
 
 async def normalize_sdk_events(
-    raw_stream: AsyncIterator[ResponseStreamEvent],
-) -> AsyncIterator[NormalizedEvent]:
-    """Normalize raw SDK events into transport-independent provider events."""
+    raw_stream: AsyncGenerator[ResponseStreamEvent, None],
+) -> AsyncGenerator[NormalizedEvent, None]:
+    """Normalize raw SDK events into transport-independent provider events.
 
-    async for event in raw_stream:
-        normalized_event = _normalize_sdk_event(event)
-        if normalized_event is not None:
-            yield normalized_event
+    Closing this generator closes ``raw_stream``: closure does not cascade
+    through generator chains on its own, so every layer forwards it.
+    """
+
+    async with aclosing(raw_stream):
+        async for event in raw_stream:
+            normalized_event = _normalize_sdk_event(event)
+            if normalized_event is not None:
+                yield normalized_event
 
 
 def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:

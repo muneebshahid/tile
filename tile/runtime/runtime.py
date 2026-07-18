@@ -22,6 +22,7 @@ from tile.history import HistoryStore, SessionRecord
 from tile.prompt import DEFAULT_INSTRUCTIONS
 from tile.result import COMPLETE_TOOL_NAME, FAIL_TOOL_NAME
 from tile.runs import RunRecord, RunStore
+from tile.runtime.execution import _ExecutionDependencies
 from tile.runtime.run import Run, _RunDependencies, _RunSpec
 from tile.runtime.session import Session
 from tile.tool_executor import ToolExecutor
@@ -63,12 +64,15 @@ class AgentRuntime:
         self._history_store = history_store
         self._run_store = run_store
         self._deps = _RunDependencies(
-            stream_fn=stream_fn,
-            model=model,
-            instructions=instructions,
-            cwd=normalized_cwd,
-            auto_mode=auto_mode,
-            tool_executor=ToolExecutor(_bind_cwd_tools(tools, normalized_cwd)),
+            execution=_ExecutionDependencies(
+                stream_fn=stream_fn,
+                model=model,
+                instructions=instructions,
+                cwd=normalized_cwd,
+                auto_mode=auto_mode,
+                tool_executor=ToolExecutor(_bind_cwd_tools(tools, normalized_cwd)),
+                history_store=history_store,
+            ),
             history_store=history_store,
             run_store=run_store,
         )
