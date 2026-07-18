@@ -296,23 +296,24 @@ sequenceDiagram
 | `ResponseIncompleteEvent` with content-filter stop | `INCOMPLETE(error)` | `StreamErrorEvent` | `MessageEndEvent`, `TurnEndEvent` with error assistant turn |
 | `ResponseFailedEvent` or `ResponseErrorEvent` | `FAILED` | `StreamErrorEvent` | `MessageEndEvent`, `TurnEndEvent` with error assistant turn |
 
-## Run Lifecycle Pairing
+## Run Lifecycle
 
-Every published start event is followed by exactly one end event or
-interrupted event, for every in-process termination path. An end event is
-the producer finishing its scope and carries the scope's payload; an
-interrupted event is the runtime closing a scope that a failure or abort
-tore down. Interrupted events carry no cause of their own: the run end's
-outcome names, exactly once, why anything was interrupted. Hard process
-death is outside this contract.
+Two events are guaranteed on every in-process termination path: every run
+log begins with `RunStartEvent` and ends with exactly one
+`RunEndEvent(outcome)`. Inner events are producer-emitted and carry no
+such guarantee — a failure or abort can tear the run down with inner
+scopes still open, so an inner start may lack its end. Consumers apply
+one sweep rule: an end event ends anything still open inside its scope,
+and the run end ends everything, with its outcome naming why exactly
+once. Hard process death is outside this contract.
 
-| Scope | Start | Producer end | Interruption |
-| --- | --- | --- | --- |
-| run | `RunStartEvent` | `RunEndEvent(outcome)` | `RunEndEvent(outcome)` synthesized |
-| agent attempt | `AgentStartEvent` | `AgentEndEvent` | `AgentInterruptedEvent` |
-| turn | `TurnStartEvent` | `TurnEndEvent(assistant_turn, tool_executions)` | `TurnInterruptedEvent` |
-| message | `MessageStartEvent` | `MessageEndEvent(assistant_turn)` | `MessageInterruptedEvent` |
-| tool execution | `ToolExecutionStartEvent(call_id)` | `ToolExecutionEndEvent(outcome)` | `ToolExecutionInterruptedEvent(call_id)` |
+| Scope | Start | End |
+| --- | --- | --- |
+| run | `RunStartEvent` (guaranteed first) | `RunEndEvent(outcome)` (guaranteed last) |
+| agent attempt | `AgentStartEvent` | `AgentEndEvent` |
+| turn | `TurnStartEvent` | `TurnEndEvent(assistant_turn, tool_executions)` |
+| message | `MessageStartEvent` | `MessageEndEvent(assistant_turn)` |
+| tool execution | `ToolExecutionStartEvent(call_id)` | `ToolExecutionEndEvent(outcome)` |
 
 Rules:
 
@@ -325,13 +326,10 @@ Rules:
   execution terminated. The commit is structural: the run stops pumping
   its event source at the first run end and closes it, so nothing a
   producer yields afterwards can reach the log or rewrite the outcome.
-- Interruptions close innermost-first: tool execution, then turn, then
-  agent attempt, then the run end.
-- An end event implies the death of scopes still open *inside* the scope
-  it closes: their interruptions are published immediately before it, so
-  the log stays properly nested on every path. Sibling scopes at the same
-  depth — parallel tool executions — are unaffected; tool ends match
-  their own call id only.
+- A tool execution that *fails* still gets its `ToolExecutionEndEvent`:
+  the executor boundary wraps every tool failure into an error outcome.
+  Only teardown — abort or a run failure while the tool is in flight —
+  leaves a tool start without its end, and the run end follows it.
 - An attempt whose turn errored in-band still ends normally with its
   producer events; the failure story lives on the errored assistant turn
   and the run end's outcome.
@@ -342,23 +340,22 @@ Rules:
   separating retries.
 - Terminal record persistence happens after the run end is committed;
   `Run.wait()` returns only after finalization, so waiters always observe
-  a complete log.
+  a closed log.
 - Provider stream fragments (`TextStart/End`, `ReasoningStart/End`,
   `ToolCallStart/Delta/End`, and the provider `StreamStart/Done/Error`
   events) are message content, not lifecycle scopes; the containing
-  message's end or interruption terminates their outstanding state.
-- The guarantee is directional and unvalidated: producers are
-  runtime-internal and pinned by tests, so an end event without a matching
-  start is tolerated rather than rejected, and a producer that completes
-  without committing a run end fails the run with an explicit
-  "ended without a committed run end event" execution failure.
+  message's end, or the sweep, terminates their outstanding state.
+- A producer that completes without committing a run end fails the run
+  with an explicit "ended without a committed run end event" execution
+  failure.
 
-Abort ordering during a tool call:
+Abort ordering during a tool call — the open scopes are simply left open
+and the run end sweeps them:
 
 ```text
-ToolExecutionInterrupted(call_id)
-TurnInterrupted
-AgentInterrupted
+...
+MessageEnd(assistant_turn)
+ToolExecutionStart(call_id)
 RunEnd(outcome=Aborted)
 ```
 

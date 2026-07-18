@@ -66,7 +66,6 @@ from tile.events import (
     StreamFn,
     ToolExecutionEndEvent,
 )
-from tile.lifecycle import OpenScopeTracker
 from tile.types.stream_events import ProviderSource
 
 logger = logging.getLogger(__name__)
@@ -138,7 +137,7 @@ class Run:
         self._persistence_error: BaseException | None = None
         self._changed = asyncio.Event()
         self._finalized = asyncio.Event()
-        self._scopes = OpenScopeTracker()
+        self._committed_outcome: RunOutcome | None = None
         self._on_done = on_done
         self._on_record = on_record
         self._on_event = on_event
@@ -227,9 +226,7 @@ class Run:
         appearing as ``Failed(cause=ExecutionFailure(...))`` and ``Aborted``.
         """
 
-        if self._record.status == "running":
-            return self._scopes.committed_outcome
-        return self._record.outcome
+        return self._committed_outcome
 
     @property
     def conversation_items(self) -> tuple[ConversationItem, ...]:
@@ -256,7 +253,7 @@ class Run:
         """Wait until the run is fully finalized and return its status.
 
         Returning only after finalization guarantees the event log is
-        complete — every start paired with an end — and that terminal
+        closed — it ends with the run end event — and that terminal
         persistence and owner release have been attempted.
         """
 
@@ -296,14 +293,14 @@ class Run:
     def _finalize(self, task: asyncio.Task[None]) -> None:
         """Finish the run from its task result, then release its owner.
 
-        This is the single abnormal-closure site: scopes a producer left
-        open are closed here, innermost first, before the terminal record
-        lands. The terminal outcome is derived from the committed run end
-        or the task's execution result and recorded exactly once.
-        Persistence and owner release are bookkeeping: their failures are
-        logged and exposed, but never rewrite what the caller sees. The
-        finalized flag is set unconditionally last so waiters can never
-        hang on a re-raised bookkeeping error.
+        The terminal outcome is derived from the committed run end or the
+        task's execution result and recorded exactly once; a run whose
+        producer never committed a run end gets one synthesized here so
+        the log always closes. Persistence and owner release are
+        bookkeeping: their failures are logged and exposed, but never
+        rewrite what the caller sees. The finalized flag is set
+        unconditionally last so waiters can never hang on a re-raised
+        bookkeeping error.
         """
 
         task_error = _task_error(task)
@@ -311,9 +308,9 @@ class Run:
             if task_error is not None:
                 self._fail(task_error)
             elif task.cancelled():
-                self._abort()
+                self._conclude(Aborted())
             else:
-                self._complete()
+                self._conclude(_missing_run_end_failure())
         finally:
             try:
                 self._release_owner()
@@ -343,21 +340,6 @@ class Run:
             if not isinstance(release_error, Exception):
                 raise
 
-    def _complete(self) -> None:
-        """Finish the run with its committed outcome.
-
-        A clean event source that never committed a run end broke the
-        lifecycle contract; the run lands as failed, with the missing
-        scopes closed, rather than as completed without a verdict.
-        """
-
-        self._conclude(_missing_run_end_failure())
-
-    def _abort(self) -> None:
-        """Finish the run as aborted, keeping an already committed outcome."""
-
-        self._conclude(Aborted())
-
     def _fail(self, error: BaseException) -> None:
         """Finish the run with serializable and live execution diagnostics.
 
@@ -366,7 +348,7 @@ class Run:
         handle for local debugging.
         """
 
-        if self._scopes.committed_outcome is not None:
+        if self._committed_outcome is not None:
             _log_run_bookkeeping_error(
                 "Run event source failed after its run end was committed", error
             )
@@ -378,53 +360,23 @@ class Run:
     def _conclude(
         self, fallback: RunOutcome, *, exception: BaseException | None = None
     ) -> None:
-        """Close the remaining scopes, then finish with the run's outcome.
+        """Land the terminal state: close the log, record it, then persist.
 
-        The committed outcome always wins over the fallback; interruptions
-        are synthesized exactly when scopes remain open. Synthesized events
-        bypass the event observer: they carry no history, and finalization
-        must not depend on an observer that may be the reason the run is
-        closing abnormally.
+        The committed outcome always wins over the fallback; a run end is
+        synthesized exactly when no producer committed one, so the log
+        always ends with one. The synthesized event bypasses the event
+        observer: it carries no history, and finalization must not depend
+        on an observer that may be the reason the run is closing
+        abnormally. The local transition must not raise and happens before
+        persistence, so a failed store write can only ever leave the store
+        stale — never rewrite what this handle reports.
         """
 
-        outcome = self._scopes.committed_outcome
+        outcome = self._committed_outcome
         if outcome is None:
             outcome = fallback
-        closing_events = self._scopes.close(outcome)
-        if closing_events:
-            self._events.extend(closing_events)
-            self._changed.set()
-        self._finish(outcome, exception=exception)
-
-    def _publish(self, event: AgentEvent) -> None:
-        """Track one event, publish it, then let the observer see it.
-
-        Interruptions the event implies for scopes abandoned inside it are
-        published first, keeping the log properly nested; like all
-        synthesized events, they bypass the observer. Publication order is
-        the contract: an event is in the live log and visible to
-        subscribers before observation, so an observer failure fails the
-        run but can never suppress the event.
-        """
-
-        self._events.extend(self._scopes.observe(event))
-        self._events.append(event)
-        self._changed.set()
-        self._on_event(event)
-
-    def _finish(
-        self,
-        outcome: RunOutcome,
-        *,
-        exception: BaseException | None = None,
-    ) -> None:
-        """Record the terminal outcome, wake subscribers, then persist.
-
-        The local transition must not raise and always happens first, so a
-        failed store write can only ever leave the store stale — never
-        rewrite what this handle reports.
-        """
-
+            self._committed_outcome = outcome
+            self._events.append(RunEndEvent(outcome=outcome))
         source = _latest_provider_source(self._events)
         self._record = self._record.finish(
             outcome=outcome,
@@ -434,6 +386,21 @@ class Run:
         self._exception = exception
         self._changed.set()
         self._persist_record()
+
+    def _publish(self, event: AgentEvent) -> None:
+        """Publish one event, then let the observer see it.
+
+        A run end passing through commits the run's outcome. Publication
+        order is the contract: an event is in the live log and visible to
+        subscribers before observation, so an observer failure fails the
+        run but can never suppress the event.
+        """
+
+        if isinstance(event, RunEndEvent):
+            self._committed_outcome = event.outcome
+        self._events.append(event)
+        self._changed.set()
+        self._on_event(event)
 
 
 class AgentRuntime:
@@ -594,7 +561,7 @@ class AgentRuntime:
         *,
         result: type[BaseModel] | None = None,
     ) -> AsyncGenerator[AgentEvent, None]:
-        """Yield the lifecycle-paired event stream for one prompt run."""
+        """Yield the event stream for one prompt run."""
 
         events = (
             self._plain_prompt_events(session_id)

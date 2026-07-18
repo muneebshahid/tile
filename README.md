@@ -123,13 +123,12 @@ async for event in run.events():
 status = await run.wait()  # "completed" | "failed" | "aborted"
 ```
 
-The event stream is lifecycle-paired: every start event is followed by
-exactly one end event or interrupted event, on every in-process
-termination path, and every run's log begins with `RunStartEvent` and
-ends with exactly one `RunEndEvent` carrying the run's terminal outcome.
-A scope torn down by a failure or abort is closed with an interrupted
-event; the run end's outcome names why, exactly once. `run.wait()`
-returns only after that closure, so waiters always observe a complete
+Every run's log begins with `RunStartEvent` and ends with exactly one
+`RunEndEvent` carrying the run's terminal outcome, on every in-process
+termination path. Inner events carry no such guarantee: a failure or
+abort can tear the run down with inner scopes still open, and the run
+end sweeps them — its outcome names why, exactly once. `run.wait()`
+returns only after that closure, so waiters always observe a closed
 log.
 
 Run events are currently replayable in process while the `Run` handle exists.
@@ -263,9 +262,9 @@ accepts the next prompt immediately. Tile does not retry; request-level retries
 belong to the `AsyncOpenAI` client you construct (`max_retries`), and the
 recovery unit above that is re-prompting the session.
 
-Run events are replayable facts, and their lifecycle pairing survives every
-in-process termination: an exception or abort closes the scopes it tore
-down with interrupted events before the terminal status lands.
+Run events are replayable facts, and the run-level closure survives every
+in-process termination: an exception or abort still lands exactly one
+`RunEndEvent` as the log's final event before the terminal status lands.
 `run.status` and `run.outcome` remain the authoritative terminal state, and
 `RunEndEvent.outcome` always matches them.
 
@@ -319,8 +318,7 @@ tile/
 ├── tools/           # Built-in local tool implementations
 ├── types/           # Provider-neutral contracts for conversations and tools
 ├── agent.py         # Stateless agent loop: provider turns and tool batches
-├── events.py        # Runtime event contracts and lifecycle pairing rules
-├── lifecycle.py     # Open-scope tracking for the run event log
+├── events.py        # Runtime event contracts and run lifecycle rules
 ├── prompt.py        # System prompt composition
 ├── result.py        # Typed run outcomes and the output-contract protocol
 └── runtime.py       # Session runtime facade: policy, persistence, runs

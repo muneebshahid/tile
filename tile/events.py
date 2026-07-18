@@ -1,20 +1,19 @@
 """Agent run events and provider stream callable contracts.
 
-Lifecycle pairing contract: every published start event is followed by
-exactly one end event or interrupted event, for every in-process
-termination path. An end event is the producer finishing its scope and
-carries the scope's payload; an interrupted event is the runtime closing a
-scope that a failure or abort tore down, and carries no cause of its own —
-the run's ``RunEndEvent`` outcome names, exactly once, why anything was
-interrupted. Scopes nest strictly:
-``run ⊃ agent attempt ⊃ turn ⊃ message / tool executions``, interruptions
-close innermost-first, and ``RunEndEvent`` is the final event of every
-run. Provider stream fragments (text, reasoning, and tool-call
-start/delta/end updates carried by ``MessageUpdateEvent``) are message
-content, not lifecycle scopes: their outstanding state is terminated by
-the containing message's end or interruption. Hard process death is
-outside this contract — no process can publish an event after it has
-stopped.
+Run lifecycle contract: every run log begins with ``RunStartEvent`` and
+ends with exactly one ``RunEndEvent`` committing the terminal outcome,
+for every in-process termination path. Only those two events are
+guaranteed. The inner events are producer-emitted and nest as
+``run ⊃ agent attempt ⊃ turn ⊃ message / tool executions``; a failure or
+abort can tear a run down with inner scopes still open, so an inner start
+may lack its end. Consumers apply one sweep rule: an end event ends
+anything still open inside its scope, and ``RunEndEvent`` ends everything
+— its outcome names why, exactly once. Provider stream fragments (text,
+reasoning, and tool-call start/delta/end updates carried by
+``MessageUpdateEvent``) are message content, not lifecycle scopes: the
+containing message's end, or the sweep, terminates their outstanding
+state. Hard process death is outside this contract — no process can
+publish an event after it has stopped.
 """
 
 from collections.abc import Awaitable, Sequence
@@ -77,10 +76,11 @@ class RunStartEvent(AgentEvent):
 class RunEndEvent(AgentEvent):
     """Marks the end of one prompt run and commits its terminal outcome.
 
-    Exactly one run end closes every run, as its final event. The outcome
-    is the same discriminated value recorded on the durable run summary;
-    its variant implies how execution terminated and names the cause of
-    any interruptions in the log.
+    Exactly one run end closes every run, as its final event, ending
+    every scope still open in the log. The outcome is the same
+    discriminated value recorded on the durable run summary; its variant
+    implies how execution terminated and names the cause of any scopes
+    the run tore down open.
     """
 
     type: Literal["run_end"] = "run_end"
@@ -106,12 +106,6 @@ class AgentEndEvent(AgentEvent):
     """
 
     type: Literal["agent_end"] = "agent_end"
-
-
-class AgentInterruptedEvent(AgentEvent):
-    """Closes an agent attempt torn down by a failure or abort."""
-
-    type: Literal["agent_interrupted"] = "agent_interrupted"
 
 
 class ResultFollowUpEvent(AgentEvent):
@@ -141,12 +135,6 @@ class TurnEndEvent(AgentEvent):
         return [execution.tool_result_turn for execution in self.tool_executions]
 
 
-class TurnInterruptedEvent(AgentEvent):
-    """Closes a turn torn down by a failure or abort."""
-
-    type: Literal["turn_interrupted"] = "turn_interrupted"
-
-
 class MessageStartEvent(AgentEvent):
     """Marks the start of a message lifecycle event."""
 
@@ -168,12 +156,6 @@ class MessageEndEvent(AgentEvent):
     assistant_turn: AssistantTurn
 
 
-class MessageInterruptedEvent(AgentEvent):
-    """Closes a message torn down before the provider stream finalized it."""
-
-    type: Literal["message_interrupted"] = "message_interrupted"
-
-
 class ToolExecutionStartEvent(AgentEvent):
     """Marks the start of a tool execution."""
 
@@ -190,28 +172,17 @@ class ToolExecutionEndEvent(AgentEvent):
     outcome: ToolExecutionOutcome
 
 
-class ToolExecutionInterruptedEvent(AgentEvent):
-    """Closes a tool execution torn down before the tool produced a result."""
-
-    type: Literal["tool_execution_interrupted"] = "tool_execution_interrupted"
-    call_id: str
-
-
 AgentRunEvent: TypeAlias = (
     RunStartEvent
     | RunEndEvent
     | AgentStartEvent
     | AgentEndEvent
-    | AgentInterruptedEvent
     | TurnStartEvent
     | TurnEndEvent
-    | TurnInterruptedEvent
     | MessageStartEvent
     | MessageUpdateEvent
     | MessageEndEvent
-    | MessageInterruptedEvent
     | ToolExecutionStartEvent
     | ToolExecutionEndEvent
-    | ToolExecutionInterruptedEvent
     | ResultFollowUpEvent
 )
