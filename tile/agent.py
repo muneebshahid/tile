@@ -1,7 +1,6 @@
 """Stateless agent run loop for provider streams and tool execution."""
 
 from collections.abc import AsyncIterator, Sequence
-from pathlib import Path
 
 from tile.types.conversation import AssistantTurn, ConversationItem
 from tile.types.stream_events import (
@@ -23,7 +22,6 @@ from tile.types.stream_events import (
 )
 from tile.types.tool_execution import ToolExecutionOutcome
 from tile.types.tools import JsonObject
-from tile.prompt import DEFAULT_INSTRUCTIONS, build_system_prompt
 from tile.tool_executor import ToolExecutor
 from tile.events import (
     AgentEndEvent,
@@ -58,30 +56,24 @@ async def run_agent(
     stream_fn: StreamFn,
     model: str,
     tool_executor: ToolExecutor,
-    cwd: Path,
-    instructions: str = DEFAULT_INSTRUCTIONS,
-    auto_mode: bool = True,
+    instructions: str,
 ) -> AsyncIterator[AgentEvent]:
     """Run one stateless agent turn from supplied model-visible history.
 
     A successful tool result with ``terminate=True`` ends the loop after the
-    current tool batch without another provider call. ``cwd`` is announced
-    in the system prompt verbatim; the caller owns its resolution.
+    current tool batch without another provider call. ``instructions`` is the
+    complete system prompt, sent to the provider verbatim; the caller owns
+    its composition.
     """
 
     run_history = list(history)
-    system_prompt = build_system_prompt(
-        instructions,
-        cwd,
-        auto_mode=auto_mode,
-    )
 
     yield AgentStartEvent()
     async for event in _run_agent_loop(
         run_history=run_history,
         stream_fn=stream_fn,
         model=model,
-        instructions=system_prompt,
+        instructions=instructions,
         tool_executor=tool_executor,
     ):
         yield event
@@ -127,9 +119,7 @@ async def _run_agent_loop(
                         turn_errored = True
                 yield agent_event
 
-        if should_terminate or turn_errored:
-            return
-        if not has_tool_executions:
+        if should_terminate or turn_errored or not has_tool_executions:
             return
 
 

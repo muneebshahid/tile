@@ -106,6 +106,7 @@ def _assert_runtime_event_sequence(output: io.StringIO) -> None:
 
     lines = [json.loads(line) for line in output.getvalue().splitlines()]
     assert [line["type"] for line in lines] == [
+        "run_start",
         "agent_start",
         "turn_start",
         "message_start",
@@ -118,6 +119,7 @@ def _assert_runtime_event_sequence(output: io.StringIO) -> None:
         "message_end",
         "turn_end",
         "agent_end",
+        "run_end",
     ]
 
 

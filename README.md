@@ -123,6 +123,14 @@ async for event in run.events():
 status = await run.wait()  # "completed" | "failed" | "aborted"
 ```
 
+Every run's log begins with `RunStartEvent` and ends with exactly one
+`RunEndEvent` carrying the run's terminal outcome, on every in-process
+termination path. Inner events carry no such guarantee: a failure or
+abort can tear the run down with inner scopes still open, and the run
+end sweeps them — its outcome names why, exactly once. `run.wait()`
+returns only after that closure, so waiters always observe a closed
+log.
+
 Run events are currently replayable in process while the `Run` handle exists.
 Conversation history and run summaries can be persisted with SQLite.
 Cross-process event replay, approval resumption, and service mode are planned,
@@ -254,9 +262,11 @@ accepts the next prompt immediately. Tile does not retry; request-level retries
 belong to the `AsyncOpenAI` client you construct (`max_retries`), and the
 recovery unit above that is re-prompting the session.
 
-Run events are the replayable prefix of facts emitted before termination. An
-exception may therefore end a run after a start event without a matching end
-event; `run.status` and `run.outcome` are the authoritative terminal state.
+Run events are replayable facts, and the run-level closure survives every
+in-process termination: an exception or abort still lands exactly one
+`RunEndEvent` as the log's final event before the terminal status lands.
+`run.status` and `run.outcome` remain the authoritative terminal state, and
+`RunEndEvent.outcome` always matches them.
 
 ## Public API
 
@@ -278,7 +288,7 @@ from tile import (
     SQLiteHistoryStore,
     SQLiteRunStore,
 )
-from tile.events import AgentEvent, MessageEndEvent, StreamFn
+from tile.events import AgentEvent, MessageEndEvent, RunEndEvent, StreamFn
 from tile.providers.openai import create_stream_api
 from tile.tools import BUILTIN_TOOLS
 from tile.types import ToolDefinition, ToolError, ToolInput, ToolResult
@@ -308,7 +318,7 @@ tile/
 ├── tools/           # Built-in local tool implementations
 ├── types/           # Provider-neutral contracts for conversations and tools
 ├── agent.py         # Stateless agent loop: provider turns and tool batches
-├── events.py        # Runtime event contracts
+├── events.py        # Runtime event contracts and run lifecycle rules
 ├── prompt.py        # System prompt composition
 ├── result.py        # Typed run outcomes and the output-contract protocol
 └── runtime.py       # Session runtime facade: policy, persistence, runs

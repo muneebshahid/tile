@@ -1,8 +1,8 @@
 """Tests for runtime-owned sessions, task-owned runs, and in-memory history."""
 
 import asyncio
-from collections.abc import AsyncIterator, Callable, Sequence
-from datetime import UTC, datetime
+from collections.abc import AsyncGenerator, Callable, Sequence
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal, cast
 from unittest.mock import AsyncMock
@@ -26,6 +26,8 @@ from tile.events import (
     AgentEvent,
     AgentStartEvent,
     MessageEndEvent,
+    RunEndEvent,
+    RunStartEvent,
     StreamFn,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -43,6 +45,7 @@ from tile.types.tools import (
     ToolResult,
     ToolTextContent,
 )
+from tile.prompt import AUTO_MODE
 from tile.result import Aborted, Completed, ExecutionFailure, Failed
 from tests.support.agent_streams import (
     TEST_PROVIDER,
@@ -759,13 +762,10 @@ def test_run_outcome_available_while_run_still_running() -> None:
     async def _run() -> None:
         """Read the outcome between the end event and run finalization."""
 
-        gate = asyncio.Event()
+        async def _events() -> AsyncGenerator[AgentEvent, None]:
+            """Commit a final outcome."""
 
-        async def _events() -> AsyncIterator[AgentEvent]:
-            """Publish a final outcome, then hold the run open."""
-
-            yield AgentEndEvent(outcome=Completed(value="done"))
-            await gate.wait()
+            yield RunEndEvent(outcome=Completed(value="done"))
 
         run = Run(
             record=RunRecord(
@@ -778,16 +778,16 @@ def test_run_outcome_available_while_run_still_running() -> None:
             events=_events(),
             on_done=lambda _: None,
             on_record=lambda _: None,
+            on_event=lambda _: None,
         )
 
         async for event in run.events():
-            if isinstance(event, AgentEndEvent):
+            if isinstance(event, RunEndEvent):
                 break
 
         assert run.status == "running"
         assert run.outcome == Completed(value="done")
 
-        gate.set()
         assert await run.wait() == "completed"
         assert run.outcome == Completed(value="done")
 
@@ -818,9 +818,10 @@ def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
                 started_at=datetime.now(UTC),
                 model="gpt-5.4",
             ),
-            events=async_stream([AgentEndEvent(outcome=Completed(value="done"))]),
+            events=async_stream([RunEndEvent(outcome=Completed(value="done"))]),
             on_done=released.append,
             on_record=reject_record,
+            on_event=lambda _: None,
         )
 
         assert await run.wait() == "completed"
@@ -852,6 +853,7 @@ def test_run_fails_when_event_pipeline_ends_without_outcome() -> None:
             events=async_stream([]),
             on_done=lambda _: None,
             on_record=persisted.append,
+            on_event=lambda _: None,
         )
 
         assert await run.wait() == "failed"
@@ -859,7 +861,7 @@ def test_run_fails_when_event_pipeline_ends_without_outcome() -> None:
         failure = run.failure
         assert failure is not None
         assert failure.origin == "execution"
-        assert failure.message == "The run ended without a published outcome."
+        assert failure.message == "The run ended without a committed run end event."
         assert run.outcome == Failed(cause=failure)
         assert run.exception is None
         assert persisted == [run.record]
@@ -907,9 +909,10 @@ def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
                     started_at=datetime.now(UTC),
                     model="gpt-5.4",
                 ),
-                events=async_stream([AgentEndEvent(outcome=Completed(value="done"))]),
+                events=async_stream([RunEndEvent(outcome=Completed(value="done"))]),
                 on_done=interrupt,
                 on_record=persisted.append,
+                on_event=lambda _: None,
             )
             assert await run.wait() == "completed"
             await asyncio.sleep(0)
@@ -941,8 +944,10 @@ def test_run_events_replay_from_start_for_late_subscribers() -> None:
         await run.wait()
         events = await _collect_run_events(run)
 
-        assert isinstance(events[0], AgentStartEvent)
-        assert isinstance(events[-1], AgentEndEvent)
+        assert isinstance(events[0], RunStartEvent)
+        assert isinstance(events[1], AgentStartEvent)
+        assert isinstance(events[-2], AgentEndEvent)
+        assert isinstance(events[-1], RunEndEvent)
         assert any(isinstance(event, MessageEndEvent) for event in events)
 
     asyncio.run(_run())
@@ -966,7 +971,7 @@ def test_run_events_supports_multiple_subscribers() -> None:
         )
 
         assert first == second
-        assert isinstance(first[-1], AgentEndEvent)
+        assert isinstance(first[-1], RunEndEvent)
 
     asyncio.run(_run())
 
@@ -1429,7 +1434,8 @@ def test_provider_death_converges_on_failed_run_state(
 
     events = asyncio.run(_run())
 
-    assert isinstance(events[0], AgentStartEvent)
+    assert isinstance(events[0], RunStartEvent)
+    assert isinstance(events[1], AgentStartEvent)
     streamed_turns = [
         event.assistant_turn for event in events if isinstance(event, MessageEndEvent)
     ]
@@ -1672,3 +1678,37 @@ def test_tool_execution_start_precedes_persisted_result() -> None:
         assert expect_tool_result_turn(session.history[2]).call_id == "call_weather"
 
     asyncio.run(_run())
+
+
+def test_runtime_sends_the_composed_system_prompt_to_the_provider(
+    tmp_path: Path,
+) -> None:
+    """Compose auto mode, instructions, project context, and environment lines."""
+
+    (tmp_path / "AGENTS.md").write_text("Project rules.", encoding="utf-8")
+    provider = ProviderStreamMock([final_text_stream("resp_1", "hello back")])
+    runtime = AgentRuntime(
+        stream_fn=provider.fn,
+        model="gpt-5.4",
+        cwd=tmp_path,
+        history_store=InMemoryHistoryStore(),
+        run_store=InMemoryRunStore(),
+        instructions="Base prompt.",
+    )
+    session = runtime.session(session_id="composed-prompt")
+
+    async def _run() -> None:
+        """Drive one prompt to completion."""
+
+        run = await session.prompt("hello")
+        assert await run.wait() == "completed"
+
+    asyncio.run(_run())
+
+    assert provider.instructions() == (
+        f"{AUTO_MODE}\n\n"
+        f"Base prompt.\n\n"
+        f"Project rules.\n\n"
+        f"Current date: {date.today().isoformat()}\n"
+        f"Current working directory: {tmp_path.resolve()}"
+    )

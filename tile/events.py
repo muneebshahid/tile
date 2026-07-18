@@ -1,4 +1,20 @@
-"""Agent run events and provider stream callable contracts."""
+"""Agent run events and provider stream callable contracts.
+
+Run lifecycle contract: every run log begins with ``RunStartEvent`` and
+ends with exactly one ``RunEndEvent`` committing the terminal outcome,
+for every in-process termination path. Only those two events are
+guaranteed. The inner events are producer-emitted and nest as
+``run ⊃ agent attempt ⊃ turn ⊃ message / tool executions``; a failure or
+abort can tear a run down with inner scopes still open, so an inner start
+may lack its end. Consumers apply one sweep rule: an end event ends
+anything still open inside its scope, and ``RunEndEvent`` ends everything
+— its outcome names why, exactly once. Provider stream fragments (text,
+reasoning, and tool-call start/delta/end updates carried by
+``MessageUpdateEvent``) are message content, not lifecycle scopes: the
+containing message's end, or the sweep, terminates their outstanding
+state. Hard process death is outside this contract — no process can
+publish an event after it has stopped.
+"""
 
 from collections.abc import Awaitable, Sequence
 from typing import Literal, Protocol, TypeAlias
@@ -47,21 +63,49 @@ class AgentEvent(BaseModel):
     type: str
 
 
+class RunStartEvent(AgentEvent):
+    """Marks the start of one prompt run.
+
+    Published by the run itself before its event source starts, so every
+    run log begins with a run start on every path.
+    """
+
+    type: Literal["run_start"] = "run_start"
+
+
+class RunEndEvent(AgentEvent):
+    """Marks the end of one prompt run and commits its terminal outcome.
+
+    Exactly one run end closes every run, as its final event, ending
+    every scope still open in the log. The outcome is the same
+    discriminated value recorded on the durable run summary; its variant
+    implies how execution terminated and names the cause of any scopes
+    the run tore down open.
+    """
+
+    type: Literal["run_end"] = "run_end"
+    outcome: RunOutcome
+
+
 class AgentStartEvent(AgentEvent):
-    """Marks the start of an agent run."""
+    """Marks the start of one stateless agent attempt.
+
+    Attempts within one run are strictly sequential, so events carry no
+    attempt label: position in the log identifies the attempt, with
+    ``ResultFollowUpEvent`` separating typed-result retries.
+    """
 
     type: Literal["agent_start"] = "agent_start"
 
 
 class AgentEndEvent(AgentEvent):
-    """Marks the end of an agent run.
+    """Marks the end of one stateless agent attempt.
 
-    The stateless agent leaves ``outcome`` unset. Layers that compose runs
-    into prompts attach the prompt-level outcome.
+    An attempt whose turn errored in-band still ends normally; the
+    run-level verdict lives on ``RunEndEvent``.
     """
 
     type: Literal["agent_end"] = "agent_end"
-    outcome: RunOutcome | None = None
 
 
 class ResultFollowUpEvent(AgentEvent):
@@ -129,7 +173,9 @@ class ToolExecutionEndEvent(AgentEvent):
 
 
 AgentRunEvent: TypeAlias = (
-    AgentStartEvent
+    RunStartEvent
+    | RunEndEvent
+    | AgentStartEvent
     | AgentEndEvent
     | TurnStartEvent
     | TurnEndEvent
