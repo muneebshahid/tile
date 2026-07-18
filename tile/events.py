@@ -66,7 +66,7 @@ class AgentEvent(BaseModel):
 class RunStartEvent(AgentEvent):
     """Marks the start of one prompt run.
 
-    Published by the run itself before its event source starts, so every
+    Published by the run itself before execution starts, so every
     run log begins with a run start on every path.
     """
 

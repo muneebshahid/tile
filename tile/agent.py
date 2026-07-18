@@ -1,6 +1,7 @@
 """Stateless agent run loop for provider streams and tool execution."""
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from contextlib import aclosing
 
 from tile.types.conversation import AssistantTurn, ConversationItem
 from tile.types.stream_events import (
@@ -57,7 +58,7 @@ async def run_agent(
     model: str,
     tool_executor: ToolExecutor,
     instructions: str,
-) -> AsyncIterator[AgentEvent]:
+) -> AsyncGenerator[AgentEvent, None]:
     """Run one stateless agent turn from supplied model-visible history.
 
     A successful tool result with ``terminate=True`` ends the loop after the
@@ -67,16 +68,18 @@ async def run_agent(
     """
 
     run_history = list(history)
-
-    yield AgentStartEvent()
-    async for event in _run_agent_loop(
+    loop_events = _run_agent_loop(
         run_history=run_history,
         stream_fn=stream_fn,
         model=model,
         instructions=instructions,
         tool_executor=tool_executor,
-    ):
-        yield event
+    )
+
+    yield AgentStartEvent()
+    async with aclosing(loop_events):
+        async for event in loop_events:
+            yield event
     yield AgentEndEvent()
 
 
@@ -87,8 +90,13 @@ async def _run_agent_loop(
     model: str,
     instructions: str,
     tool_executor: ToolExecutor,
-) -> AsyncIterator[AgentEvent]:
-    """Call the provider until a turn errors, terminates, or stops using tools."""
+) -> AsyncGenerator[AgentEvent, None]:
+    """Call the provider until a turn errors, terminates, or stops using tools.
+
+    Each provider stream is closed on every exit — closure does not
+    cascade through generator chains on its own, so every layer forwards
+    it down to the transport.
+    """
 
     while True:
         has_tool_executions = False
@@ -101,23 +109,24 @@ async def _run_agent_loop(
             tools=tool_executor.tools,
         )
 
-        async for event in stream:
-            async for agent_event in _handle_stream_event(
-                event,
-                run_history=run_history,
-                tool_executor=tool_executor,
-            ):
-                if (
-                    isinstance(agent_event, ToolExecutionEndEvent)
-                    and agent_event.outcome.terminate
+        async with aclosing(stream):
+            async for event in stream:
+                async for agent_event in _handle_stream_event(
+                    event,
+                    run_history=run_history,
+                    tool_executor=tool_executor,
                 ):
-                    should_terminate = True
-                if isinstance(agent_event, TurnEndEvent):
-                    if agent_event.tool_executions:
-                        has_tool_executions = True
-                    if agent_event.assistant_turn.status != "completed":
-                        turn_errored = True
-                yield agent_event
+                    if (
+                        isinstance(agent_event, ToolExecutionEndEvent)
+                        and agent_event.outcome.terminate
+                    ):
+                        should_terminate = True
+                    if isinstance(agent_event, TurnEndEvent):
+                        if agent_event.tool_executions:
+                            has_tool_executions = True
+                        if agent_event.assistant_turn.status != "completed":
+                            turn_errored = True
+                    yield agent_event
 
         if should_terminate or turn_errored or not has_tool_executions:
             return

@@ -321,7 +321,11 @@ tile/
 ├── events.py        # Runtime event contracts and run lifecycle rules
 ├── prompt.py        # System prompt composition
 ├── result.py        # Typed run outcomes and the output-contract protocol
-└── runtime.py       # Session runtime facade: policy, persistence, runs
+└── runtime/         # Session runtime package
+    ├── run.py       # Run: one prompt from submission through finalization
+    ├── execution.py # Prompt programs: attempt loops and outcome derivation
+    ├── runtime.py   # AgentRuntime: configuration and orchestration
+    └── session.py   # Session facade
 tests/               # Test suite
 ```
 

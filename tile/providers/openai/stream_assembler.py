@@ -1,6 +1,7 @@
 """Assemble normalized OpenAI events into provider stream events."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import cast
 
@@ -58,19 +59,25 @@ class StreamAssemblyState:
 
 
 async def assemble_stream(
-    normalized_stream: AsyncIterator[NormalizedEvent],
+    normalized_stream: AsyncGenerator[NormalizedEvent, None],
     *,
     source: ProviderSource,
-) -> AsyncIterator[ProviderStreamEvent]:
-    """Assemble normalized provider events into provider stream events."""
+) -> AsyncGenerator[ProviderStreamEvent, None]:
+    """Assemble normalized provider events into provider stream events.
+
+    Closing this generator closes ``normalized_stream``: closure does not
+    cascade through generator chains on its own, so every layer forwards
+    it.
+    """
 
     state = StreamAssemblyState(source=source)
-    async for event in normalized_stream:
-        if adapted_event := _yield_stream_event(state, event):
-            yield adapted_event
+    async with aclosing(normalized_stream):
+        async for event in normalized_stream:
+            if adapted_event := _yield_stream_event(state, event):
+                yield adapted_event
 
-        if event["type"] in TERMINAL_NORMALIZED_EVENT_TYPES:
-            return
+            if event["type"] in TERMINAL_NORMALIZED_EVENT_TYPES:
+                return
 
 
 def _yield_stream_event(

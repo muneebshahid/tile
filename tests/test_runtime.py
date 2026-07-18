@@ -1,8 +1,8 @@
 """Tests for runtime-owned sessions, task-owned runs, and in-memory history."""
 
 import asyncio
-from collections.abc import AsyncGenerator, Callable, Sequence
-from datetime import UTC, date, datetime
+from collections.abc import Callable, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Literal, cast
 from unittest.mock import AsyncMock
@@ -756,175 +756,23 @@ def test_runtime_keeps_live_truth_when_terminal_store_write_fails() -> None:
     assert runtime.get_run(run.id).status == "running"
 
 
-def test_run_outcome_available_while_run_still_running() -> None:
-    """Expose the published end-event outcome before the terminal status lands."""
+def test_run_outcome_lands_atomically_with_the_terminal_status() -> None:
+    """Expose no outcome while running; land it with the terminal status."""
 
     async def _run() -> None:
-        """Read the outcome between the end event and run finalization."""
+        """Read the outcome before and after the run finishes."""
 
-        async def _events() -> AsyncGenerator[AgentEvent, None]:
-            """Commit a final outcome."""
+        release = asyncio.Event()
+        runtime, _ = _runtime_with_gated_streams([release])
+        session = runtime.session(session_id="outcome-timing")
 
-            yield RunEndEvent(outcome=Completed(value="done"))
-
-        run = Run(
-            record=RunRecord(
-                run_id="mid-stream",
-                session_id="mid-stream",
-                status="running",
-                started_at=datetime.now(UTC),
-                model="gpt-5.4",
-            ),
-            events=_events(),
-            on_done=lambda _: None,
-            on_record=lambda _: None,
-            on_event=lambda _: None,
-        )
-
-        async for event in run.events():
-            if isinstance(event, RunEndEvent):
-                break
-
+        run = await session.prompt("hello")
         assert run.status == "running"
-        assert run.outcome == Completed(value="done")
+        assert run.outcome is None
 
+        release.set()
         assert await run.wait() == "completed"
-        assert run.outcome == Completed(value="done")
-
-    asyncio.run(_run())
-
-
-def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
-    """Expose a failed terminal write without rewriting status or outcome."""
-
-    async def _run() -> None:
-        """Complete a run whose terminal record write fails."""
-
-        error = RuntimeError("run store unavailable")
-        attempted_records: list[RunRecord] = []
-        released: list[Run] = []
-
-        def reject_record(record: RunRecord) -> None:
-            """Record the one write attempt before failing it."""
-
-            attempted_records.append(record)
-            raise error
-
-        run = Run(
-            record=RunRecord(
-                run_id="store-failure",
-                session_id="store-failure",
-                status="running",
-                started_at=datetime.now(UTC),
-                model="gpt-5.4",
-            ),
-            events=async_stream([RunEndEvent(outcome=Completed(value="done"))]),
-            on_done=released.append,
-            on_record=reject_record,
-            on_event=lambda _: None,
-        )
-
-        assert await run.wait() == "completed"
-        assert run.outcome == Completed(value="done")
-        assert run.failure is None
-        assert run.exception is None
-        assert run.persistence_error is error
-        assert [record.status for record in attempted_records] == ["completed"]
-        assert released == [run]
-
-    asyncio.run(_run())
-
-
-def test_run_fails_when_event_pipeline_ends_without_outcome() -> None:
-    """Fail a run whose event source ends without publishing a verdict."""
-
-    async def _run() -> None:
-        """Drain an outcome-less event source and read the terminal record."""
-
-        persisted: list[RunRecord] = []
-        run = Run(
-            record=RunRecord(
-                run_id="missing-outcome",
-                session_id="missing-outcome",
-                status="running",
-                started_at=datetime.now(UTC),
-                model="gpt-5.4",
-            ),
-            events=async_stream([]),
-            on_done=lambda _: None,
-            on_record=persisted.append,
-            on_event=lambda _: None,
-        )
-
-        assert await run.wait() == "failed"
-        assert run.status == "failed"
-        failure = run.failure
-        assert failure is not None
-        assert failure.origin == "execution"
-        assert failure.message == "The run ended without a committed run end event."
-        assert run.outcome == Failed(cause=failure)
-        assert run.exception is None
-        assert persisted == [run.record]
-
-    asyncio.run(_run())
-
-
-def test_run_reraises_owner_release_control_exception_after_finishing() -> None:
-    """Preserve control flow without rewriting the recorded terminal state."""
-
-    class ControlSignal(BaseException):
-        """Deterministic process-control signal for finalization testing."""
-
-    async def _run() -> None:
-        """Observe an interrupted owner callback through the event loop."""
-
-        signal = ControlSignal("stop")
-        reported: list[BaseException] = []
-        persisted: list[RunRecord] = []
-
-        def interrupt(_: Run) -> None:
-            """Interrupt owner notification with a control exception."""
-
-            raise signal
-
-        def capture_exception(
-            _: asyncio.AbstractEventLoop,
-            context: dict[str, object],
-        ) -> None:
-            """Capture a control exception re-raised by a done callback."""
-
-            error = context.get("exception")
-            if isinstance(error, BaseException):
-                reported.append(error)
-
-        loop = asyncio.get_running_loop()
-        previous_handler = loop.get_exception_handler()
-        loop.set_exception_handler(capture_exception)
-        try:
-            run = Run(
-                record=RunRecord(
-                    run_id="control-signal",
-                    session_id="control-signal",
-                    status="running",
-                    started_at=datetime.now(UTC),
-                    model="gpt-5.4",
-                ),
-                events=async_stream([RunEndEvent(outcome=Completed(value="done"))]),
-                on_done=interrupt,
-                on_record=persisted.append,
-                on_event=lambda _: None,
-            )
-            assert await run.wait() == "completed"
-            await asyncio.sleep(0)
-        finally:
-            loop.set_exception_handler(previous_handler)
-
-        assert reported == [signal]
-        assert run.status == "completed"
-        assert run.failure is None
-        assert run.exception is None
-        assert run.persistence_error is None
-        assert persisted == [run.record]
+        assert run.outcome == Completed(value="answer 0")
 
     asyncio.run(_run())
 

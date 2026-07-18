@@ -317,15 +317,15 @@ once. Hard process death is outside this contract.
 
 Rules:
 
-- The run publishes its own `RunStartEvent` before the event source
-  starts, so every run log begins with a run start on every path,
-  including an abort that lands before the first tick.
-- `RunEndEvent` is the final event of every run, exactly once, and commits
-  the run's terminal outcome — emitted by the producer on success,
-  synthesized at finalization otherwise. Its outcome variant implies how
-  execution terminated. The commit is structural: the run stops pumping
-  its event source at the first run end and closes it, so nothing a
-  producer yields afterwards can reach the log or rewrite the outcome.
+- The run publishes its own `RunStartEvent` before execution starts, so
+  every run log begins with a run start on every path, including an
+  abort that lands before the first tick.
+- `RunEndEvent` is published only by the run, at finalization, exactly
+  once as the log's final event. Execution never emits it: the prompt
+  program returns a `RunOutcome`, and the run turns that outcome — or
+  the exception or cancellation that replaces it — into the terminal
+  event, so a duplicated or missing run end is unrepresentable. Its
+  outcome variant implies how execution terminated.
 - A tool execution that *fails* still gets its `ToolExecutionEndEvent`:
   the executor boundary wraps every tool failure into an error outcome.
   Only teardown — abort or a run failure while the tool is in flight —

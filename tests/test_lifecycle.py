@@ -1,8 +1,7 @@
 """Tests for the guaranteed run lifecycle across failures and aborts."""
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator, Sequence
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator, Sequence
 from pathlib import Path
 from typing import TypeVar, cast
 from unittest.mock import AsyncMock
@@ -23,8 +22,8 @@ from tile.events import (
 )
 from tile.history import InMemoryHistoryStore
 from tile.result import Aborted, Completed, ExecutionFailure, Failed
-from tile.runs import InMemoryRunStore, RunRecord
-from tile.runtime import AgentRuntime, Run
+from tile.runs import InMemoryRunStore
+from tile.runtime import AgentRuntime
 from tile.types.conversation import ConversationItem, ToolResultTurn
 from tile.types.stream_events import ProviderStreamEvent
 from tile.types.tools import ToolDefinition, ToolFunction, ToolResult
@@ -278,7 +277,7 @@ def test_abort_during_provider_stream_leaves_the_message_open() -> None:
 
 
 def test_abort_before_first_tick_still_yields_a_closed_log() -> None:
-    """Close the run scope for an abort landing before the pump starts."""
+    """Close the run scope for an abort landing before execution starts."""
 
     provider = ProviderStreamMock([final_text_stream("resp_1", "hello back")])
     runtime = _runtime(provider.fn)
@@ -295,64 +294,6 @@ def test_abort_before_first_tick_still_yields_a_closed_log() -> None:
     events = asyncio.run(_run())
 
     assert events == [RunStartEvent(), RunEndEvent(outcome=Aborted())]
-
-
-def test_committed_run_end_stops_the_pump_and_closes_a_stalled_source() -> None:
-    """Finish at the commit point without pumping a source that never returns."""
-
-    async def _run() -> None:
-        """Commit a run end from a source that would stall forever after it."""
-
-        closed = False
-
-        async def _events() -> AsyncGenerator[AgentEvent, None]:
-            """Commit the outcome, then hold the run open forever."""
-
-            nonlocal closed
-            try:
-                yield RunEndEvent(outcome=Completed(value="done"))
-                await asyncio.Event().wait()
-            finally:
-                closed = True
-
-        persisted: list[RunRecord] = []
-        run = _bare_run(_events(), persisted=persisted)
-
-        assert await run.wait() == "completed"
-        assert closed
-        assert run.outcome == Completed(value="done")
-        assert persisted == [run.record]
-
-    asyncio.run(_run())
-
-
-def test_events_after_the_committed_run_end_never_reach_the_log() -> None:
-    """Stop pumping at the first run end so a later one cannot rewrite it."""
-
-    async def _run() -> None:
-        """Feed a source that misbehaves after committing its outcome."""
-
-        persisted: list[RunRecord] = []
-        run = _bare_run(
-            async_stream(
-                [
-                    RunEndEvent(outcome=Completed(value="first")),
-                    AgentStartEvent(),
-                    RunEndEvent(outcome=Completed(value="second")),
-                ]
-            ),
-            persisted=persisted,
-        )
-
-        assert await run.wait() == "completed"
-        events = [event async for event in run.events()]
-        assert events == [
-            RunStartEvent(),
-            RunEndEvent(outcome=Completed(value="first")),
-        ]
-        assert run.outcome == Completed(value="first")
-
-    asyncio.run(_run())
 
 
 def test_history_observer_failure_fails_the_run_without_suppressing_events() -> None:
@@ -427,30 +368,6 @@ def test_healing_reads_durable_history_after_observer_failure() -> None:
         assert isinstance(healed, ToolResultTurn)
         assert healed.call_id == "call_1"
         assert healed.is_error
-
-    asyncio.run(_run())
-
-
-def test_clean_completion_without_run_end_fails_with_a_closed_log() -> None:
-    """Fail a producer that completes without committing a run end."""
-
-    async def _run() -> None:
-        """Drive a producer whose event source returns without a run end."""
-
-        persisted: list[RunRecord] = []
-        run = _bare_run(
-            async_stream([AgentStartEvent(), AgentEndEvent()]),
-            persisted=persisted,
-        )
-
-        assert await run.wait() == "failed"
-        assert run.exception is None
-        failure = run.failure
-        assert failure is not None
-        assert failure.message == "The run ended without a committed run end event."
-        events = [event async for event in run.events()]
-        assert_run_lifecycle(events)
-        assert persisted == [run.record]
 
     asyncio.run(_run())
 
@@ -601,28 +518,6 @@ def _runtime(
         history_store=InMemoryHistoryStore(),
         run_store=InMemoryRunStore(),
         tools=tools,
-    )
-
-
-def _bare_run(
-    events: AsyncGenerator[AgentEvent, None],
-    *,
-    persisted: list[RunRecord],
-) -> Run:
-    """Start a run directly over a scripted event source."""
-
-    return Run(
-        record=RunRecord(
-            run_id="bare-run",
-            session_id="bare-run",
-            status="running",
-            started_at=datetime.now(UTC),
-            model="gpt-5.4",
-        ),
-        events=events,
-        on_done=lambda _: None,
-        on_record=persisted.append,
-        on_event=lambda _: None,
     )
 
 
