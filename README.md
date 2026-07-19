@@ -3,27 +3,37 @@
 [![CI](https://github.com/muneebshahid/tile/actions/workflows/ci.yml/badge.svg)](https://github.com/muneebshahid/tile/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-A compact, Python-native runtime for headless, tool-using agent sessions.
+A Python-native runtime for building your own agent harness.
 
-Tile is a **runtime, not a framework**. You construct the pieces — a provider
-client, a tool list, a working directory, and the history and run stores —
-and hand them to `AgentRuntime`. It runs prompt-driven agent sessions on top
-of them: provider streaming, a tool-execution loop, typed run outcomes, session
-history, and durable run summaries. There are no plugins or global
-configuration. The provider stream, model, working directory, and both stores
-are explicit runtime inputs with no defaults; pass the in-memory stores for
-process-lifetime state. Embed it in an application, or build a service on top.
+The agents that actually work — the coding harnesses — share one
+architecture: a frontier model, local tools, and your context, trusted to
+finish a task. Tile is that architecture as an embeddable Python runtime.
+Your model, your context, your software.
+
+Tile is a **runtime you use as a library**: pass it a provider client, tools,
+and stores — built-ins ship for all three — and it runs prompt-driven agent
+sessions on top: provider streaming, a tool-execution loop, typed run
+outcomes, session history, and durable run summaries. Setup is one
+constructor call; the quickstart below is the whole thing. Embed it in an
+application, or build a service on top.
 
 **Status: 0.x.** APIs change without deprecation cycles. OpenAI (Responses API)
 is the only provider today; more are planned. Requires Python 3.13+.
+See [Roadmap](#roadmap) for where this is going.
 
 ## Why a runtime?
 
-Tile owns the lifecycle around an agent loop:
+Tile owns the lifecycle around an agent loop, and that ownership is a set of
+concrete guarantees:
 
-- a prompt becomes a task-owned `Run`;
-- execution continues independently of event subscribers;
-- a `Session` owns model-visible conversation history;
+- a prompt becomes a task-owned `Run`: `session.prompt(...)` returns a handle
+  immediately, and execution continues even if every subscriber disconnects;
+- a provider death never corrupts the session: partial turns are dropped,
+  unanswered tool calls are healed, and the next prompt works;
+- every submitted prompt leaves a durable run record, even when submission
+  itself fails;
+- every run log closes: exactly one `RunEndEvent` carries the terminal
+  outcome on every in-process termination path;
 - providers normalize into one event and history contract;
 - prompts may require explicit, typed success or failure outcomes.
 
@@ -268,6 +278,62 @@ in-process termination: an exception or abort still lands exactly one
 `run.status` and `run.outcome` remain the authoritative terminal state, and
 `RunEndEvent.outcome` always matches them.
 
+## Observability
+
+`run.events()` is the observation surface: every run yields a structured
+event stream — run, agent, turn, message, and tool-execution scopes, plus
+provider stream updates. Monitoring can rely on the closure guarantee: the
+log begins with `RunStartEvent` and ends with exactly one `RunEndEvent`
+whose outcome matches the run's terminal state, on every in-process
+termination path. Failures are structured data, not log lines to parse: a
+`Failed` outcome names its cause — the model's own `AgentFailure(reason=...)`
+verdict, or an `ExecutionFailure` with an origin, exception type, and
+message when a runtime boundary broke.
+
+Planned, not current: one wide, high-cardinality telemetry record per run —
+duration, token totals, per-tool aggregates, structured errors — delivered
+to a caller-constructed sink. Tile core takes no telemetry-SDK dependency;
+exporters and sampling remain application concerns.
+
+## Testing your agent
+
+`stream_fn` is a plain callable, so a scripted fake makes end-to-end tests
+deterministic — no network, no API key:
+
+```python
+from tile.types import (
+    ProviderSource,
+    StreamDoneEvent,
+    StreamStartEvent,
+    TextBlock,
+)
+
+SOURCE = ProviderSource(provider="fake", model="fake-model")
+
+
+async def fake_stream(history, model, *, instructions, tools):
+    async def events():
+        yield StreamStartEvent(source=SOURCE, response_id="resp_1")
+        yield StreamDoneEvent(
+            source=SOURCE,
+            response_id="resp_1",
+            stop_reason="stop",
+            blocks=[TextBlock(text="All clear.")],
+        )
+
+    return events()
+
+
+fake_stream.provider = "fake"
+```
+
+Hand `fake_stream` to `AgentRuntime` in place of the real provider and the
+entire runtime executes: history is written, events are published, and the
+run ends with a real outcome to assert on. Script a `tool_use` stop with a
+`ToolCallBlock` to drive the tool loop, or a `complete` call to exercise a
+typed result. A public `tile.testing` module with ready-made stream
+builders is planned.
+
 ## Public API
 
 Use the package facades for application code. Deep module paths are internal
@@ -328,6 +394,24 @@ tile/
     └── session.py   # Session facade
 tests/               # Test suite
 ```
+
+## Roadmap
+
+Development proceeds in validation-gated releases:
+
+1. **Stable local runtime** (v0.1.0, shipped) — packaging, CI, typed results.
+2. **Persistent sessions and run records** (current) — durable run summaries
+   and guaranteed lifecycle closure, then wide-event run telemetry.
+3. **Multi-provider support** — hoist the normalized provider layer behind a
+   conformance suite; Anthropic and ChatGPT-subscription providers.
+4. **Downstream app validation** — a real application built on the embedded
+   runtime decides what the runtime needs next.
+5. **Proven runtime extensions and approval** — first hooks and a
+   serializable pending-action state.
+6. **Service mode and Python client** — `tile serve`: the same runtime behind
+   a thin HTTP shell. Embed Tile as a library, or run it as a server.
+7. **Durable service execution** — persisted run events, replay, worker
+   leases, recovery.
 
 ## Security posture
 
