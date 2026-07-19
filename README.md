@@ -285,8 +285,10 @@ event stream — run, agent, turn, message, and tool-execution scopes, plus
 provider stream updates. Monitoring can rely on the closure guarantee: the
 log begins with `RunStartEvent` and ends with exactly one `RunEndEvent`
 whose outcome matches the run's terminal state, on every in-process
-termination path. Failures are structured data (`ExecutionFailure` with an
-origin, exception type, and message), not log lines to parse.
+termination path. Failures are structured data, not log lines to parse: a
+`Failed` outcome names its cause — the model's own `AgentFailure(reason=...)`
+verdict, or an `ExecutionFailure` with an origin, exception type, and
+message when a runtime boundary broke.
 
 Planned, not current: one wide, high-cardinality telemetry record per run —
 duration, token totals, per-tool aggregates, structured errors — delivered
