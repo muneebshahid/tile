@@ -400,13 +400,15 @@ Development proceeds in validation-gated releases:
 1. **Stable local runtime** (v0.1.0, shipped) — packaging, CI, typed results.
 2. **Persistent sessions and run records** (current) — durable run summaries
    and guaranteed lifecycle closure, then wide-event run telemetry.
-3. **Downstream app validation** — a real application built on the embedded
+3. **Multi-provider support** — hoist the normalized provider layer behind a
+   conformance suite; Anthropic and ChatGPT-subscription providers.
+4. **Downstream app validation** — a real application built on the embedded
    runtime decides what the runtime needs next.
-4. **Proven runtime extensions and approval** — first hooks and a
+5. **Proven runtime extensions and approval** — first hooks and a
    serializable pending-action state.
-5. **Service mode and Python client** — `tile serve`: the same runtime behind
+6. **Service mode and Python client** — `tile serve`: the same runtime behind
    a thin HTTP shell. Embed Tile as a library, or run it as a server.
-6. **Durable service execution** — persisted run events, replay, worker
+7. **Durable service execution** — persisted run events, replay, worker
    leases, recovery.
 
 ## Security posture
