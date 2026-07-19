@@ -36,12 +36,27 @@ from tile.runtime import (
     SessionBusyError,
     TurnFailedError,
 )
+from tile.telemetry import (
+    CapturedRunException,
+    LifecycleScopeRecord,
+    LifecycleScopeStatus,
+    LifecycleScopeType,
+    RunTelemetryError,
+    RunTelemetryRecord,
+    RunTelemetrySink,
+    TelemetryErrorKind,
+    TelemetryErrorRole,
+    TelemetryErrorStage,
+    ToolAggregate,
+)
 from tile.tool_executor import ToolExecutor
+from tile.types import TokenUsage
 
 __all__ = [
     "Aborted",
     "AgentFailure",
     "AgentRuntime",
+    "CapturedRunException",
     "Completed",
     "ExecutionFailure",
     "ExecutionFailureOrigin",
@@ -50,6 +65,9 @@ __all__ = [
     "HistoryStore",
     "InMemoryHistoryStore",
     "InMemoryRunStore",
+    "LifecycleScopeRecord",
+    "LifecycleScopeStatus",
+    "LifecycleScopeType",
     "Run",
     "RunAlreadyExistsError",
     "RunNotFoundError",
@@ -57,6 +75,9 @@ __all__ = [
     "RunRecord",
     "RunStatus",
     "RunStore",
+    "RunTelemetryError",
+    "RunTelemetryRecord",
+    "RunTelemetrySink",
     "Session",
     "SessionAlreadyExistsError",
     "SessionBusyError",
@@ -66,6 +87,11 @@ __all__ = [
     "SQLiteHistoryStoreSchemaError",
     "SQLiteRunStore",
     "SQLiteRunStoreSchemaError",
+    "TelemetryErrorKind",
+    "TelemetryErrorRole",
+    "TelemetryErrorStage",
+    "TokenUsage",
+    "ToolAggregate",
     "ToolExecutor",
     "TurnFailedError",
 ]

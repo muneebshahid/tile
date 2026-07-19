@@ -41,6 +41,7 @@ from tile.types.tool_execution import (
     ToolInputValidationFailure,
     ToolInvocationFailure,
 )
+from tile.types.usage import TokenUsage
 from tile.types.tools import (
     ImageMimeType,
     JsonObject,
@@ -100,6 +101,7 @@ __all__ = [
     "ToolResultContent",
     "ToolResultTurn",
     "ToolTextContent",
+    "TokenUsage",
     "TurnStatus",
     "UserMessage",
 ]
