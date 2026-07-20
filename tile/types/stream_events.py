@@ -7,6 +7,7 @@ from typing import Literal, TypeAlias
 from pydantic import BaseModel, Field
 
 from tile.types.tools import JsonObject
+from tile.types.usage import TokenUsage
 
 StopReason: TypeAlias = Literal["stop", "length", "tool_use", "error", "aborted"]
 
@@ -187,6 +188,7 @@ class StreamDoneEvent(StreamEvent):
     response_id: str | None = None
     stop_reason: StopReason
     blocks: list[AssistantBlock] = Field(default_factory=list)
+    usage: TokenUsage | None = None
 
 
 class StreamErrorEvent(StreamEvent):
@@ -198,6 +200,7 @@ class StreamErrorEvent(StreamEvent):
     stop_reason: StopReason = "error"
     error_message: str
     blocks: list[AssistantBlock] = Field(default_factory=list)
+    usage: TokenUsage | None = None
 
 
 StreamTerminalEvent: TypeAlias = StreamDoneEvent | StreamErrorEvent

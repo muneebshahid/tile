@@ -171,7 +171,7 @@ async def _handle_stream_done_event(
 
     turn = AssistantTurn.from_stream_done(event)
     run_history.append(turn)
-    yield MessageEndEvent(assistant_turn=turn)
+    yield MessageEndEvent(assistant_turn=turn, token_usage=event.usage)
     tool_executions: list[ToolExecutionOutcome] = []
 
     for tool_call in _collect_tool_calls(turn.blocks):
@@ -200,7 +200,7 @@ async def _handle_stream_error_event(
 
     turn = AssistantTurn.from_stream_error(event)
     run_history.append(turn)
-    yield MessageEndEvent(assistant_turn=turn)
+    yield MessageEndEvent(assistant_turn=turn, token_usage=event.usage)
     yield TurnEndEvent(assistant_turn=turn, tool_executions=[])
 
 

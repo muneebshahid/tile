@@ -45,6 +45,7 @@ from tile.types.stream_events import (
     ToolCallEndEvent,
     ToolCallStartEvent,
 )
+from tile.types.usage import TokenUsage
 
 
 @dataclass
@@ -84,7 +85,12 @@ def _yield_stream_event(
     state: StreamAssemblyState,
     event: NormalizedEvent,
 ) -> ProviderStreamEvent | None:
-    """Route one normalized event to its stream-level event."""
+    """Route one normalized event to its stream-level event.
+
+    This exhaustive translation table is intentionally kept in one function,
+    despite the project's normal function-length limit, so every normalized
+    event case can be read and audited together.
+    """
 
     match event["type"]:
         case NormalizedEventType.CREATED:
@@ -123,13 +129,21 @@ def _yield_stream_event(
             return _finalize_tool_call_block(state, tool_call_done_event)
         case NormalizedEventType.COMPLETED:
             completed_event = cast(CompletedNormalizedEvent, event)
-            return _build_stream_done_event(state, completed_event["stop_reason"])
+            return _build_stream_done_event(
+                state,
+                completed_event["stop_reason"],
+                completed_event["usage"],
+            )
         case NormalizedEventType.INCOMPLETE:
             incomplete_event = cast(IncompleteNormalizedEvent, event)
             return _build_incomplete_event(state, incomplete_event)
         case NormalizedEventType.FAILED:
             failed_event = cast(FailedNormalizedEvent, event)
-            return _build_stream_error_event(state, failed_event["message"])
+            return _build_stream_error_event(
+                state,
+                failed_event["message"],
+                failed_event["usage"],
+            )
 
     return None
 
@@ -308,13 +322,15 @@ def _build_incomplete_event(
         return _build_stream_error_event(
             state,
             event["error_message"] or "OpenAI response incomplete.",
+            event["usage"],
         )
-    return _build_stream_done_event(state, event["stop_reason"])
+    return _build_stream_done_event(state, event["stop_reason"], event["usage"])
 
 
 def _build_stream_done_event(
     state: StreamAssemblyState,
     stop_reason: StopReason,
+    usage: TokenUsage | None,
 ) -> StreamDoneEvent:
     """Build the successful terminal stream event."""
 
@@ -323,12 +339,14 @@ def _build_stream_done_event(
         response_id=state.response_id,
         stop_reason=stop_reason,
         blocks=_copy_blocks(state.blocks),
+        usage=usage,
     )
 
 
 def _build_stream_error_event(
     state: StreamAssemblyState,
     error_message: str,
+    usage: TokenUsage | None,
 ) -> StreamErrorEvent:
     """Build the failed terminal stream event."""
 
@@ -337,6 +355,7 @@ def _build_stream_error_event(
         response_id=state.response_id,
         error_message=error_message,
         blocks=_copy_blocks(state.blocks),
+        usage=usage,
     )
 
 

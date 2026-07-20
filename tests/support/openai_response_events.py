@@ -105,6 +105,7 @@ def response_completed_event(
     response_id: str,
     *,
     output: Sequence[JsonObject] | None = None,
+    usage: JsonObject | None = None,
 ) -> ResponseCompletedEvent:
     """Build a raw response-completed event."""
 
@@ -112,7 +113,12 @@ def response_completed_event(
         {
             "type": "response.completed",
             "sequence_number": sequence_number,
-            "response": _response_payload(response_id, "completed", output=output),
+            "response": _response_payload(
+                response_id,
+                "completed",
+                output=output,
+                usage=usage,
+            ),
         }
     )
 
@@ -121,6 +127,8 @@ def response_failed_event(
     sequence_number: int,
     response_id: str,
     message: str,
+    *,
+    usage: JsonObject | None = None,
 ) -> ResponseFailedEvent:
     """Build a raw response-failed event."""
 
@@ -132,6 +140,7 @@ def response_failed_event(
                 response_id,
                 "failed",
                 error={"code": "server_error", "message": message},
+                usage=usage,
             ),
         }
     )
@@ -160,6 +169,7 @@ def response_incomplete_event(
     reason: str,
     *,
     output: Sequence[JsonObject] | None = None,
+    usage: JsonObject | None = None,
 ) -> ResponseIncompleteEvent:
     """Build a raw response-incomplete event."""
 
@@ -172,9 +182,29 @@ def response_incomplete_event(
                 "incomplete",
                 output=output,
                 incomplete_reason=reason,
+                usage=usage,
             ),
         }
     )
+
+
+def response_usage(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    total_tokens: int,
+    cached_tokens: int,
+    reasoning_tokens: int,
+) -> JsonObject:
+    """Build a raw OpenAI response usage payload."""
+
+    return {
+        "input_tokens": input_tokens,
+        "input_tokens_details": {"cached_tokens": cached_tokens},
+        "output_tokens": output_tokens,
+        "output_tokens_details": {"reasoning_tokens": reasoning_tokens},
+        "total_tokens": total_tokens,
+    }
 
 
 def reasoning_added_event(
@@ -544,6 +574,7 @@ def _response_payload(
     output: Sequence[JsonObject] | None = None,
     error: dict[str, str] | None = None,
     incomplete_reason: str | None = None,
+    usage: JsonObject | None = None,
 ) -> JsonObject:
     """Build a minimal OpenAI response payload for event model validation."""
 
@@ -561,6 +592,7 @@ def _response_payload(
         "tool_choice": "auto",
         "tools": [],
         "status": status,
+        "usage": usage,
     }
 
 

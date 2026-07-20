@@ -5,6 +5,7 @@ from typing import Literal, TypeAlias, TypedDict
 
 from tile.types.stream_events import StopReason
 from tile.types.tools import JsonObject
+from tile.types.usage import TokenUsage
 
 Phase: TypeAlias = Literal["commentary", "final_answer"]
 
@@ -130,6 +131,7 @@ class CompletedNormalizedEvent(TypedDict):
 
     type: Literal[NormalizedEventType.COMPLETED]
     stop_reason: StopReason
+    usage: TokenUsage | None
 
 
 class IncompleteNormalizedEvent(TypedDict):
@@ -138,6 +140,7 @@ class IncompleteNormalizedEvent(TypedDict):
     type: Literal[NormalizedEventType.INCOMPLETE]
     stop_reason: StopReason
     error_message: str | None
+    usage: TokenUsage | None
 
 
 class FailedNormalizedEvent(TypedDict):
@@ -145,6 +148,7 @@ class FailedNormalizedEvent(TypedDict):
 
     type: Literal[NormalizedEventType.FAILED]
     message: str
+    usage: TokenUsage | None
 
 
 NormalizedEvent: TypeAlias = (

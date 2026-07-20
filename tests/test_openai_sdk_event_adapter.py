@@ -10,6 +10,7 @@ from openai.types.responses import ResponseStreamEvent
 
 from tile.providers.openai.normalized_events import NormalizedEvent, NormalizedEventType
 from tile.providers.openai.sdk_event_adapter import normalize_sdk_events
+from tile.types.usage import TokenUsage
 from tests.support.openai_response_events import (
     content_part_added_event,
     function_tool_call_added_event,
@@ -31,6 +32,7 @@ from tests.support.openai_response_events import (
     response_error_event,
     response_failed_event,
     response_incomplete_event,
+    response_usage,
     text_delta_event,
 )
 
@@ -86,40 +88,64 @@ def _build_response_start_cases() -> list[NormalizationCase]:
 def _build_response_completion_cases() -> list[NormalizationCase]:
     """Builds normalization cases for completed response events."""
 
-    return [
-        NormalizationCase(
-            name="response.completed.stop",
-            raw_event=response_completed_event(
-                sequence_number=2,
-                response_id="resp_completed",
+    return [_response_completed_stop_case(), _response_completed_tool_case()]
+
+
+def _response_completed_stop_case() -> NormalizationCase:
+    """Build a completed response case containing provider usage."""
+
+    return NormalizationCase(
+        name="response.completed.stop",
+        raw_event=response_completed_event(
+            sequence_number=2,
+            response_id="resp_completed",
+            usage=response_usage(
+                input_tokens=12,
+                output_tokens=7,
+                total_tokens=19,
+                cached_tokens=4,
+                reasoning_tokens=3,
             ),
-            expected_event={
-                "type": NormalizedEventType.COMPLETED,
-                "stop_reason": "stop",
-            },
         ),
-        NormalizationCase(
-            name="response.completed.tool_use",
-            raw_event=response_completed_event(
-                sequence_number=3,
-                response_id="resp_tool_use",
-                output=[
-                    {
-                        "id": "fc_123",
-                        "type": "function_call",
-                        "status": "completed",
-                        "call_id": "call_123",
-                        "name": "get_weather",
-                        "arguments": '{"city":"Berlin"}',
-                    }
-                ],
+        expected_event={
+            "type": NormalizedEventType.COMPLETED,
+            "stop_reason": "stop",
+            "usage": TokenUsage(
+                input_tokens=12,
+                output_tokens=7,
+                total_tokens=19,
+                cached_input_tokens=4,
+                reasoning_output_tokens=3,
             ),
-            expected_event={
-                "type": NormalizedEventType.COMPLETED,
-                "stop_reason": "tool_use",
-            },
+        },
+    )
+
+
+def _response_completed_tool_case() -> NormalizationCase:
+    """Build a completed tool-use response case without provider usage."""
+
+    return NormalizationCase(
+        name="response.completed.tool_use",
+        raw_event=response_completed_event(
+            sequence_number=3,
+            response_id="resp_tool_use",
+            output=[
+                {
+                    "id": "fc_123",
+                    "type": "function_call",
+                    "status": "completed",
+                    "call_id": "call_123",
+                    "name": "get_weather",
+                    "arguments": '{"city":"Berlin"}',
+                }
+            ],
         ),
-    ]
+        expected_event={
+            "type": NormalizedEventType.COMPLETED,
+            "stop_reason": "tool_use",
+            "usage": None,
+        },
+    )
 
 
 def _build_response_incomplete_cases() -> list[NormalizationCase]:
@@ -132,11 +158,25 @@ def _build_response_incomplete_cases() -> list[NormalizationCase]:
                 sequence_number=4,
                 response_id="resp_incomplete",
                 reason="max_output_tokens",
+                usage=response_usage(
+                    input_tokens=20,
+                    output_tokens=5,
+                    total_tokens=25,
+                    cached_tokens=8,
+                    reasoning_tokens=2,
+                ),
             ),
             expected_event={
                 "type": NormalizedEventType.INCOMPLETE,
                 "stop_reason": "length",
                 "error_message": "OpenAI response incomplete.",
+                "usage": TokenUsage(
+                    input_tokens=20,
+                    output_tokens=5,
+                    total_tokens=25,
+                    cached_input_tokens=8,
+                    reasoning_output_tokens=2,
+                ),
             },
         ),
         NormalizationCase(
@@ -150,6 +190,7 @@ def _build_response_incomplete_cases() -> list[NormalizationCase]:
                 "type": NormalizedEventType.INCOMPLETE,
                 "stop_reason": "error",
                 "error_message": "OpenAI response was truncated by the content filter.",
+                "usage": None,
             },
         ),
     ]
@@ -494,6 +535,7 @@ def _build_failure_cases() -> list[NormalizationCase]:
             expected_event={
                 "type": NormalizedEventType.FAILED,
                 "message": "Socket closed",
+                "usage": None,
             },
         ),
         NormalizationCase(
@@ -502,10 +544,24 @@ def _build_failure_cases() -> list[NormalizationCase]:
                 sequence_number=25,
                 response_id="resp_failed",
                 message="Model overloaded",
+                usage=response_usage(
+                    input_tokens=9,
+                    output_tokens=1,
+                    total_tokens=10,
+                    cached_tokens=0,
+                    reasoning_tokens=1,
+                ),
             ),
             expected_event={
                 "type": NormalizedEventType.FAILED,
                 "message": "Model overloaded",
+                "usage": TokenUsage(
+                    input_tokens=9,
+                    output_tokens=1,
+                    total_tokens=10,
+                    cached_input_tokens=0,
+                    reasoning_output_tokens=1,
+                ),
             },
         ),
     ]

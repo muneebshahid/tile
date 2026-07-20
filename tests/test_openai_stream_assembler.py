@@ -48,6 +48,7 @@ from tile.types.stream_events import (
     ToolCallStartEvent,
 )
 from tile.types.tools import JsonObject
+from tile.types.usage import TokenUsage
 from tests.support.async_streams import async_stream
 from tests.support.stream_assertions import (
     expect_metadata_string as _expect_metadata_string,
@@ -182,7 +183,7 @@ def test_assemble_stream_maps_failed_response_into_error_event() -> None:
     events = _collect_stream_events(
         [
             _created_event("resp_failed"),
-            _failed_event("Model overloaded"),
+            _failed_event("Model overloaded", usage=_usage()),
         ]
     )
 
@@ -192,6 +193,7 @@ def test_assemble_stream_maps_failed_response_into_error_event() -> None:
     assert error.error_message == "Model overloaded"
     assert error.stop_reason == "error"
     assert error.response_id == "resp_failed"
+    assert error.usage == _usage()
 
 
 def test_assemble_stream_maps_incomplete_length_into_done() -> None:
@@ -203,7 +205,11 @@ def test_assemble_stream_maps_incomplete_length_into_done() -> None:
             _message_added_event("msg_incomplete"),
             _message_text_delta_event("Partial answer"),
             _message_done_event("msg_incomplete", "Partial answer"),
-            _incomplete_event("length", "OpenAI response incomplete."),
+            _incomplete_event(
+                "length",
+                "OpenAI response incomplete.",
+                usage=_usage(),
+            ),
         ]
     )
 
@@ -217,6 +223,7 @@ def test_assemble_stream_maps_incomplete_length_into_done() -> None:
         "stream_done",
     ]
     assert done.stop_reason == "length"
+    assert done.usage == _usage()
     assert _expect_text_block(done.blocks[0]).text == "Partial answer"
 
 
@@ -238,6 +245,7 @@ def test_assemble_stream_maps_incomplete_error_into_error_event() -> None:
     assert [event.type for event in events] == ["stream_start", "stream_error"]
     assert error.error_message == "OpenAI response was truncated by the content filter."
     assert error.stop_reason == "error"
+    assert error.usage is None
 
 
 def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
@@ -246,7 +254,7 @@ def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
     events = _collect_stream_events(
         [
             _created_event("resp_done"),
-            _completed_event("stop"),
+            _completed_event("stop", usage=_usage()),
             _message_added_event("msg_after_done"),
             _message_text_delta_event("ignored"),
         ]
@@ -257,6 +265,7 @@ def test_assemble_stream_stops_consuming_events_after_terminal_event() -> None:
     assert [event.type for event in events] == ["stream_start", "stream_done"]
     assert done.response_id == "resp_done"
     assert done.blocks == []
+    assert done.usage == _usage()
 
 
 def _reasoning_text_events() -> list[NormalizedEvent]:
@@ -599,18 +608,25 @@ def _tool_call_done_event(
     }
 
 
-def _completed_event(stop_reason: StopReason) -> CompletedNormalizedEvent:
+def _completed_event(
+    stop_reason: StopReason,
+    *,
+    usage: TokenUsage | None = None,
+) -> CompletedNormalizedEvent:
     """Builds a completed normalized event."""
 
     return {
         "type": NormalizedEventType.COMPLETED,
         "stop_reason": stop_reason,
+        "usage": usage,
     }
 
 
 def _incomplete_event(
     stop_reason: StopReason,
     error_message: str | None,
+    *,
+    usage: TokenUsage | None = None,
 ) -> IncompleteNormalizedEvent:
     """Builds an incomplete normalized event."""
 
@@ -618,13 +634,31 @@ def _incomplete_event(
         "type": NormalizedEventType.INCOMPLETE,
         "stop_reason": stop_reason,
         "error_message": error_message,
+        "usage": usage,
     }
 
 
-def _failed_event(message: str) -> FailedNormalizedEvent:
+def _failed_event(
+    message: str,
+    *,
+    usage: TokenUsage | None = None,
+) -> FailedNormalizedEvent:
     """Builds a failed normalized event."""
 
     return {
         "type": NormalizedEventType.FAILED,
         "message": message,
+        "usage": usage,
     }
+
+
+def _usage() -> TokenUsage:
+    """Build representative usage for one provider response."""
+
+    return TokenUsage(
+        input_tokens=12,
+        output_tokens=7,
+        total_tokens=19,
+        cached_input_tokens=4,
+        reasoning_output_tokens=3,
+    )

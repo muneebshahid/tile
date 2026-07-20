@@ -55,6 +55,7 @@ from tile.types.tools import (
     ToolInput,
     ToolResult,
 )
+from tile.types.usage import TokenUsage
 from tests.support.agent_streams import (
     ProviderStreamMock,
     empty_stream,
@@ -276,6 +277,26 @@ def test_run_agent_does_not_mutate_supplied_history() -> None:
     _expect_event_type(events[-1], AgentEndEvent)
     assert history == [UserMessage(content="Hello, Tile")]
     assert message_end.assistant_turn.response_id == "resp_done"
+
+
+def test_agent_carries_usage_on_message_end_without_adding_it_to_history() -> None:
+    """Expose response usage as an event without making it replayable history."""
+
+    usage = _usage()
+    provider = ProviderStreamMock(
+        [
+            [
+                stream_start("resp_usage"),
+                stream_done("resp_usage", usage=usage),
+            ],
+        ]
+    )
+
+    events = _collect_run_events([UserMessage(content="Hello")], stream_fn=provider.fn)
+
+    message_end = _expect_event_type(events[3], MessageEndEvent)
+    assert message_end.token_usage == usage
+    assert "token_usage" not in message_end.assistant_turn.model_dump()
 
 
 def test_agent_run_yields_expected_event_sequence_for_tool_use_loop() -> None:
@@ -705,7 +726,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
 
     provider = ProviderStreamMock(
         [
-            error_stream("resp_error", "Socket closed"),
+            error_stream("resp_error", "Socket closed", usage=_usage()),
         ]
     )
     history = [UserMessage(content="Say hello")]
@@ -732,6 +753,7 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     assert message_start.response_id == "resp_error"
     assert final_message.response_id == "resp_error"
     assert final_message.status == "error"
+    assert message_end.token_usage == _usage()
     assert turn_end.assistant_turn.response_id == "resp_error"
     assert turn_end.assistant_turn.stop_reason == "error"
     assert turn_end.assistant_turn.status == "error"
@@ -741,3 +763,15 @@ def test_agent_run_yields_error_turn_end_for_stream_error() -> None:
     provider.assert_awaited_once()
     request_history = provider.history(0)
     assert expect_user_message(request_history[0]).content == "Say hello"
+
+
+def _usage() -> TokenUsage:
+    """Build representative usage for one provider response."""
+
+    return TokenUsage(
+        input_tokens=12,
+        output_tokens=7,
+        total_tokens=19,
+        cached_input_tokens=4,
+        reasoning_output_tokens=3,
+    )

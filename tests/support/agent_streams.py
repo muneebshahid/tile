@@ -21,6 +21,7 @@ from tile.types.stream_events import (
     ToolCallBlock,
 )
 from tile.types.tools import JsonObject, ToolDefinition
+from tile.types.usage import TokenUsage
 from tests.support.async_streams import async_stream
 
 TEST_PROVIDER = "test"
@@ -133,12 +134,17 @@ def empty_stream(response_id: str) -> list[ProviderStreamEvent]:
     ]
 
 
-def error_stream(response_id: str, error_message: str) -> list[ProviderStreamEvent]:
+def error_stream(
+    response_id: str,
+    error_message: str,
+    *,
+    usage: TokenUsage | None = None,
+) -> list[ProviderStreamEvent]:
     """Build a minimal provider stream that fails before completion."""
 
     return [
         stream_start(response_id),
-        stream_error(response_id, error_message),
+        stream_error(response_id, error_message, usage=usage),
     ]
 
 
@@ -180,6 +186,7 @@ def stream_done(
     *,
     stop_reason: StopReason = "stop",
     blocks: Sequence[AssistantBlock] = (),
+    usage: TokenUsage | None = None,
 ) -> StreamDoneEvent:
     """Build a deterministic provider stream completion event."""
 
@@ -188,6 +195,7 @@ def stream_done(
         response_id=response_id,
         stop_reason=stop_reason,
         blocks=list(blocks),
+        usage=usage,
     )
 
 
@@ -196,6 +204,7 @@ def stream_error(
     error_message: str,
     *,
     blocks: Sequence[AssistantBlock] = (),
+    usage: TokenUsage | None = None,
 ) -> StreamErrorEvent:
     """Build a deterministic provider stream error event."""
 
@@ -204,6 +213,7 @@ def stream_error(
         response_id=response_id,
         error_message=error_message,
         blocks=list(blocks),
+        usage=usage,
     )
 
 

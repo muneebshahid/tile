@@ -35,6 +35,7 @@ from tile.types.tools import (
     JsonObject,
     ToolDefinition,
 )
+from tile.types.usage import TokenUsage
 
 
 class StreamFn(Protocol):
@@ -154,6 +155,7 @@ class MessageEndEvent(AgentEvent):
 
     type: Literal["message_end"] = "message_end"
     assistant_turn: AssistantTurn
+    token_usage: TokenUsage | None = None
 
 
 class ToolExecutionStartEvent(AgentEvent):

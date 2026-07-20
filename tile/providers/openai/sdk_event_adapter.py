@@ -30,6 +30,7 @@ from openai.types.responses.response_reasoning_item import (
     Summary as ResponseReasoningSummary,
     ResponseReasoningItem,
 )
+from openai.types.responses.response import Response
 
 from tile.providers.openai.normalized_events import (
     NormalizedEvent,
@@ -38,6 +39,7 @@ from tile.providers.openai.normalized_events import (
 )
 from tile.types.stream_events import StopReason
 from tile.types.tools import JsonObject
+from tile.types.usage import TokenUsage
 
 
 async def normalize_sdk_events(
@@ -63,6 +65,10 @@ def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
     part boundaries are not surfaced as deltas, so mid-stream text may lack
     the paragraph separators present in the final ``REASONING_DONE`` summary,
     which joins parts with a blank line and is authoritative.
+
+    This exhaustive translation table is intentionally kept in one function,
+    despite the project's normal function-length limit, so every supported SDK
+    event case can be read and audited together.
     """
 
     match event:
@@ -156,22 +162,26 @@ def _normalize_sdk_event(event: ResponseStreamEvent) -> NormalizedEvent | None:
             return {
                 "type": NormalizedEventType.COMPLETED,
                 "stop_reason": _extract_stop_reason(event),
+                "usage": _extract_usage(event.response),
             }
         case ResponseIncompleteEvent():
             return {
                 "type": NormalizedEventType.INCOMPLETE,
                 "stop_reason": _extract_stop_reason(event),
                 "error_message": _extract_incomplete_error_message(event),
+                "usage": _extract_usage(event.response),
             }
         case ResponseErrorEvent():
             return {
                 "type": NormalizedEventType.FAILED,
                 "message": _extract_stream_error_message(event),
+                "usage": None,
             }
         case ResponseFailedEvent():
             return {
                 "type": NormalizedEventType.FAILED,
                 "message": _extract_error_message(event),
+                "usage": _extract_usage(event.response),
             }
 
     return None
@@ -205,6 +215,21 @@ def _extract_error_message(event: ResponseFailedEvent) -> str:
         return message
 
     return "OpenAI response failed."
+
+
+def _extract_usage(response: Response) -> TokenUsage | None:
+    """Map optional OpenAI response usage into the provider-neutral contract."""
+
+    usage = response.usage
+    if usage is None:
+        return None
+    return TokenUsage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=usage.total_tokens,
+        cached_input_tokens=usage.input_tokens_details.cached_tokens,
+        reasoning_output_tokens=usage.output_tokens_details.reasoning_tokens,
+    )
 
 
 def _extract_stream_error_message(event: ResponseErrorEvent) -> str:
