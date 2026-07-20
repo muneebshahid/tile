@@ -15,7 +15,6 @@ from tile.events import (
     MessageEndEvent,
     MessageStartEvent,
     RunEndEvent,
-    RunStartEvent,
     StreamFn,
     ToolExecutionEndEvent,
     ToolExecutionStartEvent,
@@ -38,6 +37,21 @@ from tests.support.agent_streams import (
 from tests.support.async_streams import async_stream
 from tests.support.tool_definitions import CityInput, city_tool
 
+_LIFECYCLE_EVENT_TYPES = frozenset(
+    {
+        "run_start",
+        "run_end",
+        "agent_start",
+        "agent_end",
+        "turn_start",
+        "turn_end",
+        "message_start",
+        "message_end",
+        "tool_execution_start",
+        "tool_execution_end",
+    }
+)
+
 
 def assert_run_lifecycle(events: Sequence[AgentEvent]) -> None:
     """Assert the guaranteed run shape: one run start first, one run end last.
@@ -51,6 +65,9 @@ def assert_run_lifecycle(events: Sequence[AgentEvent]) -> None:
     assert events[-1].type == "run_end"
     assert sum(event.type == "run_start" for event in events) == 1
     assert sum(event.type == "run_end" for event in events) == 1
+    for event in events:
+        if event.type in _LIFECYCLE_EVENT_TYPES:
+            assert event.lifecycle is not None
 
 
 class WeatherReport(BaseModel):
@@ -118,13 +135,11 @@ def test_provider_raise_mid_stream_leaves_message_and_turn_open() -> None:
         "message_start",
         "run_end",
     ]
-    assert events[-1] == RunEndEvent(
-        outcome=Failed(
-            cause=ExecutionFailure(
-                origin="execution",
-                exception_type="ConnectionError",
-                message="connection reset",
-            )
+    assert _single(events, RunEndEvent).outcome == Failed(
+        cause=ExecutionFailure(
+            origin="execution",
+            exception_type="ConnectionError",
+            message="connection reset",
         )
     )
 
@@ -293,7 +308,9 @@ def test_abort_before_first_tick_still_yields_a_closed_log() -> None:
 
     events = asyncio.run(_run())
 
-    assert events == [RunStartEvent(), RunEndEvent(outcome=Aborted())]
+    assert [event.type for event in events] == ["run_start", "run_end"]
+    assert_run_lifecycle(events)
+    assert _single(events, RunEndEvent).outcome == Aborted()
 
 
 def test_history_observer_failure_fails_the_run_without_suppressing_events() -> None:
@@ -439,6 +456,7 @@ def test_tool_loop_prompt_yields_the_full_expected_event_order() -> None:
 
     events = asyncio.run(_run())
 
+    assert_run_lifecycle(events)
     assert [event.type for event in events] == [
         "run_start",
         "agent_start",
@@ -483,6 +501,7 @@ def test_typed_result_prompt_yields_the_full_expected_event_order() -> None:
 
     events = asyncio.run(_run())
 
+    assert_run_lifecycle(events)
     assert [event.type for event in events] == [
         "run_start",
         "agent_start",

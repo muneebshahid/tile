@@ -1,4 +1,4 @@
-"""Tests for public wide-event run telemetry contracts."""
+"""Contract tests for public wide-event run telemetry models and sinks."""
 
 from collections.abc import Sequence
 from datetime import UTC, datetime

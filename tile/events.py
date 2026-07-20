@@ -17,9 +17,9 @@ publish an event after it has stopped.
 """
 
 from collections.abc import Awaitable, Sequence
-from typing import Literal, Protocol, TypeAlias
+from typing import Annotated, Literal, Protocol, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from tile.result import RunOutcome
 from tile.types.contracts import AsyncEventStream
@@ -58,10 +58,21 @@ class StreamFn(Protocol):
     ) -> Awaitable[AsyncEventStream]: ...
 
 
+class LifecycleEventMetadata(BaseModel):
+    """Stable scope identity and timing stamped onto one lifecycle event."""
+
+    model_config = ConfigDict(frozen=True)
+
+    scope_id: str
+    parent_scope_id: str | None
+    monotonic_ns: Annotated[int, Field(ge=0)]
+
+
 class AgentEvent(BaseModel):
     """Base event emitted by the stateless agent runner."""
 
     type: str
+    lifecycle: LifecycleEventMetadata | None = None
 
 
 class RunStartEvent(AgentEvent):

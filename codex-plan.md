@@ -189,16 +189,18 @@ and typed-result follow-up attempts.
 Token usage is also attached to the lifecycle scopes that own provider work:
 
 - A message scope carries the usage reported for that provider response.
-- A turn scope aggregates its message usage.
-- An agent-attempt scope aggregates its turn usage.
 - The root run scope and `RunTelemetryRecord.token_usage` aggregate the entire
   run.
+- Turn and agent-attempt scopes leave token usage unset in the MVP. Their
+  repeated totals would be redundant with message and root usage.
 - Tool-execution scopes carry no token usage. A tool does not consume model
-  tokens; the surrounding message/turn does. Copying one response's usage onto
-  every tool call would double-count when a response requests multiple tools.
+  tokens; a later message may consume one or more tool results as part of its
+  complete context. Copying that response's usage onto tools would be
+  misleading and would double-count when a response consumes multiple results.
 
-These repeated scope totals are descriptive attributes for trace export.
-Consumers must not sum usage across different hierarchy levels.
+Do not add tool-to-next-message causal links in TIL-12. Event order and turn
+structure are sufficient for the MVP; explicit span links can be added later
+if a concrete trace query requires them.
 
 ### Turn semantics
 
@@ -287,13 +289,21 @@ Each `LifecycleScopeRecord` contains:
   - `interrupted`
 - Optional stable operation identity such as tool name or response ID, never
   prompt/tool payload content.
-- Optional provider token usage for run, agent, turn, and message scopes; tool
-  scopes carry none.
+- Optional provider token usage for run and message scopes; agent, turn, and
+  tool scopes carry none in the MVP.
 
 The run-side lifecycle tracker tracks open scopes. Normal end events close
 matching scopes. Future TIL-44 interruption events close them precisely.
 `RunEndEvent` closes anything still open at the run-end timestamp as
 `interrupted`, innermost first, without emitting duplicate lifecycle events.
+
+The tracker enforces event and nesting invariants by raising. `Run` treats
+normal tracking exceptions as observability failures rather than task
+failures: it retains and logs the first error, disables lifecycle telemetry for
+the rest of that run, publishes events without lifecycle metadata, and
+continues execution. Process-control `BaseException` subclasses retain their
+existing propagation semantics. A run with disabled lifecycle tracking must
+not emit a partial canonical telemetry record.
 
 This produces a structurally valid span tree today. Interrupted child end
 timestamps become more precise automatically after TIL-44; the telemetry schema
@@ -428,8 +438,7 @@ compliance pass, and ask whether the unit should be committed before continuing.
    run record, finalization errors, and the optional context receipt.
 2. Test:
    - Token sums across multiple provider calls.
-   - Message, turn, agent-attempt, and root token usage without tool-scope
-     attribution.
+   - Message and root token usage without agent, turn, or tool attribution.
    - Turn count semantics.
    - Tool success and handled-error aggregates, with interruption derivable
      from calls minus completions.

@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -193,6 +194,44 @@ def test_run_keeps_completed_state_when_terminal_persistence_fails() -> None:
         assert released == [run]
 
     asyncio.run(_run())
+
+
+def test_run_continues_when_lifecycle_tracking_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Expose telemetry failure without changing the task outcome."""
+
+    async def _run() -> None:
+        """Fail lifecycle stamping after run start and complete normally."""
+
+        deps = _deps(
+            [final_text_stream("resp_1", "done")],
+            session_id="telemetry-failure",
+        )
+        run = Run(
+            spec=_RunSpec(
+                session_id="telemetry-failure",
+                content="hello",
+                result=None,
+            ),
+            deps=deps,
+            on_finished=lambda _: None,
+        )
+        tracker = run._lifecycle_scope_tracker
+        tracking_error = RuntimeError("scope tracking unavailable")
+
+        with patch.object(tracker, "stamp", side_effect=tracking_error):
+            assert await run.wait() == "completed"
+
+        events = [event async for event in run.events()]
+        assert run.outcome == Completed(value="done")
+        assert run.telemetry_errors == (tracking_error,)
+        assert events[0].lifecycle is not None
+        assert all(event.lifecycle is None for event in events[1:])
+
+    asyncio.run(_run())
+
+    assert "Run lifecycle telemetry disabled" in caplog.text
 
 
 def test_run_abandons_its_record_when_the_user_message_write_fails() -> None:

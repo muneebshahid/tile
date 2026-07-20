@@ -15,6 +15,7 @@ import logging
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import monotonic_ns
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -42,6 +43,7 @@ from tile.runtime.execution import (
     _ExecutionDependencies,
     execute_prompt,
 )
+from tile.runtime.telemetry import _LifecycleScopeTracker
 from tile.types.conversation import (
     AssistantTurn,
     ConversationItem,
@@ -107,6 +109,11 @@ class Run:
         self._deps = deps
         self._on_finished = on_finished
         self._events: list[AgentEvent] = []
+        self._telemetry_errors: list[Exception] = []
+        self._lifecycle_scope_tracker = _LifecycleScopeTracker(
+            clock=monotonic_ns,
+            scope_id_factory=lambda: str(uuid4()),
+        )
         self._exception: BaseException | None = None
         self._persistence_error: BaseException | None = None
         self._changed = asyncio.Event()
@@ -185,6 +192,12 @@ class Run:
         """
 
         return self._persistence_error
+
+    @property
+    def telemetry_errors(self) -> tuple[Exception, ...]:
+        """Return telemetry failures that did not alter the task outcome."""
+
+        return tuple(self._telemetry_errors)
 
     @property
     def output_text(self) -> str | None:
@@ -299,11 +312,28 @@ class Run:
         failure fails the run but can never suppress the event.
         """
 
-        self._events.append(event)
+        stamped_event = self._stamp_lifecycle(event)
+        self._events.append(stamped_event)
         self._changed.set()
-        item = _conversation_item_for(event)
+        item = _conversation_item_for(stamped_event)
         if item is not None:
             self._deps.history_store.append_history(self._spec.session_id, [item])
+
+    def _stamp_lifecycle(self, event: AgentEvent) -> AgentEvent:
+        """Stamp lifecycle metadata or disable telemetry after its first failure."""
+
+        if self._telemetry_errors:
+            return event
+
+        try:
+            return self._lifecycle_scope_tracker.stamp(event)
+        except Exception as tracking_error:
+            self._telemetry_errors.append(tracking_error)
+            _log_run_bookkeeping_error(
+                "Run lifecycle telemetry disabled",
+                tracking_error,
+            )
+            return event
 
     def _finalize(self, task: asyncio.Task[RunOutcome]) -> None:
         """Finish the run from its task result, then release it.
@@ -342,7 +372,7 @@ class Run:
         rewrite what this handle reports.
         """
 
-        self._events.append(RunEndEvent(outcome=outcome))
+        self._events.append(self._stamp_lifecycle(RunEndEvent(outcome=outcome)))
         source = _latest_provider_source(self._events)
         self._record = self._record.finish(
             outcome=outcome,
